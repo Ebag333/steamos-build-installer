@@ -84,6 +84,12 @@ ADD_INSTALLER=1
 TRIM_CUDA=0
 SKIP_SIG=0
 DRIVER_SPEC=latest     # latest | <branch or version prefix, e.g. 580>
+
+# Upstream Logitech receiver and HID++ sources.
+# Defaults to current Linux master but can be overridden in the environment.
+UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-master}"
+UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPSTREAM_DRIVER_REF/drivers/hid"
+
 WORKDIR=""
 IMG=""
 
@@ -241,6 +247,38 @@ HDR_URL="${HDR_URL/\$arch/x86_64}/${KPKG_NAME}-headers-${KPKG_VERREL}-x86_64.pkg
 curl -sfIL "$HDR_URL" -o /dev/null \
   || die "Exact-match headers not found in Valve's pool: $HDR_URL"
 log "Headers package: $(basename "$HDR_URL")"
+
+# -------------------------------------------- upstream Logitech sources
+# Re-download these small files every run so "master" really means current
+# upstream master rather than a stale workdir cache.
+DRIVER_SRC_DIR="$WORKDIR/logitech-src"
+rm -rf "$DRIVER_SRC_DIR"
+mkdir -p "$DRIVER_SRC_DIR"
+
+LOGITECH_DRIVER_FILES=(
+  "hid-logitech-dj.c"
+  "hid-logitech-hidpp.c"
+  "hid-ids.h"
+  "usbhid/usbhid.h"
+)
+
+for f in "${LOGITECH_DRIVER_FILES[@]}"; do
+  target="$DRIVER_SRC_DIR/$f"
+  mkdir -p "$(dirname "$target")"
+
+  log "Downloading upstream Logitech source: $f"
+  curl -sfL \
+    "$UPSTREAM_DRIVER_SRC_BASE/$f" \
+    -o "$target.part" \
+    || die "download failed: $UPSTREAM_DRIVER_SRC_BASE/$f"
+
+  mv "$target.part" "$target"
+done
+
+cat > "$DRIVER_SRC_DIR/Makefile" <<'EOF_LOGITECH'
+obj-m += hid-logitech-dj.o
+obj-m += hid-logitech-hidpp.o
+EOF_LOGITECH
 
 # -------------------------------------------- resolve the driver packages
 # The driver set comes from Arch, not Valve's frozen mirror (which pins an
@@ -452,6 +490,39 @@ NVIDIA_VER="$(in_chroot "pacman -Q nvidia-utils" | awk '{print $2}')"
   || die "Chroot has nvidia-utils $NVIDIA_VER but $DRIVER_VERSION was pinned — stale overlay? Delete $WORKDIR and rerun."
 log "Built nvidia-open $NVIDIA_VER for $KVER"
 
+# ----------------------------------------------------  install libratbag
+log "Installing libratbag for Piper support"
+in_chroot "pacman --config $PACCONF -S $PACOPTS libratbag"
+
+log "Building upstream Logitech receiver and HID++ modules for $KVER"
+
+rm -rf "$MERGED/tmp/logitech-kmod"
+mkdir -p "$MERGED/tmp/logitech-kmod"
+cp -a "$DRIVER_SRC_DIR/." "$MERGED/tmp/logitech-kmod/"
+
+in_chroot \
+  "make -C /usr/lib/modules/$KVER/build M=/tmp/logitech-kmod clean"
+
+in_chroot \
+  "make -C /usr/lib/modules/$KVER/build M=/tmp/logitech-kmod modules"
+
+in_chroot \
+  "install -Dm644 \
+    /tmp/logitech-kmod/hid-logitech-dj.ko \
+    /usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko"
+
+in_chroot \
+  "install -Dm644 \
+    /tmp/logitech-kmod/hid-logitech-hidpp.ko \
+    /usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko"
+
+in_chroot \
+  "modinfo -F alias /tmp/logitech-kmod/hid-logitech-dj.ko \
+    | grep -qi 'v0000046Dp0000C547'" \
+  || die "upstream hid-logitech-dj module lacks the 046d:c547 alias"
+
+log "Built upstream Logitech modules for $KVER"
+
 # "Before" = the pristine image's own pacman db (read directly, host-side) —
 # NOT the chroot's, whose db carries installs cached in the overlay upper
 # layer from previous runs and would make the diff come out empty.
@@ -551,7 +622,11 @@ fi
 
 if [[ $UPDATE_MODE == selfheal ]]; then
   log "Installing self-healing update machinery"
+
   mkdir -p "$MNT/usr/lib/steamos-nvidia"
+  mkdir -p "$MNT/usr/lib/steamos-nvidia/logitech"
+  cp -a "$DRIVER_SRC_DIR/." \
+    "$MNT/usr/lib/steamos-nvidia/logitech/"
 
   # pinned driver record — repatch installs these exact packages (instead of
   # the slot's frozen repo, which is what the valve-driver variant does)
@@ -623,8 +698,21 @@ done
 [[ -n "$KVER" ]] || die "no neptune kernel in $PARTSET rootfs"
 log "Target kernel: $KVER"
 
-if compgen -G "$NEWROOT/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/null; then
-  log "Driver already present for $KVER — nothing to do"
+if compgen -G \
+     "$NEWROOT/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" \
+     >/dev/null \
+   && compgen -G \
+     "$NEWROOT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" \
+     >/dev/null \
+   && compgen -G \
+     "$NEWROOT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" \
+     >/dev/null \
+   && compgen -G \
+     "$NEWROOT/usr/lib/holo/pacmandb/local/libratbag-[0-9]*" \
+     >/dev/null; then
+
+  log "NVIDIA, Logitech HID modules, and libratbag already present for $KVER — nothing to do"
+
   [[ $WAS_RO -eq 1 ]] && btrfs property set "$NEWROOT" ro true
   exit 0
 fi
@@ -661,7 +749,7 @@ in_chroot "curl -sfL '$HDR_URL' -o /tmp/headers.pkg.tar.zst"
 in_chroot "pacman -Sy"
 in_chroot "pacman -Qq" | LC_ALL=C sort > "$WORK/before.txt"
 in_chroot "pacman -U --noconfirm --needed /tmp/headers.pkg.tar.zst"
-in_chroot "pacman -S --noconfirm --needed dkms"
+in_chroot "pacman -S --noconfirm --needed dkms libratbag"
 
 # Driver = the exact pinned Arch packages this image was built with (NOT the
 # slot's frozen repo — that only has Valve's older driver).
@@ -685,6 +773,41 @@ compgen -G "$MERGED/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/null \
   || in_chroot "dkms autoinstall -k $KVER"
 compgen -G "$MERGED/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/null \
   || die "driver failed to build for $KVER"
+
+log "Building upstream Logitech receiver and HID++ modules"
+
+[[ -d /usr/lib/steamos-nvidia/logitech ]] \
+  || die "Logitech source bundle is missing"
+
+rm -rf "$MERGED/tmp/logitech-kmod"
+mkdir -p "$MERGED/tmp/logitech-kmod"
+
+cp -a /usr/lib/steamos-nvidia/logitech/. \
+  "$MERGED/tmp/logitech-kmod/"
+
+in_chroot \
+  "make -C /usr/lib/modules/$KVER/build M=/tmp/logitech-kmod clean"
+
+in_chroot \
+  "make -C /usr/lib/modules/$KVER/build M=/tmp/logitech-kmod modules"
+
+in_chroot \
+  "install -Dm644 \
+    /tmp/logitech-kmod/hid-logitech-dj.ko \
+    /usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko"
+
+in_chroot \
+  "install -Dm644 \
+    /tmp/logitech-kmod/hid-logitech-hidpp.ko \
+    /usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko"
+
+in_chroot \
+  "modinfo -F alias /tmp/logitech-kmod/hid-logitech-dj.ko \
+    | grep -qi 'v0000046Dp0000C547'" \
+  || die "upstream hid-logitech-dj module lacks the 046d:c547 alias"
+
+log "Built upstream Logitech modules for $KVER"
+
 in_chroot "pacman -Qq" | LC_ALL=C sort > "$WORK/after.txt"
 
 BUILD_ONLY_RE='^(dkms|nvidia-open-dkms|patch|gcc|gcc-libs|make|binutils|libisl|libmpc|mpfr|pahole|python-setuptools|linux-neptune.*-headers|.*-headers)$'
@@ -707,6 +830,21 @@ done
 chroot "$NEWROOT" depmod "$KVER"
 chroot "$NEWROOT" ldconfig
 
+compgen -G \
+  "$NEWROOT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" \
+  >/dev/null \
+  || die "hid-logitech-dj.ko was not copied into $PARTSET"
+
+compgen -G \
+  "$NEWROOT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" \
+  >/dev/null \
+  || die "hid-logitech-hidpp.ko was not copied into $PARTSET"
+
+compgen -G \
+  "$NEWROOT/usr/lib/holo/pacmandb/local/libratbag-[0-9]*" \
+  >/dev/null \
+  || die "libratbag was not registered in $PARTSET"
+
 cat > "$NEWROOT/etc/modprobe.d/99-nvidia-patch.conf" <<'EOF'
 # Added by steamos-nvidia repatch
 blacklist nouveau
@@ -724,6 +862,18 @@ grep -q 'rd.driver.blacklist=nouveau' "$NEWROOT/etc/default/grub" \
 # NEXT update is covered too
 mkdir -p "$NEWROOT/usr/lib/steamos-nvidia"
 cp -a /usr/lib/steamos-nvidia/. "$NEWROOT/usr/lib/steamos-nvidia/"
+
+for f in \
+  hid-logitech-dj.c \
+  hid-logitech-hidpp.c \
+  hid-ids.h \
+  usbhid/usbhid.h \
+  Makefile; do
+
+  [[ -f "$NEWROOT/usr/lib/steamos-nvidia/logitech/$f" ]] \
+    || die "Logitech self-heal source missing from $PARTSET: $f"
+done
+
 if [[ ! -f "$NEWROOT/usr/bin/steamos-update.orig" ]]; then
   mv "$NEWROOT/usr/bin/steamos-update" "$NEWROOT/usr/bin/steamos-update.orig"
   cp -a /usr/bin/steamos-update "$NEWROOT/usr/bin/steamos-update"
@@ -958,12 +1108,42 @@ fi
 # ----------------------------------------------------------- sanity check
 log "Sanity checks"
 compgen -G "$MNT/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/null || die "nvidia.ko missing from image"
+
+compgen -G \
+  "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" \
+  >/dev/null \
+  || die "hid-logitech-dj.ko missing from image"
+
+compgen -G \
+  "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" \
+  >/dev/null \
+  || die "hid-logitech-hidpp.ko missing from image"
+
+chroot "$MNT" \
+  modinfo -F alias \
+  "/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko" \
+  | grep -qi 'v0000046Dp0000C547' \
+  || die "image hid-logitech-dj module lacks the 046d:c547 alias"
+
+compgen -G "$PACDB/libratbag-[0-9]*" >/dev/null \
+  || die "libratbag missing from image package database"
+
 grep -q 'blacklist nouveau' "$MNT/etc/modprobe.d/99-nvidia-patch.conf" || die "modprobe conf is empty/missing"
 if [[ $UPDATE_MODE == selfheal ]]; then
   grep -q 'self-healing' "$MNT/usr/bin/steamos-update" || die "update wrapper missing"
   [[ -f "$MNT/usr/bin/steamos-update.orig" ]] || die "original steamos-update not preserved"
   grep -q 'repatch' "$MNT/usr/lib/steamos-nvidia/repatch.sh" || die "repatch tool missing"
   grep -q "^DRIVER_VERSION=\"$DRIVER_VERSION\"" "$MNT/usr/lib/steamos-nvidia/driver.conf" || die "driver.conf missing/wrong"
+  for f in \
+    hid-logitech-dj.c \
+    hid-logitech-hidpp.c \
+    hid-ids.h \
+    usbhid/usbhid.h \
+    Makefile; do
+
+    [[ -f "$MNT/usr/lib/steamos-nvidia/logitech/$f" ]] \
+      || die "self-heal Logitech source missing: $f"
+  done
   [[ -L "$MNT/etc/systemd/system/atomupd.service" ]] && die "atomupd must NOT be masked in selfheal mode"
 fi
 compgen -G "$MNT/usr/lib/firmware/nvidia/*/gsp_*.bin" >/dev/null || warn "GSP firmware not found — nvidia-open needs it"
