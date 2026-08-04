@@ -131,12 +131,14 @@ if command -v pv >/dev/null 2>&1; then
   kill $ZENITY_PID 2>/dev/null || true
 else
   sudo dd if="$IMG" of="$TARGET_DEV" bs=$BS status=progress conv=fsync oflag=sync 2>&1 \
-    | zenity --progress --title="Flashing" --text="Flashing $(basename "$IMG") to $TARGET_DEV..." \
-      --pulsate --auto-close --auto-kill --width=400 2>/dev/null || true
+    | zenity --progress --title="Flashing" --text="Flashing $(basename "$IMG") to $TARGET_DEV...\n\nDo NOT remove the USB stick." \
+      --pulsate --auto-close --auto-kill --width=400 --ok-label="" --cancel-label="Cancel" 2>/dev/null || true
 fi
 
 # ---- sync and done ----
-sudo sync
-zenity --info --title="Complete" \
-  --text="Flashing complete!\n\n$(basename "$IMG") -> $TARGET_DEV\n\nYou can now remove the USB stick and boot from it." \
-  --width=400 2>/dev/null || true
+# sync may fail if we just overwrote the disk we're running from (the
+# filesystem is gone). dd's conv=fsync already flushed, so this is cosmetic.
+sync 2>/dev/null || true
+zenity --info --title="Flash Complete" \
+  --text="<b>Flashing complete!</b>\n\n$(basename "$IMG") -> $TARGET_DEV\n\n<b>Next steps:</b>\n1. Remove the USB stick\n2. Insert into target machine\n3. Boot from USB (UEFI, Secure Boot off)\n4. Double-click 'Install SteamOS (NVIDIA) to Hard Drive'\n5. Pick your disk and install" \
+  --width=500 2>/dev/null || true
