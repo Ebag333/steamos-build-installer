@@ -62,12 +62,12 @@
 #                      unpatched system (A/B fallback saves you, driver lost).
 #   --no-installer     Skip step 4 (produce a plain bootable patched OS).
 #   --trim-cuda        Drop CUDA/OpenCL/NVVM/OptiX libs (~350 MB smaller).
-#   --hid              Build libratbag (from source) and upstream Logitech HID
-#                      kernel modules. Valve's libratbag is from 2024 and
-#                      lacks support for many modern Logitech mice. The HID
-#                      modules (hid-logitech-dj, hid-logitech-hidpp) are
-#                      fetched from Linux master and compiled against the
-#                      image's neptune kernel.
+#   --hw-support       Build and install extra hardware support:
+#                      - libratbag (from source) for modern Logitech mice
+#                      - Logitech HID kernel modules (hid-logitech-dj,
+#                        hid-logitech-hidpp) from upstream Linux
+#                      - libfprint + fprintd for fingerprint readers
+#                      Requires network access during the build.
 #   --rootfs-size SIZE Root partition size. Accepts K, M, G suffixes
 #                      (e.g. 10G, 10240M, 10240). Plain numbers are MiB.
 #                      Default: 5120 (5 GiB as shipped by Valve). The
@@ -75,6 +75,10 @@
 #                      to this value and the btrfs filesystem is expanded
 #                      to fill them automatically.
 #   --skip-sigcheck    Disable pacman signature checks in the build chroot.
+#   --fix-keyring      Force-initialise the pacman keyring in the build chroot
+#                      with the standard Arch Linux + SteamOS holo keys.  Use
+#                      when the frozen image keyring is too old to verify
+#                      current packages.
 #   --workdir DIR      Build dir (~3 GB; default: alongside the output).
 #                      Kept between runs — caches the driver build.
 #
@@ -97,14 +101,15 @@ set -euo pipefail
 #   lib/resolve-driver.sh    resolve + download pinned NVIDIA packages, glibc check
 #   lib/build-driver.sh      overlay chroot build + payload computation
 #   lib/fetch-hid.sh         (optional) download upstream HID sources
-#   lib/build-hid.sh         (optional) build libratbag + Logitech kmod
+#   lib/build-hid.sh         (optional) build Logitech HID kernel modules
+#   lib/install-hw-libs.sh   (optional) libratbag, libfprint, fprintd
 #   lib/install-driver.sh    copy payload into the image rootfs
 #   lib/update-strategy.sh   hold / self-heal / stock update behaviour
 #   lib/installer.sh         kernel cmdline + one-click installer
 #   lib/finalize.sh          sanity checks, sync, unmount, summary
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for m in common setup resolve-driver build-driver fetch-hid build-hid install-driver \
-         update-strategy installer finalize; do
+for m in common setup resolve-driver build-driver fetch-hid build-hid install-hw-libs \
+         install-driver update-strategy installer finalize; do
   source "$SCRIPT_DIR/lib/$m.sh"
 done
 
@@ -113,13 +118,15 @@ UPDATE_MODE=selfheal   # selfheal | hold | stock
 ADD_INSTALLER=1
 TRIM_CUDA=0
 SKIP_SIG=0
-BUILD_HID=0
+BUILD_HW_SUPPORT=0
+FIX_KEYRING=0
 DRIVER_SPEC=latest     # latest | <branch or version prefix, e.g. 580>
 ROOTFS_SIZE=""          # MiB; empty = Valve's default 5120
 
 # Upstream HID driver sources (currently Logitech receiver/HID++).
-# Defaults to current Linux master; override with UPSTREAM_DRIVER_REF=ref.
-UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-master}"
+# Defaults to the image's kernel version (e.g. v6.16) so the source
+# matches the installed headers.  Override with UPSTREAM_DRIVER_REF=ref.
+UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPSTREAM_DRIVER_REF/drivers/hid"
 
 WORKDIR=""
@@ -131,10 +138,11 @@ while [[ $# -gt 0 ]]; do
     --hold-updates)    UPDATE_MODE=hold ;;
     --no-hold-updates) UPDATE_MODE=stock ;;
     --no-installer)    ADD_INSTALLER=0 ;;
-    --hid)             BUILD_HID=1 ;;
+    --hw-support)      BUILD_HW_SUPPORT=1 ;;
     --trim-cuda)       TRIM_CUDA=1 ;;
     --rootfs-size)     ROOTFS_SIZE="${2:?--rootfs-size needs an argument (MiB)}"; shift ;;
     --skip-sigcheck)   SKIP_SIG=1 ;;
+    --fix-keyring)     FIX_KEYRING=1 ;;
     --workdir)         WORKDIR="${2:?--workdir needs an argument}"; shift ;;
     -h|--help)         sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "Unknown option: $1" ;;
@@ -191,7 +199,7 @@ OUT="${IMG_BASE%.img}-nvidia-usbinstall.img"
 # match the FILENAME only — the containing dir may itself be called
 # "steamos-nvidia-installer" (the repo clone), which must not trip this guard
 [[ "$(basename "$IMG")" == *-nvidia* ]] && die "Input looks like an already-patched image — start from the clean repair image."
-[[ -e "$OUT" ]] && { warn "Removing previous output $OUT"; rm -f "$OUT"; }
+[[ -e "$OUT" ]] && { warn "Removing previous output $OUT"; rm -f "$OUT" "${OUT}.src-fingerprint"; }
 
 [[ -n "$WORKDIR" ]] || WORKDIR="$(dirname "$OUT")/.nvidia-usb-work"
 MNT="$WORKDIR/mnt"          # rootfs mount
@@ -207,8 +215,9 @@ UDEV_RULE=/run/udev/rules.d/90-steamos-nvidia-installer.rules
 trap cleanup EXIT
 
 # ------------------------------------------------------------- orchestrate
+log "Starting steamos-nvidia-installer (driver=$DRIVER_SPEC hw=$BUILD_HW_SUPPORT rootfs=${ROOTFS_SIZE:-5120}M)"
 setup_dirs
-setup_clear_stale_mounts
+setup_clear_stale_state
 setup_udev_guard
 
 setup_copy_image
@@ -223,6 +232,7 @@ fetch_hid_sources
 setup_overlay_chroot
 build_driver
 build_hid
+install_hw_libs
 compute_payload
 
 install_payload

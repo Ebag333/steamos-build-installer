@@ -43,7 +43,7 @@ EOF
     mkdir -p "$MNT/usr/lib/steamos-nvidia"
 
     # Bundle HID source into the image for self-heal repatch to rebuild.
-    if [[ $BUILD_HID -eq 1 ]]; then
+    if [[ $BUILD_HW_SUPPORT -eq 1 ]]; then
       mkdir -p "$MNT/usr/lib/steamos-nvidia/hid"
       cp -a "$DRIVER_SRC_DIR/." "$MNT/usr/lib/steamos-nvidia/hid/"
     fi

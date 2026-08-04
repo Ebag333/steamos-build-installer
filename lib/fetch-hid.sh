@@ -12,10 +12,20 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 fetch_hid_sources() {
-  [[ $BUILD_HID -eq 1 ]] || return 0
+  [[ $BUILD_HW_SUPPORT -eq 1 ]] || return 0
 
-  # Re-download every run so "master" really means current upstream master
-  # rather than a stale workdir cache.
+  # Default to the image's kernel version so the source matches the installed
+  # headers (e.g. KVER=6.16.12-valve... → UPSTREAM_DRIVER_REF=v6.16).
+  if [[ -z "$UPSTREAM_DRIVER_REF" ]]; then
+    _kver_maj="${KVER%%.*}"                      # 6
+    _kver_rest="${KVER#*.}"                       # 16.12-valve...
+    _kver_min="${_kver_rest%%.*}"                 # 16
+    UPSTREAM_DRIVER_REF="v${_kver_maj}.${_kver_min}"
+    UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPSTREAM_DRIVER_REF/drivers/hid"
+    log "HID source ref: $UPSTREAM_DRIVER_REF (derived from kernel $KVER)"
+  fi
+
+  # Re-download every run so we always get the correct version.
   DRIVER_SRC_DIR="$WORKDIR/hid-src"
   rm -rf "$DRIVER_SRC_DIR"
   mkdir -p "$DRIVER_SRC_DIR"

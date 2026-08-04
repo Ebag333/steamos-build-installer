@@ -21,7 +21,7 @@ in_chroot() { chroot "$MERGED" /bin/bash -c "$*"; }
 cleanup() {
   set +e
   for m in "$MERGED"/dev/pts "$MERGED"/dev "$MERGED"/sys "$MERGED"/proc \
-           "$MERGED" "$EFIMNT" "$HOMEMNT" "$MNT"; do
+           "$MERGED" "${OVL_MNT:-}" "$EFIMNT" "$HOMEMNT" "$MNT"; do
     if mountpoint -q "$m" 2>/dev/null; then
       umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
     fi

@@ -15,10 +15,30 @@ fi
 # toolchain/headers never enter the image. The upper layer ($UPPER) is cached
 # between runs to speed up reruns.
 setup_overlay_chroot() {
+  log "Setting up overlay build chroot (build residue stays out of the image)"
+
+  # SteamOS /home uses casefold-enabled ext4 (for Proton), which overlayfs
+  # rejects as an upperdir.  Use a plain ext4 loopback image as workspace,
+  # same trick as repatch.sh.
+  OVL_IMG="$WORKDIR/overlay-work.img"
+  OVL_MNT="$WORKDIR/overlay-mnt"
+  UPPER="$OVL_MNT/upper"
+  OVLWORK="$OVL_MNT/ovlwork"
+  mkdir -p "$OVL_MNT"
+
+  if [[ -f "$OVL_IMG" ]]; then
+    log "Reusing existing overlay workspace image"
+  else
+    log "Creating overlay workspace image (8 GB)"
+    truncate -s 8G "$OVL_IMG"
+    mkfs.ext4 -q -F "$OVL_IMG"
+  fi
+  mount -o loop "$OVL_IMG" "$OVL_MNT"
+  mkdir -p "$UPPER" "$OVLWORK"
+
   # A cached overlay from a previous run of a DIFFERENT driver version has to
   # go: pacman would happily downgrade in place, but the old version's stray
-  # files and modules would ride along into the image. (The package cache in
-  # $WORKDIR/pkgs is kept — only the build residue is thrown away.)
+  # files and modules would ride along into the image.
   if compgen -G "$UPPER/usr/lib/holo/pacmandb/local/nvidia-utils-[0-9]*" >/dev/null; then
     CACHED_VER="$(basename "$(echo "$UPPER"/usr/lib/holo/pacmandb/local/nvidia-utils-[0-9]*)")"
     CACHED_VER="${CACHED_VER#nvidia-utils-}"
@@ -29,7 +49,6 @@ setup_overlay_chroot() {
     fi
   fi
 
-  log "Setting up overlay build chroot (build residue stays out of the image)"
   # index=off: allows reusing the upperdir even if a lazily-unmounted overlay
   # from an interrupted previous run still references it (enables resume).
   mount -t overlay overlay \
@@ -47,6 +66,16 @@ setup_overlay_chroot() {
       > "$MERGED/tmp/pacman-nosig.conf"
     PACCONF="/tmp/pacman-nosig.conf"
     warn "pacman signature verification DISABLED for the build"
+  fi
+
+  # --fix-keyring: force-initialise with standard Arch Linux keys.  Useful
+  # when the frozen image keyring is too old or missing packager keys.
+  if [[ $FIX_KEYRING -eq 1 ]]; then
+    log "Force-initialising pacman keyring with Arch Linux keys"
+    in_chroot "pacman-key --init" \
+      || die "pacman-key --init failed"
+    in_chroot "pacman-key --populate archlinux holo" \
+      || die "pacman-key --populate failed"
   fi
 
   if [[ $SKIP_SIG -eq 0 && ! -d "$MERGED/etc/pacman.d/gnupg/private-keys-v1.d" ]]; then

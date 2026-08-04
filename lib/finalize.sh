@@ -15,7 +15,7 @@ finalize() {
   compgen -G "$MNT/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/null || die "nvidia.ko missing from image"
 
   # HID module checks (only if --hid was used).
-  if [[ $BUILD_HID -eq 1 ]]; then
+  if [[ $BUILD_HW_SUPPORT -eq 1 ]]; then
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
       || die "hid-logitech-dj.ko missing from image"
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" >/dev/null \
@@ -34,7 +34,7 @@ finalize() {
     grep -q 'repatch' "$MNT/usr/lib/steamos-nvidia/repatch.sh" || die "repatch tool missing"
     grep -q "^DRIVER_VERSION=\"$DRIVER_VERSION\"" "$MNT/usr/lib/steamos-nvidia/driver.conf" || die "driver.conf missing/wrong"
     # Verify HID source bundle for self-heal.
-    if [[ $BUILD_HID -eq 1 ]]; then
+    if [[ $BUILD_HW_SUPPORT -eq 1 ]]; then
       for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
         [[ -f "$MNT/usr/lib/steamos-nvidia/hid/$f" ]] \
           || die "self-heal HID source missing: $f"
