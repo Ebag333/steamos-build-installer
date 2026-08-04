@@ -10,19 +10,51 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+# If the user didn't explicitly set --workdir, check disk vs RAM and pick
+# whichever has more free space.  The build needs ~9 GB (decompressed image
+# + overlay workspace + packages).
+setup_resolve_workdir() {
+  if [[ -n "${_WORKDIR_EXPLICIT:-}" ]]; then
+    return 0  # user specified --workdir, don't override
+  fi
+
+  local disk_avail ram_avail
+  disk_avail="$(df -m --output=avail "$(dirname "$OUT")" | tail -1 | tr -d ' ')"
+  ram_avail="$(df -m --output=avail /dev/shm 2>/dev/null | tail -1 | tr -d ' ' || echo 0)"
+
+  if (( disk_avail >= 9216 )); then
+    log "Build workspace: disk (${disk_avail} MB free) — sufficient"
+  elif (( ram_avail >= 9216 )); then
+    WORKDIR="/dev/shm/nvidia-build"
+    OUT="$WORKDIR/$(basename "$OUT")"
+    mkdir -p "$WORKDIR"
+    log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free) — disk only has ${disk_avail} MB"
+  else
+    die "Not enough space anywhere: disk=${disk_avail} MB, RAM=${ram_avail} MB. Need ~9 GB."
+  fi
+}
+
 # Build/scratch mountpoints used across the whole run.
 setup_dirs() {
+  log "Creating build directories under $WORKDIR"
   mkdir -p "$MNT" "$EFIMNT" "$HOMEMNT" "$OVLWORK" "$MERGED"
+  mkdir -p "${OVL_MNT:-$WORKDIR/overlay-mnt}"
+  log "  MERGED=$MERGED (exists: $([[ -d "$MERGED" ]] && echo yes || echo no))"
 }
 
 # Clean up stale state from interrupted previous runs: unmount anything backed
-# by our output image and detach the loop device.  Idempotent — safe to call
-# every run.
+# by our output image, detach loop devices, and remove leftover data that
+# wastes disk space.  Idempotent — safe to call every run.
 setup_clear_stale_state() {
+  # Remove incomplete decompressed images from a crashed bzip2/gzip/etc.
+  if [[ -f "$OUT" && ! -f "${OUT}.src-fingerprint" ]]; then
+    warn "Removing incomplete output from previous failed run"
+    rm -f "$OUT"
+  fi
+
   # Detach any loop device backed by our output image.
   while read -r dev; do
     [[ -n "$dev" ]] || continue
-    # Unmount any mounts on partitions of this loop device.
     findmnt -rn -o TARGET,SOURCE 2>/dev/null \
       | awk -v l="$dev" '$2 ~ "^"l {print $1}' \
       | tac | while read -r m; do
@@ -39,17 +71,30 @@ for d in d.get('loopdevices',[]):
         print(d['name'])" 2>/dev/null || true)
 
   # Unmount stale overlay workspace (from a crashed build).
-  local ovl_mnt="$WORKDIR/overlay-mnt"
-  if [[ -d "$ovl_mnt" ]] && mountpoint -q "$ovl_mnt" 2>/dev/null; then
-    warn "Unmounting stale overlay workspace at $ovl_mnt"
-    umount -R "$ovl_mnt" 2>/dev/null || umount -Rl "$ovl_mnt" 2>/dev/null
+  if [[ -d "$WORKDIR/overlay-mnt" ]] && mountpoint -q "$WORKDIR/overlay-mnt" 2>/dev/null; then
+    warn "Unmounting stale overlay workspace"
+    umount -R "$WORKDIR/overlay-mnt" 2>/dev/null || umount -Rl "$WORKDIR/overlay-mnt" 2>/dev/null
+  fi
+  # Remove the overlay workspace image if it's not attached to any loop device.
+  if [[ -f "$WORKDIR/overlay-work.img" ]]; then
+    if ! losetup -j "$WORKDIR/overlay-work.img" >/dev/null 2>&1; then
+      warn "Removing orphaned overlay workspace image"
+      rm -f "$WORKDIR/overlay-work.img"
+    fi
   fi
 
-  # Clear stale mountpoints.
+  # Clear stale mountpoints and leftover data that wastes disk space.
   for m in "$MERGED" "$EFIMNT" "$HOMEMNT" "$MNT"; do
     if mountpoint -q "$m" 2>/dev/null; then
       warn "Stale mount at $m — unmounting"
       umount -R "$m" 2>/dev/null || umount -Rl "$m"
+    fi
+  done
+
+  # Remove stale overlay residue (the overlay is gone but the files remain).
+  for d in "$MERGED" "$UPPER" "$OVLWORK"; do
+    if [[ -d "$d" ]] && ! mountpoint -q "$d" 2>/dev/null; then
+      rm -rf "$d" 2>/dev/null
     fi
   done
 }
@@ -92,6 +137,13 @@ setup_copy_image() {
     fi
     log "Source changed — re-decompressing"
     rm -f "$OUT" "$FINGERPRINT_FILE"
+  fi
+
+  # Space check: decompressed image is ~8 GB, packages ~0.5 GB.
+  # The overlay workspace is a sparse file (doesn't consume upfront).
+  _avail_mb="$(df -m --output=avail "$(dirname "$OUT")" | tail -1 | tr -d ' ')"
+  if (( _avail_mb < 9216 )); then
+    die "Not enough disk space: ${_avail_mb} MB free, need ~9 GB. Use --workdir /dev/shm to build in RAM."
   fi
 
   case "$IMG" in

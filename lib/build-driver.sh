@@ -35,6 +35,8 @@ setup_overlay_chroot() {
   fi
   mount -o loop "$OVL_IMG" "$OVL_MNT"
   mkdir -p "$UPPER" "$OVLWORK"
+  log "Overlay: lowerdir=$MNT upperdir=$UPPER workdir=$OVLWORK merged=$MERGED"
+  log "  MERGED exists: $([[ -d "$MERGED" ]] && echo yes || echo no)"
 
   # A cached overlay from a previous run of a DIFFERENT driver version has to
   # go: pacman would happily downgrade in place, but the old version's stray

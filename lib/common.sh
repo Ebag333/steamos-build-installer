@@ -20,8 +20,8 @@ in_chroot() { chroot "$MERGED" /bin/bash -c "$*"; }
 # drop the udisks guard rule. Idempotent — safe to run twice (EXIT trap).
 cleanup() {
   set +e
-  for m in "$MERGED"/dev/pts "$MERGED"/dev "$MERGED"/sys "$MERGED"/proc \
-           "$MERGED" "${OVL_MNT:-}" "$EFIMNT" "$HOMEMNT" "$MNT"; do
+  for m in "${MERGED:-}/dev/pts" "${MERGED:-}/dev" "${MERGED:-}/sys" "${MERGED:-}/proc" \
+           "${MERGED:-}" "${OVL_MNT:-}" "${EFIMNT:-}" "${HOMEMNT:-}" "${MNT:-}"; do
     if mountpoint -q "$m" 2>/dev/null; then
       umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
     fi
@@ -31,6 +31,15 @@ cleanup() {
     findmnt -rn -o TARGET,SOURCE | awk -v l="$LOOPDEV" '$2 ~ "^"l {print $1}' \
       | tac | while read -r m; do umount "$m" 2>/dev/null; done
     losetup -d "$LOOPDEV" 2>/dev/null
+  fi
+  # Detach the overlay workspace loop device if it exists.
+  if [[ -n "${OVL_IMG:-}" && -f "$OVL_IMG" ]]; then
+    local _ovl_dev
+    _ovl_dev="$(losetup -j "$OVL_IMG" 2>/dev/null | cut -d: -f1 | head -1)"
+    if [[ -n "$_ovl_dev" ]]; then
+      umount "$_ovl_dev" 2>/dev/null
+      losetup -d "$_ovl_dev" 2>/dev/null
+    fi
   fi
   if [[ -f "$UDEV_RULE" ]]; then
     rm -f "$UDEV_RULE"

@@ -79,8 +79,9 @@
 #                      with the standard Arch Linux + SteamOS holo keys.  Use
 #                      when the frozen image keyring is too old to verify
 #                      current packages.
-#   --workdir DIR      Build dir (~3 GB; default: alongside the output).
-#                      Kept between runs — caches the driver build.
+#   --workdir DIR      Build dir. Default: auto-detects — uses disk if ≥9 GB
+#                      free, otherwise falls back to /dev/shm (RAM). Kept
+#                      between runs for caching. Use --workdir to override.
 #
 # Host needs: Arch-ish Linux, losetup, btrfs-progs, rsync, curl, kmod, zstd,
 # python3, readelf (binutils), and bzip2/gzip/xz/zstd if using a compressed image.
@@ -124,8 +125,9 @@ DRIVER_SPEC=latest     # latest | <branch or version prefix, e.g. 580>
 ROOTFS_SIZE=""          # MiB; empty = Valve's default 5120
 
 # Upstream HID driver sources (currently Logitech receiver/HID++).
-# Defaults to the image's kernel version (e.g. v6.16) so the source
-# matches the installed headers.  Override with UPSTREAM_DRIVER_REF=ref.
+# Defaults to Linux master for latest device IDs; the source is
+# automatically patched for compatibility with the image's kernel headers.
+# Override with UPSTREAM_DRIVER_REF=ref to pin to a specific tag.
 UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPSTREAM_DRIVER_REF/drivers/hid"
 
@@ -143,7 +145,7 @@ while [[ $# -gt 0 ]]; do
     --rootfs-size)     ROOTFS_SIZE="${2:?--rootfs-size needs an argument (MiB)}"; shift ;;
     --skip-sigcheck)   SKIP_SIG=1 ;;
     --fix-keyring)     FIX_KEYRING=1 ;;
-    --workdir)         WORKDIR="${2:?--workdir needs an argument}"; shift ;;
+    --workdir)         WORKDIR="${2:?--workdir needs an argument}"; _WORKDIR_EXPLICIT=1; shift ;;
     -h|--help)         sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "Unknown option: $1" ;;
     *)                 IMG="$1" ;;
@@ -202,12 +204,6 @@ OUT="${IMG_BASE%.img}-nvidia-usbinstall.img"
 [[ -e "$OUT" ]] && { warn "Removing previous output $OUT"; rm -f "$OUT" "${OUT}.src-fingerprint"; }
 
 [[ -n "$WORKDIR" ]] || WORKDIR="$(dirname "$OUT")/.nvidia-usb-work"
-MNT="$WORKDIR/mnt"          # rootfs mount
-EFIMNT="$WORKDIR/efi"       # efi-A mount
-HOMEMNT="$WORKDIR/home"     # home mount
-UPPER="$WORKDIR/upper"      # overlay upper (build residue, cached)
-OVLWORK="$WORKDIR/ovlwork"
-MERGED="$WORKDIR/merged"
 LOOPDEV=""
 UDEV_RULE=/run/udev/rules.d/90-steamos-nvidia-installer.rules
 
@@ -216,8 +212,18 @@ trap cleanup EXIT
 
 # ------------------------------------------------------------- orchestrate
 log "Starting steamos-nvidia-installer (driver=$DRIVER_SPEC hw=$BUILD_HW_SUPPORT rootfs=${ROOTFS_SIZE:-5120}M)"
-setup_dirs
+setup_resolve_workdir
+
+# Re-derive paths now that $WORKDIR may have changed (e.g. to /dev/shm).
+MNT="$WORKDIR/mnt"
+EFIMNT="$WORKDIR/efi"
+HOMEMNT="$WORKDIR/home"
+UPPER="$WORKDIR/upper"
+OVLWORK="$WORKDIR/ovlwork"
+MERGED="$WORKDIR/merged"
+
 setup_clear_stale_state
+setup_dirs
 setup_udev_guard
 
 setup_copy_image

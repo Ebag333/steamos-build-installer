@@ -14,15 +14,12 @@ fi
 fetch_hid_sources() {
   [[ $BUILD_HW_SUPPORT -eq 1 ]] || return 0
 
-  # Default to the image's kernel version so the source matches the installed
-  # headers (e.g. KVER=6.16.12-valve... → UPSTREAM_DRIVER_REF=v6.16).
+  # Default to Linux master for the latest device IDs.  The kzalloc_obj
+  # compatibility patch in the download loop handles header mismatches.
   if [[ -z "$UPSTREAM_DRIVER_REF" ]]; then
-    _kver_maj="${KVER%%.*}"                      # 6
-    _kver_rest="${KVER#*.}"                       # 16.12-valve...
-    _kver_min="${_kver_rest%%.*}"                 # 16
-    UPSTREAM_DRIVER_REF="v${_kver_maj}.${_kver_min}"
+    UPSTREAM_DRIVER_REF="master"
     UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPSTREAM_DRIVER_REF/drivers/hid"
-    log "HID source ref: $UPSTREAM_DRIVER_REF (derived from kernel $KVER)"
+    log "HID source ref: $UPSTREAM_DRIVER_REF (default)"
   fi
 
   # Re-download every run so we always get the correct version.
@@ -46,6 +43,18 @@ fetch_hid_sources() {
       "$UPSTREAM_DRIVER_SRC_BASE/$f" \
       -o "$target.part" \
       || die "download failed: $UPSTREAM_DRIVER_SRC_BASE/$f"
+
+    # Patch kernel API changes between master and the image's headers.
+    if [[ "$f" == *.c ]]; then
+      # kzalloc_obj was renamed/added after 6.16; replace with kzalloc.
+      sed -i 's/kzalloc_obj(\*\([a-z_]*\))/kzalloc(sizeof(*\1), GFP_KERNEL)/g' "$target.part"
+      sed -i 's/kzalloc_obj(struct \([a-z_]*\))/kzalloc(sizeof(struct \1), GFP_KERNEL)/g' "$target.part"
+      # kzalloc_objs(type, count) → kcalloc(count, sizeof(type), GFP_KERNEL)
+      sed -i 's/kzalloc_objs(\([a-z_]*\), \([a-z_]*\))/kcalloc(\2, sizeof(\1), GFP_KERNEL)/g' "$target.part"
+      # hid_report_raw_event gained a 6th arg after 6.16; strip it.
+      # Call spans two lines: match the closing line after hid_report_raw_event.
+      sed -i '/hid_report_raw_event/,/);/{s/, 1);/);/}' "$target.part"
+    fi
 
     mv "$target.part" "$target"
   done
