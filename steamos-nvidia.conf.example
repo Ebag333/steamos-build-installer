@@ -1,0 +1,47 @@
+# steamos-nvidia-installer — example config
+# All features enabled.  Copy and edit as needed.
+#
+# Usage:
+#   sudo ./steamos-nvidia-installer.sh --config steamos-nvidia.conf.example
+
+# Source image (plain .img or compressed .img.bz2/.gz/.xz/.zst)
+IMG="/mnt/c/Users/gabri/Downloads/steamdeck-oobe-repair-20260707.10-3.8.14.img.bz2"
+
+# NVIDIA driver: "latest" or a branch prefix (580, 575, 570, etc.)
+DRIVER_SPEC="latest"
+
+# Update strategy: selfheal | hold | stock
+#   selfheal — OS updates work; driver is rebuilt automatically (recommended)
+#   hold     — OS updates blocked (Steam always shows "up to date")
+#   stock    — OS updates work but REMOVE the driver
+UPDATE_MODE="selfheal"
+
+# Include one-click installer desktop icon (1=yes, 0=no)
+ADD_INSTALLER=1
+
+# Trim CUDA/OpenCL/NVVM/OptiX libs to save ~350 MB (1=yes, 0=no)
+TRIM_CUDA=0
+
+# Build extra hardware support: libratbag, Logitech HID, fingerprint (1=yes, 0=no)
+BUILD_HW_SUPPORT=1
+
+# Install Thunderbolt dock support: auto-authorize, PCI rescan, bolt daemon (1=yes, 0=no)
+THUNDERBOLT=1
+
+# Root partition size in MiB (Valve default: 5120 = 5 GiB)
+ROOTFS_SIZE="5120"
+
+# Disable pacman signature checks in build chroot (1=yes, 0=no)
+SKIP_SIG=0
+
+# Force-initialise pacman keyring (use when frozen image keyring is stale)
+FIX_KEYRING=1
+
+# Work directory (leave empty to auto-detect)
+WORKDIR=""
+
+# Build location: auto | ram | disk
+#   auto — prefer RAM if free >= 3x image size, otherwise disk
+#   ram  — force /dev/shm (fast, needs lots of RAM)
+#   disk — force disk (slower, works with less RAM)
+WORKDIR_LOCATION="auto"

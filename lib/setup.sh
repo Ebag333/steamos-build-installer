@@ -10,27 +10,54 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-# If the user didn't explicitly set --workdir, check disk vs RAM and pick
-# whichever has more free space.  The build needs ~9 GB (decompressed image
-# + overlay workspace + packages).
+# If the user didn't explicitly set --workdir, pick RAM or disk automatically.
+# Strategy: prefer RAM if it has >= 3x the image size free (fast build),
+# otherwise fall back to disk.  Die if neither has enough.
+#
+# The build needs ~1.5x the image size (decompressed copy + overlay + packages).
+# We use 3x as headroom so the system doesn't thrash.
 setup_resolve_workdir() {
   if [[ -n "${_WORKDIR_EXPLICIT:-}" ]]; then
     return 0  # user specified --workdir, don't override
   fi
 
-  local disk_avail ram_avail
-  disk_avail="$(df -m --output=avail "$(dirname "$OUT")" | tail -1 | tr -d ' ')"
-  ram_avail="$(df -m --output=avail /dev/shm 2>/dev/null | tail -1 | tr -d ' ' || echo 0)"
-
-  if (( disk_avail >= 9216 )); then
-    log "Build workspace: disk (${disk_avail} MB free) — sufficient"
-  elif (( ram_avail >= 9216 )); then
+  # If the user forced a location via config, honour it.
+  if [[ "${WORKDIR_LOCATION:-auto}" == "ram" ]]; then
     WORKDIR="/dev/shm/nvidia-build"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR"
-    log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free) — disk only has ${disk_avail} MB"
+    log "Build workspace: RAM (forced by config)"
+    return 0
+  fi
+
+  local disk_avail ram_avail img_size_mb need_mb
+  disk_avail="$(df -m --output=avail "$(dirname "$OUT")" | tail -1 | tr -d ' ')"
+  ram_avail="$(df -m --output=avail /dev/shm 2>/dev/null | tail -1 | tr -d ' ' || echo 0)"
+
+  # Estimate required space from the source image size.
+  if [[ -f "$IMG" ]]; then
+    img_size_mb=$(( $(stat -c '%s' "$IMG") / 1048576 ))
   else
-    die "Not enough space anywhere: disk=${disk_avail} MB, RAM=${ram_avail} MB. Need ~9 GB."
+    img_size_mb=8192  # conservative default (~8 GB)
+  fi
+  need_mb=$(( img_size_mb * 3 ))
+
+  if [[ "${WORKDIR_LOCATION:-auto}" == "disk" ]]; then
+    (( disk_avail >= need_mb )) || die "Disk only has ${disk_avail} MB free, need ~${need_mb} MB (3x image)."
+    log "Build workspace: disk (forced by config, ${disk_avail} MB free)"
+    return 0
+  fi
+
+  # Auto: prefer RAM if it has 3x headroom, otherwise disk.
+  if (( ram_avail >= need_mb )); then
+    WORKDIR="/dev/shm/nvidia-build"
+    OUT="$WORKDIR/$(basename "$OUT")"
+    mkdir -p "$WORKDIR"
+    log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free, need ~${need_mb})"
+  elif (( disk_avail >= need_mb )); then
+    log "Build workspace: disk (${disk_avail} MB free, RAM only ${ram_avail} MB)"
+  else
+    die "Not enough space: RAM=${ram_avail} MB, disk=${disk_avail} MB. Need ~${need_mb} MB (3x image size)."
   fi
 }
 

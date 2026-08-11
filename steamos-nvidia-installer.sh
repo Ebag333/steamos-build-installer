@@ -110,7 +110,7 @@ set -euo pipefail
 #   lib/finalize.sh          sanity checks, sync, unmount, summary
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for m in common setup resolve-driver build-driver fetch-hid build-hid install-hw-libs \
-         install-driver update-strategy installer finalize; do
+         install-driver update-strategy thunderbolt installer finalize; do
   source "$SCRIPT_DIR/lib/$m.sh"
 done
 
@@ -120,6 +120,7 @@ ADD_INSTALLER=1
 TRIM_CUDA=0
 SKIP_SIG=0
 BUILD_HW_SUPPORT=0
+THUNDERBOLT=0
 FIX_KEYRING=0
 DRIVER_SPEC=latest     # latest | <branch or version prefix, e.g. 580>
 ROOTFS_SIZE=""          # MiB; empty = Valve's default 5120
@@ -141,6 +142,7 @@ while [[ $# -gt 0 ]]; do
     --no-hold-updates) UPDATE_MODE=stock ;;
     --no-installer)    ADD_INSTALLER=0 ;;
     --hw-support)      BUILD_HW_SUPPORT=1 ;;
+    --thunderbolt)     THUNDERBOLT=1 ;;
     --trim-cuda)       TRIM_CUDA=1 ;;
     --rootfs-size)     ROOTFS_SIZE="${2:?--rootfs-size needs an argument (MiB)}"; shift ;;
     --skip-sigcheck)   SKIP_SIG=1 ;;
@@ -238,6 +240,7 @@ fetch_hid_sources
 setup_overlay_chroot
 build_driver
 build_hid
+install_thunderbolt_support
 install_hw_libs
 compute_payload
 
