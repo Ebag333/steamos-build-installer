@@ -71,6 +71,7 @@ ADD_INSTALLER=$ADD_INSTALLER
 TRIM_CUDA=$TRIM_CUDA
 BUILD_HW_SUPPORT=$BUILD_HW_SUPPORT
 THUNDERBOLT=$THUNDERBOLT
+DEFAULT_SESSION="$DEFAULT_SESSION"
 ROOTFS_SIZE="$ROOTFS_SIZE"
 SKIP_SIG=$SKIP_SIG
 FIX_KEYRING=$FIX_KEYRING
@@ -155,6 +156,7 @@ gui_build_form() {
     --field="Trim CUDA (saves ~350MB):CHK" FALSE \
     --field="Extra HW Support:CHK" FALSE \
     --field="Thunderbolt Dock Support:CHK" FALSE \
+    --field="Boot to Desktop Mode:CHK" FALSE \
     --field="Rootfs Size (MiB):NUM" "5120" \
     --field="Skip Signature Check:CHK" FALSE \
     --field="Fix Keyring:CHK" FALSE \
@@ -165,13 +167,14 @@ gui_build_form() {
 
   # Parse pipe-separated result
   IFS='|' read -r IMG DRIVER_SPEC UPDATE_MODE ADD_INSTALLER TRIM_CUDA \
-    BUILD_HW_SUPPORT THUNDERBOLT ROOTFS_SIZE SKIP_SIG FIX_KEYRING WORKDIR WORKDIR_LOCATION <<< "$result"
+    BUILD_HW_SUPPORT THUNDERBOLT DEFAULT_SESSION ROOTFS_SIZE SKIP_SIG FIX_KEYRING WORKDIR WORKDIR_LOCATION <<< "$result"
 
   # Normalize booleans (YAD returns TRUE/FALSE)
   [[ "$ADD_INSTALLER" == "TRUE" ]] && ADD_INSTALLER=1 || ADD_INSTALLER=0
   [[ "$TRIM_CUDA" == "TRUE" ]] && TRIM_CUDA=1 || TRIM_CUDA=0
   [[ "$BUILD_HW_SUPPORT" == "TRUE" ]] && BUILD_HW_SUPPORT=1 || BUILD_HW_SUPPORT=0
   [[ "$THUNDERBOLT" == "TRUE" ]] && THUNDERBOLT=1 || THUNDERBOLT=0
+  [[ "$DEFAULT_SESSION" == "TRUE" ]] && DEFAULT_SESSION="desktop" || DEFAULT_SESSION=""
   [[ "$SKIP_SIG" == "TRUE" ]] && SKIP_SIG=1 || SKIP_SIG=0
   [[ "$FIX_KEYRING" == "TRUE" ]] && FIX_KEYRING=1 || FIX_KEYRING=0
 

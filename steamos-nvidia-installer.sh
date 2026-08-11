@@ -81,7 +81,7 @@
 #                      with the standard Arch Linux + SteamOS holo keys.  Use
 #                      when the frozen image keyring is too old to verify
 #                      current packages.
-#   --desktop-mode     Boot to desktop instead of gaming mode (gamescope).
+#   --session MODE     Set login session: "desktop" or "game" (default: game).
 #   --config FILE      Load options from a config file (overrides defaults).
 #   --workdir DIR      Build dir. Default: auto-detects — uses disk if ≥9 GB
 #                      free, otherwise falls back to /dev/shm (RAM). Kept
@@ -125,7 +125,7 @@ TRIM_CUDA=0
 SKIP_SIG=0
 BUILD_HW_SUPPORT=0
 THUNDERBOLT=0
-DEFAULT_SESSION=""  # "" = stock, "desktop" = boot to desktop
+DEFAULT_SESSION=""  # "" = stock, "desktop" = Plasma, "game" = gamescope
 FIX_KEYRING=0
 DRIVER_SPEC=latest     # latest | <branch or version prefix, e.g. 580>
 ROOTFS_SIZE=""          # MiB; empty = Valve's default 5120
@@ -163,7 +163,7 @@ while [[ $# -gt 0 ]]; do
     --rootfs-size)     ROOTFS_SIZE="${2:?--rootfs-size needs an argument (MiB)}"; shift ;;
     --skip-sigcheck)   SKIP_SIG=1 ;;
     --fix-keyring)     FIX_KEYRING=1 ;;
-    --desktop-mode)    DEFAULT_SESSION="desktop" ;;
+    --session)         DEFAULT_SESSION="${2:?--session needs desktop or game}"; shift ;;
     --config)          CONFIG_FILE="${2:?--config needs an argument}"; shift ;;
     --workdir)         WORKDIR="${2:?--workdir needs an argument}"; _WORKDIR_EXPLICIT=1; shift ;;
     -h|--help)         sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -269,5 +269,11 @@ apply_update_strategy
 
 patch_kernel_cmdline
 install_one_click_installer
+
+  # Set default session if requested
+  if [[ -n "$DEFAULT_SESSION" ]]; then
+    log "Setting default login mode to $DEFAULT_SESSION"
+    in_chroot "steamosctl set-default-login-mode $DEFAULT_SESSION" || warn "Could not set desktop mode (non-fatal)"
+  fi
 
 finalize
