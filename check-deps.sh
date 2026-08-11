@@ -22,6 +22,24 @@ MODE="interactive"  # interactive | install | check-only
 [[ "${1:-}" == "--install" ]] && MODE="install"
 [[ "${1:-}" == "--check-only" ]] && MODE="check-only"
 
+# ---- permission check ----
+can_install() {
+  if [[ $EUID -eq 0 ]]; then
+    return 0
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+HAS_PERMS="no"
+if [[ $EUID -eq 0 ]]; then
+  HAS_PERMS="root"
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  HAS_PERMS="sudo"
+fi
+
 MISSING_REQUIRED=()
 MISSING_OPTIONAL=()
 
@@ -102,6 +120,21 @@ if [[ ${#OPTIONAL_PKGS[@]} -gt 0 ]]; then
 fi
 echo ""
 
+# ---- permission check ----
+if [[ "$HAS_PERMS" == "root" ]]; then
+  echo -e "${GREEN}Running as root — can install packages.${NC}"
+elif [[ "$HAS_PERMS" == "sudo" ]]; then
+  echo -e "${GREEN}User has sudo — can install packages.${NC}"
+else
+  echo -e "${YELLOW}Not root and no sudo access.${NC}"
+  if [[ ${#REQUIRED_PKGS[@]} -gt 0 || ${#OPTIONAL_PKGS[@]} -gt 0 ]]; then
+    echo -e "${YELLOW}Cannot auto-install. Run as root or install manually:${NC}"
+    echo "  sudo pacman -S ${REQUIRED_PKGS[*]}"
+    exit 1
+  fi
+fi
+echo ""
+
 # ---- check-only mode: exit with error ----
 if [[ "$MODE" == "check-only" ]]; then
   exit ${#REQUIRED_PKGS[@]}
@@ -111,7 +144,14 @@ fi
 if [[ "$MODE" == "install" ]]; then
   TO_INSTALL=("${REQUIRED_PKGS[@]}" "${OPTIONAL_PKGS[@]}")
   echo "Installing: ${TO_INSTALL[*]}"
-  sudo pacman -S --noconfirm "${TO_INSTALL[@]}"
+  if [[ "$HAS_PERMS" == "root" ]]; then
+    pacman -S --noconfirm "${TO_INSTALL[@]}"
+  elif [[ "$HAS_PERMS" == "sudo" ]]; then
+    sudo pacman -S --noconfirm "${TO_INSTALL[@]}"
+  else
+    echo -e "${RED}Cannot install — no root/sudo access.${NC}"
+    exit 1
+  fi
   echo -e "${GREEN}Done.${NC}"
   exit 0
 fi
@@ -141,6 +181,13 @@ esac
 
 echo ""
 echo "Installing: ${TO_INSTALL[*]}"
-sudo pacman -S --noconfirm "${TO_INSTALL[@]}"
+if [[ "$HAS_PERMS" == "root" ]]; then
+  pacman -S --noconfirm "${TO_INSTALL[@]}"
+elif [[ "$HAS_PERMS" == "sudo" ]]; then
+  sudo pacman -S --noconfirm "${TO_INSTALL[@]}"
+else
+  echo -e "${RED}Cannot install — no root/sudo access.${NC}"
+  exit 1
+fi
 echo ""
 echo -e "${GREEN}Done. Run ./check-deps.sh again to verify.${NC}"
