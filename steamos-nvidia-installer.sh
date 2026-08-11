@@ -231,6 +231,32 @@ UDEV_RULE=/run/udev/rules.d/90-steamos-nvidia-installer.rules
 # ---------------------------------------------------------------- cleanup
 trap cleanup EXIT
 
+# ----------------------------------------------------------- dep check
+# Verify all required host tools are available.
+check_deps() {
+  local missing=()
+  for cmd in losetup blkid btrfs rsync curl depmod sed awk tar zstd pacman python3 readelf; do
+    command -v "$cmd" >/dev/null || missing+=("$cmd")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    # Map tool names to package names
+    local pkgs=()
+    for cmd in "${missing[@]}"; do
+      case "$cmd" in
+        btrfs)    pkgs+=(btrfs-progs) ;;
+        readelf)  pkgs+=(binutils) ;;
+        depmod)   pkgs+=(kmod) ;;
+        *)        pkgs+=("$cmd") ;;
+      esac
+    done
+    pkgs=($(printf "%s\n" "${pkgs[@]}" | sort -u))
+
+    die "Missing host tools: ${missing[*]}. Install with: pacman -S ${pkgs[*]}"
+  fi
+}
+
+check_deps
+
 # ------------------------------------------------------------- orchestrate
 log "Starting steamos-nvidia-installer (driver=$DRIVER_SPEC hw=$BUILD_HW_SUPPORT rootfs=${ROOTFS_SIZE:-5120}M)"
 setup_resolve_workdir
