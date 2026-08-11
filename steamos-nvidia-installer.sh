@@ -232,26 +232,34 @@ UDEV_RULE=/run/udev/rules.d/90-steamos-nvidia-installer.rules
 trap cleanup EXIT
 
 # ----------------------------------------------------------- dep check
-# Verify all required host tools are available.
+# Verify all required host tools are available.  Uses check-deps.sh for
+# interactive install prompts when dependencies are missing.
 check_deps() {
-  local missing=()
-  for cmd in losetup blkid btrfs rsync curl depmod sed awk tar zstd pacman python3 readelf; do
-    command -v "$cmd" >/dev/null || missing+=("$cmd")
-  done
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    # Map tool names to package names
-    local pkgs=()
-    for cmd in "${missing[@]}"; do
-      case "$cmd" in
-        btrfs)    pkgs+=(btrfs-progs) ;;
-        readelf)  pkgs+=(binutils) ;;
-        depmod)   pkgs+=(kmod) ;;
-        *)        pkgs+=("$cmd") ;;
-      esac
+  if [[ -f "$SCRIPT_DIR/check-deps.sh" ]]; then
+    bash "$SCRIPT_DIR/check-deps.sh" --check-only || {
+      echo ""
+      echo "Run ./check-deps.sh to install missing dependencies."
+      exit 1
+    }
+  else
+    # Fallback: inline check if check-deps.sh is missing
+    local missing=()
+    for cmd in losetup blkid btrfs rsync curl depmod sed awk tar zstd pacman python3 readelf; do
+      command -v "$cmd" >/dev/null || missing+=("$cmd")
     done
-    pkgs=($(printf "%s\n" "${pkgs[@]}" | sort -u))
-
-    die "Missing host tools: ${missing[*]}. Install with: pacman -S ${pkgs[*]}"
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      local pkgs=()
+      for cmd in "${missing[@]}"; do
+        case "$cmd" in
+          btrfs)    pkgs+=(btrfs-progs) ;;
+          readelf)  pkgs+=(binutils) ;;
+          depmod)   pkgs+=(kmod) ;;
+          *)        pkgs+=("$cmd") ;;
+        esac
+      done
+      pkgs=($(printf "%s\n" "${pkgs[@]}" | sort -u))
+      die "Missing host tools: ${missing[*]}. Install with: pacman -S ${pkgs[*]}"
+    fi
   fi
 }
 
