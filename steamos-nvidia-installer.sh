@@ -173,7 +173,6 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-fi  # end config file mode
 
 # ------------------------------------------------------------------ checks
 [[ $EUID -eq 0 ]] || die "Run as root (sudo)."

@@ -80,7 +80,7 @@ while true; do
       # Launch build in background, show progress
       LOGFILE="$WORKDIR/build.log"
       sudo bash "$SCRIPT_DIR/steamos-nvidia-installer.sh" --config "$CONF" \
-        > "$LOGFILE" 2>&1 &
+        2>&1 | tee "$LOGFILE" &
       BUILD_PID=$!
 
       gui_progress_log "Building Image" "$LOGFILE" "$BUILD_PID"
