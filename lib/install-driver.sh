@@ -10,11 +10,57 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+# Verify that built kernel modules (HID, etc.) exist in the overlay before
+# copying them to the image.  Called explicitly before install_payload() to
+# catch build failures early.
+verify_built_modules() {
+  [[ $BUILD_HW_SUPPORT -eq 1 ]] || return 0
+
+  log "Verifying built kernel modules in overlay"
+
+  # Check HID modules exist in overlay upper layer
+  local hid_dj="$UPPER/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko"
+  local hid_hidpp="$UPPER/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko"
+
+  if [[ ! -f "$hid_dj" ]]; then
+    die "hid-logitech-dj.ko not found in overlay at $hid_dj — build_hid() may have failed"
+  fi
+  if [[ ! -f "$hid_hidpp" ]]; then
+    die "hid-logitech-hidpp.ko not found in overlay at $hid_hidpp — build_hid() may have failed"
+  fi
+
+  log "HID modules verified in overlay: hid-logitech-dj.ko, hid-logitech-hidpp.ko"
+
+  # Verify libratbag is installed in overlay
+  if ! in_chroot "pacman -Q libratbag" >/dev/null 2>&1; then
+    die "libratbag not found in overlay chroot — install_hw_libs() may have failed"
+  fi
+
+  log "libratbag verified in overlay"
+}
+
 # rsync the payload into the real image rootfs and register its packages.
 install_payload() {
   log "Copying driver payload into the image rootfs"
   rsync -a --files-from="$FILELIST.rel" "$MERGED/" "$MNT/"
+
+  # Copy kernel modules (including HID) from overlay to image
+  log "Copying kernel modules from overlay to image"
   rsync -a "$UPPER/usr/lib/modules/$KVER/updates" "$MNT/usr/lib/modules/$KVER/"
+
+  # Verify HID modules landed in the image
+  if [[ $BUILD_HW_SUPPORT -eq 1 ]]; then
+    local img_hid_dj="$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko"
+    local img_hid_hidpp="$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko"
+
+    if [[ ! -f "$img_hid_dj" ]]; then
+      die "hid-logitech-dj.ko not copied to image — rsync may have failed"
+    fi
+    if [[ ! -f "$img_hid_hidpp" ]]; then
+      die "hid-logitech-hidpp.ko not copied to image — rsync may have failed"
+    fi
+    log "HID modules verified in image: hid-logitech-dj.ko, hid-logitech-hidpp.ko"
+  fi
 
   log "Registering payload packages in the image's pacman db"
   for pkg in "${NEW_PKGS[@]}"; do

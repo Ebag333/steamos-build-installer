@@ -1,0 +1,21 @@
+﻿# Enforce LF line endings for all text files
+* text=auto eol=lf
+
+# Explicitly mark shell scripts as text with LF
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Patch files
+*.patch text eol=lf
+
+# Mark binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.gz binary
+*.tar binary
+*.zip binary
+*.deb binary
+*.rpm binary

@@ -11,6 +11,34 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+# Set the default boot mode (gaming or desktop) in the image.
+# This configures steamos-manager to boot into the specified mode by default.
+set_boot_mode() {
+  [[ "$BOOT_MODE" == "gaming" ]] && return 0  # gaming is the default, no config needed
+
+  log "Setting default boot mode to: $BOOT_MODE"
+
+  # Create steamos-manager config directory if it doesn't exist
+  local config_dir="$MNT/home/deck/.config/steamos-manager"
+  mkdir -p "$config_dir"
+
+  # Create or update the state.toml config file
+  local config_file="$config_dir/state.toml"
+  cat > "$config_file" <<'EOF'
+version = 1
+
+[services]
+
+[session_manager]
+default_login_mode = "Desktop"
+EOF
+
+  # Set proper ownership (deck user is UID 1000)
+  chown -R 1000:1000 "$config_dir"
+
+  log "Boot mode set to desktop (config: $config_file)"
+}
+
 # rd.driver.blacklist keeps the initramfs from loading its bundled nouveau,
 # so no initramfs regeneration is needed. /etc/default/grub matters too:
 # the installer's update-grub regenerates the target's grub.cfg from it.
