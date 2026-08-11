@@ -81,6 +81,8 @@
 #                      with the standard Arch Linux + SteamOS holo keys.  Use
 #                      when the frozen image keyring is too old to verify
 #                      current packages.
+#   --desktop-mode     Boot to desktop instead of gaming mode (gamescope).
+#   --config FILE      Load options from a config file (overrides defaults).
 #   --workdir DIR      Build dir. Default: auto-detects — uses disk if ≥9 GB
 #                      free, otherwise falls back to /dev/shm (RAM). Kept
 #                      between runs for caching. Use --workdir to override.
@@ -123,6 +125,7 @@ TRIM_CUDA=0
 SKIP_SIG=0
 BUILD_HW_SUPPORT=0
 THUNDERBOLT=0
+DEFAULT_SESSION=""  # "" = stock, "desktop" = boot to desktop
 FIX_KEYRING=0
 DRIVER_SPEC=latest     # latest | <branch or version prefix, e.g. 580>
 ROOTFS_SIZE=""          # MiB; empty = Valve's default 5120
@@ -137,6 +140,17 @@ UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPST
 WORKDIR=""
 IMG=""
 
+# ---- config file mode ----
+# If --config is given, source it first (command-line flags override).
+for arg in "$@"; do
+  [[ "$prev" == "--config" ]] && CONFIG_FILE="$arg"
+  prev="$arg"
+done
+if [[ -n "${CONFIG_FILE:-}" ]]; then
+  [[ -f "$CONFIG_FILE" ]] || die "Config file not found: $CONFIG_FILE"
+  source "$CONFIG_FILE"
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --driver)          DRIVER_SPEC="${2:?--driver needs an argument}"; shift ;;
@@ -149,6 +163,8 @@ while [[ $# -gt 0 ]]; do
     --rootfs-size)     ROOTFS_SIZE="${2:?--rootfs-size needs an argument (MiB)}"; shift ;;
     --skip-sigcheck)   SKIP_SIG=1 ;;
     --fix-keyring)     FIX_KEYRING=1 ;;
+    --desktop-mode)    DEFAULT_SESSION="desktop" ;;
+    --config)          CONFIG_FILE="${2:?--config needs an argument}"; shift ;;
     --workdir)         WORKDIR="${2:?--workdir needs an argument}"; _WORKDIR_EXPLICIT=1; shift ;;
     -h|--help)         sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "Unknown option: $1" ;;
@@ -156,6 +172,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+fi  # end config file mode
 
 # ------------------------------------------------------------------ checks
 [[ $EUID -eq 0 ]] || die "Run as root (sudo)."
