@@ -142,6 +142,7 @@ IMG=""
 
 # ---- config file mode ----
 # If --config is given, source it first (command-line flags override).
+prev=""
 for arg in "$@"; do
   [[ "$prev" == "--config" ]] && CONFIG_FILE="$arg"
   prev="$arg"
