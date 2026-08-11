@@ -73,6 +73,26 @@ declare -A OPTIONAL=(
 # ---- check phase ----
 echo ""
 echo -e "${CYAN}=== steamos-nvidia-installer dependency check ===${NC}"
+
+# ---- WSL detection ----
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  echo -e "${YELLOW}WARNING: WSL detected.${NC}"
+  echo -e "${YELLOW}WSL lacks full kernel support needed for building:${NC}"
+  echo "  - No real loop device support (losetup)"
+  echo "  - No btrfs kernel module"
+  echo "  - Limited systemd/udev support"
+  echo ""
+  echo -e "${YELLOW}The build will fail in WSL. Use one of these instead:${NC}"
+  echo "  - Real Arch Linux (bare metal or VM)"
+  echo "  - SteamOS recovery USB"
+  echo "  - Docker with --privileged (partial support)"
+  echo ""
+  if [[ "$MODE" != "check-only" ]]; then
+    read -rp "Continue anyway? [y/N]: " wsl_continue
+    [[ "$wsl_continue" =~ ^[Yy] ]] || exit 1
+  fi
+fi
+
 echo ""
 echo -e "${CYAN}Required tools:${NC}"
 

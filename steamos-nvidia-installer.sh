@@ -228,11 +228,7 @@ trap cleanup EXIT
 # interactive install prompts when dependencies are missing.
 check_deps() {
   if [[ -f "$SCRIPT_DIR/check-deps.sh" ]]; then
-    bash "$SCRIPT_DIR/check-deps.sh" --check-only || {
-      echo ""
-      echo "Run ./check-deps.sh to install missing dependencies."
-      exit 1
-    }
+    bash "$SCRIPT_DIR/check-deps.sh" || exit 1
   else
     # Fallback: inline check if check-deps.sh is missing
     local missing=()

@@ -80,22 +80,21 @@ setup_clear_stale_state() {
   fi
 
   # Detach any loop device backed by our output image.
+  local _loop_devs
+  _loop_devs="$(losetup -J 2>/dev/null     | python3 -c "import json,sys
+d=json.load(sys.stdin)
+for d in d.get('loopdevices',[]):
+    if d.get('back-file','')=='$OUT':
+        print(d['name'])" 2>/dev/null || true)"
   while read -r dev; do
     [[ -n "$dev" ]] || continue
-    findmnt -rn -o TARGET,SOURCE 2>/dev/null \
-      | awk -v l="$dev" '$2 ~ "^"l {print $1}' \
-      | tac | while read -r m; do
+    findmnt -rn -o TARGET,SOURCE 2>/dev/null       | awk -v l="$dev" '$2 ~ "^"l {print $1}'       | tac | while read -r m; do
           warn "Unmounting stale mount $m (from previous run)"
           umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
         done
     warn "Detaching stale loop device $dev"
     losetup -d "$dev" 2>/dev/null
-  done < <(losetup -J 2>/dev/null \
-    | python3 -c "import json,sys
-d=json.load(sys.stdin)
-for d in d.get('loopdevices',[]):
-    if d.get('back-file','')=='$OUT':
-        print(d['name'])" 2>/dev/null || true)
+  done <<< "$_loop_devs"
 
   # Unmount stale overlay workspace (from a crashed build).
   if [[ -d "$WORKDIR/overlay-mnt" ]] && mountpoint -q "$WORKDIR/overlay-mnt" 2>/dev/null; then
