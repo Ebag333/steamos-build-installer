@@ -1,12 +1,19 @@
 ﻿# Enforce LF line endings for all text files
 * text=auto eol=lf
 
-# Explicitly mark shell scripts as text with LF
+# Shell scripts
 *.sh text eol=lf
 *.bash text eol=lf
 
+# Config files
+*.conf text eol=lf
+*.cfg text eol=lf
+
 # Patch files
 *.patch text eol=lf
+
+# Python
+*.py text eol=lf
 
 # Mark binary files
 *.png binary
@@ -19,3 +26,6 @@
 *.zip binary
 *.deb binary
 *.rpm binary
+*.img binary
+*.bz2 binary
+*.zst binary

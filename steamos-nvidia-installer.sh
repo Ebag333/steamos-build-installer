@@ -62,6 +62,8 @@
 #                      unpatched system (A/B fallback saves you, driver lost).
 #   --no-installer     Skip step 4 (produce a plain bootable patched OS).
 #   --trim-cuda        Drop CUDA/OpenCL/NVVM/OptiX libs (~350 MB smaller).
+#   --thunderbolt      Install Thunderbolt dock support (auto-authorize,
+#                      PCI rescan, bolt daemon).
 #   --hw-support       Build and install extra hardware support:
 #                      - libratbag (from source) for modern Logitech mice
 #                      - Logitech HID kernel modules (hid-logitech-dj,
