@@ -203,17 +203,7 @@ if [[ -z "$IMG" ]]; then
 fi
 [[ -f "$IMG" ]] || die "Image not found: $IMG"
 
-# Check for the decompression tool if the input is compressed.
-case "$IMG" in
-  *.bz2) command -v bzip2 >/dev/null || die "Missing host tool: bzip2 (needed for .bz2 input)" ;;
-  *.gz)  command -v gzip  >/dev/null || die "Missing host tool: gzip  (needed for .gz  input)" ;;
-  *.xz)  command -v xz    >/dev/null || die "Missing host tool: xz    (needed for .xz  input)" ;;
-  *.zst) command -v zstd   >/dev/null || die "Missing host tool: zstd  (needed for .zst input)" ;;
-esac
 
-for tool in losetup blkid btrfs rsync curl depmod sed awk tar zstd pacman python3 readelf; do
-  command -v "$tool" >/dev/null || die "Missing host tool: $tool"
-done
 
 IMG="$(realpath "$IMG")"
 # Strip any compression extension first, then replace .img with the output name.
@@ -225,6 +215,8 @@ OUT="${IMG_BASE%.img}-nvidia-usbinstall.img"
 [[ -e "$OUT" ]] && { warn "Removing previous output $OUT"; rm -f "$OUT" "${OUT}.src-fingerprint"; }
 
 [[ -n "$WORKDIR" ]] || WORKDIR="$(dirname "$OUT")/.nvidia-usb-work"
+
+# Initialized here (before sourcing libs) — used by common.sh cleanup trap and setup.sh.
 LOOPDEV=""
 UDEV_RULE=/run/udev/rules.d/90-steamos-nvidia-installer.rules
 
