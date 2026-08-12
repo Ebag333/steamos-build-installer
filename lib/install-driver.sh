@@ -85,7 +85,7 @@ options nvidia-drm modeset=1 fbdev=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
 EOF
 
-  log "Restoring module autoloading in mkinitcpio.conf"
+  log "Restoring module autoloading in initramfs"
   # modprobe -R needs /proc to resolve aliases — mount it now, unmount after.
   log "  Mounting proc/sys/dev in $MNT"
   mkdir -p "$MNT/proc" "$MNT/sys" "$MNT/dev"
@@ -104,18 +104,34 @@ EOF
     chroot "$MNT" modprobe -R "$(cat "$dev")" 2>/dev/null || true
   done | sort -u | { grep -Ev '^nouveau$' || true; } | tr '\n' ' ')
   log "  Discovered: ${auto_modules:-<none>}"
-  if [[ -n "$auto_modules" ]]; then
-    # Read any existing modules Valve already put in the image, merge, deduplicate.
-    local existing_modules merged_modules
-    existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$MNT/etc/mkinitcpio.conf")
-    log "  Existing modules: ${existing_modules:-<none>}"
-    merged_modules=$(echo "$existing_modules $auto_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
-    sed -i "s|^MODULES=(.*)|MODULES=($merged_modules)|" "$MNT/etc/mkinitcpio.conf"
-    log "MODULES=($merged_modules)"
+
+  # Detect initramfs system: dracut (SteamOS) or mkinitcpio (Arch).
+  if chroot "$MNT" command -v dracut >/dev/null 2>&1; then
+    log "  Using dracut for initramfs"
+    # Add discovered modules + nvidia stack to dracut config.
+    local dracut_modules="nvidia nvidia_modeset nvidia_drm nvidia_uvm $auto_modules"
+    dracut_modules=$(echo "$dracut_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
+    cat > "$MNT/etc/dracut.conf.d/99-steamos-nvidia.conf" <<EOF
+# Added by steamos-nvidia-installer
+add_drivers+=" $dracut_modules "
+EOF
+    log "  dracut modules: $dracut_modules"
+    chroot "$MNT" dracut -f || warn "dracut failed (non-fatal — will regenerate on first boot)"
+  elif chroot "$MNT" command -v mkinitcpio >/dev/null 2>&1; then
+    log "  Using mkinitcpio for initramfs"
+    if [[ -n "$auto_modules" ]]; then
+      local existing_modules merged_modules
+      existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$MNT/etc/mkinitcpio.conf")
+      log "  Existing modules: ${existing_modules:-<none>}"
+      merged_modules=$(echo "$existing_modules $auto_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
+      sed -i "s|^MODULES=(.*)|MODULES=($merged_modules)|" "$MNT/etc/mkinitcpio.conf"
+      log "MODULES=($merged_modules)"
+    fi
+    chroot "$MNT" mkinitcpio -P || warn "mkinitcpio failed (non-fatal — will regenerate on first boot)"
+  else
+    warn "No initramfs tool found (neither dracut nor mkinitcpio)"
   fi
 
-  log "Regenerating initramfs"
-  chroot "$MNT" mkinitcpio -P || warn "mkinitcpio failed (non-fatal — will regenerate on first boot)"
   log "  Unmounting proc/sys/dev"
   umount -R "$MNT/proc" "$MNT/sys" "$MNT/dev" 2>/dev/null || true
 
@@ -123,22 +139,29 @@ EOF
   chroot "$MNT" systemctl enable nvidia-suspend nvidia-resume nvidia-hibernate 2>/dev/null \
     || warn "Could not enable nvidia power services (non-fatal)"
 
-  # Bundle scan-hardware.sh for first-run on target machine.
-  log "Installing hardware scan for first-run"
+  # Bundle scan-hardware.sh for manual use.
+  log "Installing hardware scan tool"
   cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MNT/usr/local/bin/scan-hardware"
   chmod +x "$MNT/usr/local/bin/scan-hardware"
 
-  # Desktop notification on first login — runs scan, shows results.
-  mkdir -p "$MNT/home/deck/.config/autostart"
-  cat > "$MNT/home/deck/.config/autostart/scan-hardware.desktop" <<'EOF'
+  # Bundle post-install.sh for manual configuration.
+  log "Installing post-install configuration script"
+  cp "$SCRIPT_DIR/lib/post-install.sh" "$MNT/usr/local/bin/steamos-nvidia-post-install"
+  chmod +x "$MNT/usr/local/bin/steamos-nvidia-post-install"
+
+  # Desktop shortcut — user can re-run anytime to reconfigure.
+  mkdir -p "$MNT/home/deck/Desktop"
+  cat > "$MNT/home/deck/Desktop/NVIDIA Setup.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=Hardware Scan
-Comment=Scan for unclaimed hardware and missing drivers
-Exec=/usr/local/bin/scan-hardware
+Name=NVIDIA Setup
+Comment=Configure NVIDIA driver, thunderbolt, hardware scan, desktop mode
+Exec=/usr/local/bin/steamos-nvidia-post-install
+Icon=preferences-system
 Terminal=true
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=10
+Type=Application
+StartupNotify=true
 EOF
-  chown -R 1000:1000 "$MNT/home/deck/.config/autostart"
+  chmod +x "$MNT/home/deck/Desktop/NVIDIA Setup.desktop"
+  chown -R 1000:1000 "$MNT/home/deck/Desktop"
 }

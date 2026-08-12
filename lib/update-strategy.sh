@@ -284,7 +284,7 @@ options nvidia-drm modeset=1 fbdev=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
 EOF
 
-log "Restoring module autoloading in mkinitcpio.conf"
+log "Restoring module autoloading in initramfs"
 # Discover which modules the new slot's kernel would load for this machine's
 # hardware — depmod already ran above so the slot's alias db is current.
 auto_modules=""
@@ -292,19 +292,36 @@ for dev in /sys/bus/pci/devices/*/modalias; do
   auto_modules+="$(chroot "$NEWROOT" modprobe -R "$(cat "$dev")" 2>/dev/null)"$'\n'
 done
 auto_modules=$(echo "$auto_modules" | sort -u | grep -Ev '^nouveau$' | tr '\n' ' ')
-if [[ -n "$auto_modules" ]]; then
-  # Read any existing modules Valve already put in the image, merge, deduplicate.
-  existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$NEWROOT/etc/mkinitcpio.conf")
-  merged_modules=$(echo "$existing_modules $auto_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
-  sed -i "s|^MODULES=(.*)|MODULES=($merged_modules)|" "$NEWROOT/etc/mkinitcpio.conf"
-  log "MODULES=($merged_modules)"
-fi
 
-log "Regenerating initramfs"
+# Mount proc/sys/dev for initramfs regeneration
 mount -t proc proc "$NEWROOT/proc"
 mount --rbind /sys "$NEWROOT/sys"; mount --make-rslave "$NEWROOT/sys"
 mount --rbind /dev "$NEWROOT/dev"; mount --make-rslave "$NEWROOT/dev"
-chroot "$NEWROOT" mkinitcpio -P || log "WARNING: mkinitcpio failed (non-fatal — will regenerate on first boot)"
+
+# Detect initramfs system: dracut (SteamOS) or mkinitcpio (Arch).
+if chroot "$NEWROOT" command -v dracut >/dev/null 2>&1; then
+  log "  Using dracut for initramfs"
+  dracut_modules="nvidia nvidia_modeset nvidia_drm nvidia_uvm $auto_modules"
+  dracut_modules=$(echo "$dracut_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
+  cat > "$NEWROOT/etc/dracut.conf.d/99-steamos-nvidia.conf" <<EOF
+# Added by steamos-nvidia repatch
+add_drivers+=" $dracut_modules "
+EOF
+  log "  dracut modules: $dracut_modules"
+  chroot "$NEWROOT" dracut -f || log "WARNING: dracut failed (non-fatal — will regenerate on first boot)"
+elif chroot "$NEWROOT" command -v mkinitcpio >/dev/null 2>&1; then
+  log "  Using mkinitcpio for initramfs"
+  if [[ -n "$auto_modules" ]]; then
+    existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$NEWROOT/etc/mkinitcpio.conf")
+    merged_modules=$(echo "$existing_modules $auto_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
+    sed -i "s|^MODULES=(.*)|MODULES=($merged_modules)|" "$NEWROOT/etc/mkinitcpio.conf"
+    log "MODULES=($merged_modules)"
+  fi
+  chroot "$NEWROOT" mkinitcpio -P || log "WARNING: mkinitcpio failed (non-fatal — will regenerate on first boot)"
+else
+  log "WARNING: No initramfs tool found (neither dracut nor mkinitcpio)"
+fi
+
 umount -R "$NEWROOT/proc" "$NEWROOT/sys" "$NEWROOT/dev" 2>/dev/null || true
 
 chroot "$NEWROOT" systemctl enable nvidia-suspend nvidia-resume nvidia-hibernate 2>/dev/null || true
