@@ -31,16 +31,16 @@ for dev in d.get('blockdevices', []):
     if m:
         val = float(m.group(1))
         unit = m.group(2)
-        mult = {'': 1, 'K': 1024, 'M': 1048576, 'G': 1073741824, 'T': 1099511627776}
+        mult = {'': 1, 'K': 1000, 'M': 1000000, 'G': 1000000000, 'T': 1000000000000}
         size_bytes = int(val * mult.get(unit, 1))
     else:
         size_bytes = 0
     if size_bytes == 0:
         continue
-    if size_bytes >= 1073741824:
-        s = '%.1f GB' % (size_bytes / 1073741824)
-    elif size_bytes >= 1048576:
-        s = '%.0f MB' % (size_bytes / 1048576)
+    if size_bytes >= 1000000000:
+        s = '%.1f GB' % (size_bytes / 1000000000)
+    elif size_bytes >= 1000000:
+        s = '%.0f MB' % (size_bytes / 1000000)
     else:
         s = '%d bytes' % size_bytes
     tag = '[removable]' if rm else ''
@@ -49,11 +49,30 @@ for dev in d.get('blockdevices', []):
 }
 
 # Check if a target device is the system disk.  Returns 0 if it is (danger).
+# Conservative: walks block-device ancestry to handle btrfs subvolumes,
+# LUKS, LVM, and device-mapper.
 flash_is_system_disk() {
   local target_dev="$1"
-  local src_part src_disk
+  local src_part src_disk dev
+
   src_part="$(findmnt -no SOURCE / 2>/dev/null || true)"
-  [[ -n "$src_part" ]] && src_disk="$(lsblk -no PKNAME "$src_part" 2>/dev/null | head -1 || true)"
+  [[ -n "$src_part" ]] || return 1
+
+  # Strip btrfs subvolume suffix: /dev/nvme0n1p3[/@] → /dev/nvme0n1p3
+  src_part="${src_part%%\[*}"
+
+  # Walk up the PKNAME ancestry until we reach a whole disk.
+  dev="$src_part"
+  while [[ -n "$dev" ]]; do
+    src_disk="$(lsblk -no PKNAME "$dev" 2>/dev/null | head -1 || true)"
+    if [[ -z "$src_disk" ]]; then
+      # dev is itself a whole disk (no parent)
+      src_disk="$(basename "$dev")"
+      break
+    fi
+    dev="/dev/$src_disk"
+  done
+
   [[ -n "$src_disk" && "$target_dev" == "/dev/$src_disk" ]]
 }
 
@@ -79,11 +98,48 @@ flash_write() {
   [[ -b "$target" ]] || { echo "Not a block device: $target" >&2; return 1; }
   [[ $EUID -eq 0 ]] || { echo "Flash requires root (sudo)." >&2; return 1; }
 
-  if command -v pv >/dev/null 2>&1; then
-    sudo bash -c "pv \"$img\" | dd of=\"$target\" bs=$bs conv=fsync oflag=sync 2>&1"
-  else
-    sudo dd if="$img" of="$target" bs=$bs status=progress conv=fsync oflag=sync 2>&1
+  # Size check: refuse if image is larger than target device.
+  local img_bytes target_bytes
+  img_bytes="$(stat -c '%s' "$img")"
+  target_bytes="$(blockdev --getsize64 "$target")"
+  if (( img_bytes > target_bytes )); then
+    echo "Image ($(( img_bytes / 1000000000 )) GB) is larger than target device ($(( target_bytes / 1000000000 )) GB)." >&2
+    return 1
   fi
 
+  # Unmount everything on the target device before writing.
+  echo "Checking for mounts on $target..."
+  local mounts
+  mounts="$(lsblk -lnpo MOUNTPOINT "$target" 2>/dev/null | awk 'NF' | tac)"
+  if [[ -n "$mounts" ]]; then
+    echo "Found mounts:"
+    echo "$mounts"
+    while IFS= read -r mp; do
+      [[ -n "$mp" ]] || continue
+      echo "Unmounting $mp..."
+      if ! umount "$mp" 2>/dev/null; then
+        echo "  Regular unmount failed, trying lazy unmount..."
+        umount -l "$mp" || { echo "  Failed to unmount $mp" >&2; return 1; }
+      fi
+      echo "  Unmounted $mp"
+    done <<< "$mounts"
+  else
+    echo "No mounts found on $target"
+  fi
+
+  # Write the image.
+  echo "Writing image to $target (bs=$bs)..."
+  if command -v pv >/dev/null 2>&1; then
+    (
+      set -o pipefail
+      pv "$img" | dd of="$target" bs="$bs" conv=fsync oflag=sync
+    ) 2>&1
+  else
+    echo "  (pv not available, using dd with progress)"
+    dd if="$img" of="$target" bs="$bs" status=progress conv=fsync oflag=sync 2>&1
+  fi
+
+  echo "Syncing..."
   sync 2>/dev/null || true
+  echo "Flash complete!"
 }

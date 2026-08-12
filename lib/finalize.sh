@@ -14,7 +14,23 @@ finalize() {
   log "Sanity checks"
   compgen -G "$MNT/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/null || die "nvidia.ko missing from image"
 
-  # HID module checks (only if --hid was used).
+  # Verify modprobe will actually select our installed modules.
+  for mod in nvidia; do
+    local path
+    path="$(chroot "$MNT" modinfo -k "$KVER" -n "$mod" 2>/dev/null)" \
+      || die "modinfo cannot resolve $mod for $KVER"
+    case "$path" in
+      /usr/lib/modules/"$KVER"/updates/*|/lib/modules/"$KVER"/updates/*) ;;
+      *) die "$mod resolves to unexpected module: $path" ;;
+    esac
+    local vermagic
+    vermagic="$(chroot "$MNT" modinfo -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
+      || die "modinfo cannot read vermagic for $mod"
+    [[ "$vermagic" == "$KVER "* ]] \
+      || die "$mod vermagic '$vermagic' does not match $KVER"
+  done
+
+  # HID module checks (only if --hw-support was used).
   if [[ $BUILD_HW_SUPPORT -eq 1 ]]; then
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
       || die "hid-logitech-dj.ko missing from image"
@@ -25,6 +41,22 @@ finalize() {
       || die "image hid-logitech-dj module lacks the 046d:c547 alias"
     compgen -G "$PACDB/libratbag-[0-9]*" >/dev/null \
       || die "libratbag missing from image package database"
+
+    # Verify HID modules resolve to our /updates replacement, not stock.
+    for mod in hid-logitech-dj hid-logitech-hidpp; do
+      local path
+      path="$(chroot "$MNT" modinfo -k "$KVER" -n "$mod" 2>/dev/null)" \
+        || die "modinfo cannot resolve $mod for $KVER"
+      case "$path" in
+        /usr/lib/modules/"$KVER"/updates/logitech/*|/lib/modules/"$KVER"/updates/logitech/*) ;;
+        *) die "$mod resolves to $path — stock driver winning over our replacement" ;;
+      esac
+      local vermagic
+      vermagic="$(chroot "$MNT" modinfo -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
+        || die "modinfo cannot read vermagic for $mod"
+      [[ "$vermagic" == "$KVER "* ]] \
+        || die "$mod vermagic '$vermagic' does not match $KVER"
+    done
   fi
 
   grep -q 'blacklist nouveau' "$MNT/etc/modprobe.d/99-nvidia-patch.conf" || die "modprobe conf is empty/missing"
@@ -40,12 +72,25 @@ finalize() {
           || die "self-heal HID source missing: $f"
       done
     fi
-    [[ -L "$MNT/etc/systemd/system/atomupd.service" ]] && die "atomupd must NOT be masked in selfheal mode"
+    # Check that atomupd isn't masked — a symlink to /dev/null specifically
+    # means masked; a plain symlink doesn't.
+    local atomupd="$MNT/etc/systemd/system/atomupd.service"
+    if [[ -L "$atomupd" ]] && [[ "$(readlink "$atomupd")" == "/dev/null" ]]; then
+      die "atomupd must NOT be masked in selfheal mode"
+    fi
   fi
-  compgen -G "$MNT/usr/lib/firmware/nvidia/*/gsp_*.bin" >/dev/null || warn "GSP firmware not found — nvidia-open needs it"
-  [[ -f "$MNT/usr/share/vulkan/icd.d/nvidia_icd.json" ]] || warn "Vulkan ICD json missing"
+  compgen -G "$MNT/usr/lib/firmware/nvidia/*/gsp_*.bin" >/dev/null \
+    || die "GSP firmware not found — nvidia-open requires it"
+  [[ -f "$MNT/usr/share/vulkan/icd.d/nvidia_icd.json" ]] \
+    || die "Vulkan ICD json missing — Steam games will not find the GPU"
   AVAIL_AFTER="$(df -m --output=avail "$MNT" | tail -1 | tr -d ' ')"
   log "Rootfs free space after install: ${AVAIL_AFTER} MB"
+
+  # Final writability check — confirms the rootfs is still usable after all
+  # modifications.  The RDONLY rebuild in prepare_writable_rootfs() made it
+  # writable, but verify nothing broke that.
+  touch "$MNT/.final-rw-test" || die "Rootfs became read-only during build"
+  rm -f "$MNT/.final-rw-test"
 
   # Flush all pending writes BEFORE flipping the subvolume read-only —
   # flipping with delalloc data still queued can silently produce 0-byte files.
@@ -53,8 +98,18 @@ finalize() {
   btrfs filesystem sync "$MNT"
   sync -f "$MNT"; sync -f "$HOMEMNT"; sync -f "$EFIMNT"
 
-  log "Restoring btrfs read-only property"
-  btrfs property set "$MNT" ro true
+  # Mark the build as complete — setup_copy_image checks this before
+  # reusing a cached decompressed image.
+  touch "${OUT}.build-complete"
+
+  # Rename .building to final output — the wrapper uses a temp name so a
+  # failed build doesn't destroy a previous successful image.
+  if [[ -n "${OUT_FINAL:-}" && "$OUT" != "$OUT_FINAL" ]]; then
+    mv "$OUT" "$OUT_FINAL"
+    mv "${OUT}.src-fingerprint" "${OUT_FINAL}.src-fingerprint" 2>/dev/null || true
+    mv "${OUT}.build-complete" "${OUT_FINAL}.build-complete" 2>/dev/null || true
+    OUT="$OUT_FINAL"
+  fi
 
   log "Unmounting"
   cleanup

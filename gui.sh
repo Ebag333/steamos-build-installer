@@ -15,6 +15,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# gui.sh needs display access for zenity — don't run as root.
+if [[ $EUID -eq 0 ]]; then
+  echo "gui.sh must run as your normal user, not root." >&2
+  echo "It will ask for sudo password when needed for flashing." >&2
+  exit 1
+fi
+
 # Source libraries
 source "$SCRIPT_DIR/lib/gui-helpers.sh"
 source "$SCRIPT_DIR/lib/flash.sh"
@@ -85,8 +92,12 @@ while true; do
 
       gui_progress_log "Building Image" "$LOGFILE" "$BUILD_PID"
 
-      wait "$BUILD_PID" 2>/dev/null
-      RC=$?
+      # set -e would exit here if wait returns nonzero — handle explicitly.
+      if wait "$BUILD_PID" 2>/dev/null; then
+        RC=0
+      else
+        RC=$?
+      fi
       if [[ $RC -eq 0 ]]; then
         OUT_IMG="$(grep -oP '(?<=DONE — ).*' "$LOGFILE" | tail -1)"
         gui_done "Build Complete" \
@@ -105,20 +116,15 @@ while true; do
       gui_flash_select_device || continue
       gui_flash_confirm || continue
 
-      # Flash with progress
-      LOGFILE="/tmp/steamos-flash.log"
-      flash_write "$FLASH_IMG" "$FLASH_DEV" > "$LOGFILE" 2>&1 &
-      FLASH_PID=$!
-
-      gui_progress_log "Flashing Image" "$LOGFILE" "$FLASH_PID"
-
-      wait "$FLASH_PID" 2>/dev/null
+      # Delegate to flash-image.sh which handles elevation, progress, and UX.
+      bash "$SCRIPT_DIR/flash-image.sh" "$FLASH_IMG" "$FLASH_DEV"
       RC=$?
+
       if [[ $RC -eq 0 ]]; then
         gui_done "Flash Complete" \
           "<b>Flashing complete!</b>\n\n$FLASH_IMG -> $FLASH_DEV\n\n<b>Next steps:</b>\n1. Remove the USB stick\n2. Insert into target machine\n3. Boot from USB (UEFI, Secure Boot off)\n4. Double-click 'Install SteamOS (NVIDIA) to Hard Drive'\n5. Pick your disk and install"
       else
-        gui_error "Flash failed with exit code $RC.\n\nCheck the log: $LOGFILE"
+        gui_error "Flash failed with exit code $RC."
       fi
       ;;
 

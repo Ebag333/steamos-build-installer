@@ -60,13 +60,32 @@ setup_overlay_chroot() {
   mount --rbind /dev "$MERGED/dev";  mount --make-rslave "$MERGED/dev"
   rm -f "$MERGED/etc/resolv.conf"          # whiteout in upper only
   cp -L /etc/resolv.conf "$MERGED/etc/resolv.conf"
+  ln -sf /proc/self/mounts "$MERGED/etc/mtab"
 
   PACOPTS="--noconfirm --needed"
-  PACCONF="/etc/pacman.conf"
-  if [[ $SKIP_SIG -eq 1 ]]; then
-    sed 's/^SigLevel.*/SigLevel = Never/' "$MERGED/etc/pacman.conf" \
-      > "$MERGED/tmp/pacman-nosig.conf"
-    PACCONF="/tmp/pacman-nosig.conf"
+  # Bind-mount host /tmp into the chroot — the overlay mount path doesn't match
+  # inside the chroot (host sees /path/to/merged, chroot sees /), so pacman
+  # can't resolve mount points for its cachedir space check.  Using host /tmp
+  # (tmpfs) gives pacman a real, detectable mount point.
+  mount --bind /tmp "$MERGED/tmp"
+  mkdir -p "$MERGED/tmp/pkgcache"
+  PACCONF="/tmp/pacman-nosig.conf"
+  sed 's/^SigLevel.*/SigLevel = Never/' "$MERGED/etc/pacman.conf" \
+    > "$MERGED/tmp/pacman-bld.conf"
+  printf '\n[options]\nCacheDir = /tmp/pkgcache\n' >> "$MERGED/tmp/pacman-bld.conf"
+  # pacman 7+ has download sandboxing that creates temp dirs pacman can't
+  # resolve mount points for; disable it on 7+, skip on older.
+  PACMAN_MAJOR="$(
+    chroot "$MERGED" pacman --version 2>/dev/null |
+      sed -n 's/.*Pacman v\([0-9][0-9]*\).*/\1/p' | head -1
+  )"
+  if [[ "$PACMAN_MAJOR" =~ ^[0-9]+$ ]] && (( PACMAN_MAJOR >= 7 )); then
+    printf 'DisableSandbox\n' >> "$MERGED/tmp/pacman-bld.conf"
+  fi
+  PACCONF="/tmp/pacman-bld.conf"
+  if [[ $SKIP_SIG -eq 0 ]]; then
+    sed -i 's/^SigLevel.*/SigLevel = Required DatabaseOptional/' "$MERGED/tmp/pacman-bld.conf"
+  else
     warn "pacman signature verification DISABLED for the build"
   fi
 
@@ -80,8 +99,9 @@ setup_overlay_chroot() {
       || die "pacman-key --populate failed"
   fi
 
-  if [[ $SKIP_SIG -eq 0 && ! -d "$MERGED/etc/pacman.d/gnupg/private-keys-v1.d" ]]; then
+  if [[ $SKIP_SIG -eq 0 ]]; then
     log "Initialising pacman keyring in chroot"
+    rm -rf "$MERGED/etc/pacman.d/gnupg"
     in_chroot "pacman-key --init && pacman-key --populate" \
       || die "Keyring init failed — rerun with --skip-sigcheck if you accept unsigned installs"
   fi
@@ -133,17 +153,25 @@ compute_payload() {
   # "Before" = the pristine image's own pacman db (read directly, host-side) —
   # NOT the chroot's, whose db carries installs cached in the overlay upper
   # layer from previous runs and would make the diff come out empty.
-  pacman -Qq --dbpath "$MNT/usr/lib/holo/pacmandb" | LC_ALL=C sort > "$WORKDIR/pkgs-before.txt"
-  in_chroot "pacman -Qq" | LC_ALL=C sort > "$WORKDIR/pkgs-after.txt"
+  #
+  # Use pacman -Q (name + version) instead of -Qq (name only) so that
+  # version upgrades are detected — e.g. nvidia-utils 580→590 would otherwise
+  # be invisible to comm since both lines contain the same package name.
+  pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" | LC_ALL=C sort > "$WORKDIR/pkgs-before.txt"
+  in_chroot "pacman -Q" | LC_ALL=C sort > "$WORKDIR/pkgs-after.txt"
 
-  # New packages minus build-only toolchain = what ships in the image.
+  # New or upgraded packages minus build-only toolchain = what ships in the image.
   # nvidia-open-dkms is build-only too: it's the module SOURCE (~70 MB); the
   # compiled module is copied from /usr/lib/modules separately.
+  # awk '{print $1}' strips the version so the grep matches package names.
   BUILD_ONLY_RE='^(dkms|nvidia-open-dkms|patch|gcc|gcc-libs|make|binutils|libisl|libmpc|mpfr|pahole|python-setuptools|linux-neptune.*-headers|.*-headers)$'
   mapfile -t NEW_PKGS < <(LC_ALL=C comm -13 "$WORKDIR/pkgs-before.txt" "$WORKDIR/pkgs-after.txt" \
-                          | grep -Ev "$BUILD_ONLY_RE")
-  [[ ${#NEW_PKGS[@]} -gt 0 ]] || die "Payload package list came out empty — check $WORKDIR/pkgs-*.txt"
-  log "Payload packages: ${NEW_PKGS[*]}"
+                          | awk '{print $1}' | grep -Ev "$BUILD_ONLY_RE")
+  if [[ ${#NEW_PKGS[@]} -eq 0 ]]; then
+    log "No runtime package changes — module-only payload"
+  else
+    log "Payload packages: ${NEW_PKGS[*]}"
+  fi
 
   FILELIST="$WORKDIR/payload-files.txt"
   : > "$FILELIST"
@@ -159,10 +187,15 @@ compute_payload() {
   sed 's|^/||' "$FILELIST" > "$FILELIST.rel"
 
   # Space check: pacman -Qlq lists directories too — size only files/symlinks.
-  PAYLOAD_MB="$(set +o pipefail; cd "$MERGED" && while IFS= read -r p; do
-      if [[ -f "$p" || -L "$p" ]]; then printf '%s\0' "$p"; fi
-    done < "$FILELIST.rel" | { du -scm --no-dereference --files0-from=- 2>/dev/null || true; } | tail -1 | cut -f1)"
-  [[ "$PAYLOAD_MB" =~ ^[0-9]+$ ]] || die "Could not size the payload"
+  # If no runtime packages changed, PAYLOAD_MB is 0 (module-only update).
+  if [[ -s "$FILELIST" ]]; then
+    PAYLOAD_MB="$(set +o pipefail; cd "$MERGED" && while IFS= read -r p; do
+        if [[ -f "$p" || -L "$p" ]]; then printf '%s\0' "$p"; fi
+      done < "$FILELIST.rel" | { du -scm --no-dereference --files0-from=- 2>/dev/null || true; } | tail -1 | cut -f1)"
+    [[ "$PAYLOAD_MB" =~ ^[0-9]+$ ]] || die "Could not size the payload"
+  else
+    PAYLOAD_MB=0
+  fi
   MODULES_MB="$(du -sm "$UPPER/usr/lib/modules/$KVER/updates" | cut -f1)"
   AVAIL_MB="$(df -m --output=avail "$MNT" | tail -1 | tr -d ' ')"
   log "Payload ≈ ${PAYLOAD_MB} MB files + ${MODULES_MB} MB modules (before btrfs zstd); rootfs has ${AVAIL_MB} MB free"

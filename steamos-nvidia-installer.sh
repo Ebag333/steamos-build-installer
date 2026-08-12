@@ -135,7 +135,8 @@ ROOTFS_SIZE=""          # MiB; empty = Valve's default 5120
 # automatically patched for compatibility with the image's kernel headers.
 # Override with UPSTREAM_DRIVER_REF=ref to pin to a specific tag.
 UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
-UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPSTREAM_DRIVER_REF/drivers/hid"
+# UPSTREAM_DRIVER_SRC_BASE is derived after config/arg processing so that
+# a config-specified UPSTREAM_DRIVER_REF is respected.
 
 WORKDIR=""
 IMG=""
@@ -180,6 +181,10 @@ done
   || die "--driver takes 'latest' or a version prefix like 580 / 580.105.08 / 580.105.08-4"
 [[ -z "$ROOTFS_SIZE" || "$ROOTFS_SIZE" =~ ^[0-9]+[KMGkmg]?$ ]] \
   || die "--rootfs-size takes a size like 10G, 10240M, or 10240 (plain = MiB)"
+case "${DEFAULT_SESSION:-}" in
+  ""|desktop|game) ;;
+  *) die "--session must be desktop or game" ;;
+esac
 if [[ -n "$ROOTFS_SIZE" ]]; then
   case "${ROOTFS_SIZE: -1}" in
     G|g) ROOTFS_SIZE=$(( ${ROOTFS_SIZE%[Gg]} * 1024 )) ;;
@@ -196,7 +201,13 @@ if [[ -z "$IMG" ]]; then
     \( -name '*.img' -o -name '*.img.bz2' -o -name '*.img.gz' -o -name '*.img.xz' -o -name '*.img.zst' \) \
     ! -name '*-nvidia*' | sort)
   case ${#candidates[@]} in
-    0) die "No image given and no *.img[.bz2|.gz|.xz|.zst] found in $script_dir. Usage: $0 [options] <clean-oobe-repair.img[.bz2|.gz|.xz|.zst]>" ;;
+    0)
+      # No image found — launch GUI if available, otherwise show usage
+      if command -v yad >/dev/null 2>&1; then
+        exec bash "$script_dir/gui.sh"
+      fi
+      die "No image given and no *.img[.bz2|.gz|.xz|.zst] found in $script_dir. Usage: $0 [options] <clean-oobe-repair.img[.bz2|.gz|.xz|.zst]>"
+      ;;
     1) IMG="${candidates[0]}"; log "Auto-detected image: $IMG" ;;
     *) die "Multiple images in $script_dir — pass one explicitly:$(printf '\n  %s' "${candidates[@]}")" ;;
   esac
@@ -212,7 +223,11 @@ OUT="${IMG_BASE%.img}-nvidia-usbinstall.img"
 # match the FILENAME only — the containing dir may itself be called
 # "steamos-nvidia-installer" (the repo clone), which must not trip this guard
 [[ "$(basename "$IMG")" == *-nvidia* ]] && die "Input looks like an already-patched image — start from the clean repair image."
-[[ -e "$OUT" ]] && { warn "Removing previous output $OUT"; rm -f "$OUT" "${OUT}.src-fingerprint"; }
+# Use a .building temp file so a failed build doesn't destroy a previous
+# successful output.  finalize() renames it to $OUT on success.
+OUT_FINAL="${IMG_BASE%.img}-nvidia-usbinstall.img"
+OUT="${OUT_FINAL}.building"
+rm -f "$OUT" "${OUT}.src-fingerprint"  # clean stale .building from prior failed run
 
 [[ -n "$WORKDIR" ]] || WORKDIR="$(dirname "$OUT")/.nvidia-usb-work"
 
@@ -227,8 +242,8 @@ trap cleanup EXIT
 # Verify all required host tools are available.  Uses check-deps.sh for
 # interactive install prompts when dependencies are missing.
 check_deps() {
-  if [[ -f "$SCRIPT_DIR/check-deps.sh" ]]; then
-    bash "$SCRIPT_DIR/check-deps.sh" || exit 1
+  if [[ -f "$SCRIPT_DIR/lib/check-deps.sh" ]]; then
+    bash "$SCRIPT_DIR/lib/check-deps.sh" --check-only || exit 1
   else
     # Fallback: inline check if check-deps.sh is missing
     local missing=()
@@ -245,13 +260,17 @@ check_deps() {
           *)        pkgs+=("$cmd") ;;
         esac
       done
-      pkgs=($(printf "%s\n" "${pkgs[@]}" | sort -u))
+      mapfile -t pkgs < <(printf "%s\n" "${pkgs[@]}" | sort -u)
       die "Missing host tools: ${missing[*]}. Install with: pacman -S ${pkgs[*]}"
     fi
   fi
 }
 
 check_deps
+
+# Derive UPSTREAM_DRIVER_SRC_BASE now that config/arg processing is complete.
+: "${UPSTREAM_DRIVER_REF:=master}"
+UPSTREAM_DRIVER_SRC_BASE="https://raw.githubusercontent.com/torvalds/linux/$UPSTREAM_DRIVER_REF/drivers/hid"
 
 # ------------------------------------------------------------- orchestrate
 log "Starting steamos-nvidia-installer (driver=$DRIVER_SPEC hw=$BUILD_HW_SUPPORT rootfs=${ROOTFS_SIZE:-5120}M)"
@@ -271,6 +290,7 @@ setup_udev_guard
 
 setup_copy_image
 setup_loop_mount
+prepare_writable_rootfs
 setup_mount_partitions
 setup_discover
 
@@ -292,10 +312,13 @@ apply_update_strategy
 patch_kernel_cmdline
 install_one_click_installer
 
-  # Set default session if requested
+  # Set default session if requested — target the real image ($MNT), not the
+  # overlay ($MERGED), because install_payload already copied files from the
+  # overlay and won't copy arbitrary /etc mutations again.
   if [[ -n "$DEFAULT_SESSION" ]]; then
     log "Setting default login mode to $DEFAULT_SESSION"
-    in_chroot "steamosctl set-default-login-mode $DEFAULT_SESSION" || warn "Could not set desktop mode (non-fatal)"
+    chroot "$MNT" steamosctl set-default-login-mode "$DEFAULT_SESSION" \
+      || warn "Could not set default session (non-fatal)"
   fi
 
 finalize

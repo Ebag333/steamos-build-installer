@@ -16,6 +16,12 @@ install_hw_libs() {
 
   log "Installing hardware support libraries"
 
+  # Install full upstream firmware (replaces Valve's neptune subset).
+  # Needed for Intel NPU, AMD dGPU, WiFi cards, etc. on generic hardware.
+  log "  Installing upstream linux-firmware"
+  in_chroot "pacman --config $PACCONF -S $PACOPTS linux-firmware" \
+    || warn "Could not install linux-firmware (non-fatal, some hardware may lack firmware)"
+
   in_chroot "pacman --config $PACCONF -S $PACOPTS \
     libratbag libfprint fprintd" \
     || die "Failed to install hardware support libraries"
@@ -28,5 +34,5 @@ install_hw_libs() {
     die "libfprint not found in chroot"
   fi
 
-  log "Hardware support: libratbag + libfprint + fprintd installed"
+  log "Hardware support: linux-firmware + libratbag + libfprint + fprintd installed"
 }

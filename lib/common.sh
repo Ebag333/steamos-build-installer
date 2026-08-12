@@ -19,15 +19,39 @@ in_chroot() { chroot "$MERGED" /bin/bash -c "$*"; }
 # Tear down everything mounted/created on OUR loop device + the overlay, and
 # drop the udisks guard rule. Idempotent — safe to run twice (EXIT trap).
 cleanup() {
+  # Save and restore set -e so finalize()'s explicit call doesn't leak it.
+  local _had_e=0
+  [[ -o errexit ]] && _had_e=1
   set +e
-  for m in "${MERGED:-}/dev/pts" "${MERGED:-}/dev" "${MERGED:-}/sys" "${MERGED:-}/proc" \
-           "${MERGED:-}" "${OVL_MNT:-}" "${EFIMNT:-}" "${HOMEMNT:-}" "${MNT:-}"; do
+
+  local m
+  local mounts=()
+
+  # Guard: only add chroot mounts if MERGED was initialized.
+  if [[ -n "${MERGED:-}" ]]; then
+    mounts+=(
+      "$MERGED/dev/pts"
+      "$MERGED/dev"
+      "$MERGED/sys"
+      "$MERGED/proc"
+      "$MERGED/tmp"
+      "$MERGED"
+    )
+  fi
+
+  # Add remaining mounts only if non-empty.
+  for m in "${OVL_MNT:-}" "${EFIMNT:-}" "${HOMEMNT:-}" "${MNT:-}"; do
+    [[ -n "$m" ]] && mounts+=("$m")
+  done
+
+  for m in "${mounts[@]}"; do
     if mountpoint -q "$m" 2>/dev/null; then
       umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
     fi
   done
+
   # sweep any udisks automounts of OUR loop device only
-  if [[ -n "$LOOPDEV" ]]; then
+  if [[ -n "${LOOPDEV:-}" ]]; then
     findmnt -rn -o TARGET,SOURCE | awk -v l="$LOOPDEV" '$2 ~ "^"l {print $1}' \
       | tac | while read -r m; do umount "$m" 2>/dev/null; done
     losetup -d "$LOOPDEV" 2>/dev/null
@@ -41,8 +65,11 @@ cleanup() {
       losetup -d "$_ovl_dev" 2>/dev/null
     fi
   fi
-  if [[ -f "$UDEV_RULE" ]]; then
+  if [[ -n "${UDEV_RULE:-}" && -f "$UDEV_RULE" ]]; then
     rm -f "$UDEV_RULE"
     udevadm control --reload 2>/dev/null
   fi
+
+  # Restore set -e if it was active.
+  [[ "$_had_e" -eq 1 ]] && set -e
 }

@@ -64,6 +64,9 @@ install_payload() {
 
   log "Registering payload packages in the image's pacman db"
   for pkg in "${NEW_PKGS[@]}"; do
+    # Remove old version entries first — otherwise upgrading nvidia-utils 580→590
+    # leaves both /local/nvidia-utils-580.../ and /local/nvidia-utils-590.../
+    rm -rf "$MNT/usr/lib/holo/pacmandb/local/$pkg"-[0-9]*
     for ENTRY in "$UPPER/usr/lib/holo/pacmandb/local/$pkg"-[0-9]*; do
       [[ -d "$ENTRY" ]] && rsync -a "$ENTRY" "$MNT/usr/lib/holo/pacmandb/local/" && break
     done
@@ -82,7 +85,60 @@ options nvidia-drm modeset=1 fbdev=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
 EOF
 
+  log "Restoring module autoloading in mkinitcpio.conf"
+  # modprobe -R needs /proc to resolve aliases — mount it now, unmount after.
+  log "  Mounting proc/sys/dev in $MNT"
+  mkdir -p "$MNT/proc" "$MNT/sys" "$MNT/dev"
+  mount -t proc proc "$MNT/proc" || { warn "Failed to mount proc"; return 1; }
+  mount --rbind /sys "$MNT/sys" || { warn "Failed to mount sys"; return 1; }
+  mount --make-rslave "$MNT/sys"
+  mount --rbind /dev "$MNT/dev" || { warn "Failed to mount dev"; return 1; }
+  mount --make-rslave "$MNT/dev"
+  log "  proc/sys/dev mounted"
+
+  # Discover which modules the image's kernel would load for this machine's
+  # hardware — depmod already ran above so the image's alias db is current.
+  log "  Discovering modules via modprobe -R"
+  local auto_modules
+  auto_modules=$(for dev in /sys/bus/pci/devices/*/modalias; do
+    chroot "$MNT" modprobe -R "$(cat "$dev")" 2>/dev/null || true
+  done | sort -u | { grep -Ev '^nouveau$' || true; } | tr '\n' ' ')
+  log "  Discovered: ${auto_modules:-<none>}"
+  if [[ -n "$auto_modules" ]]; then
+    # Read any existing modules Valve already put in the image, merge, deduplicate.
+    local existing_modules merged_modules
+    existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$MNT/etc/mkinitcpio.conf")
+    log "  Existing modules: ${existing_modules:-<none>}"
+    merged_modules=$(echo "$existing_modules $auto_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
+    sed -i "s|^MODULES=(.*)|MODULES=($merged_modules)|" "$MNT/etc/mkinitcpio.conf"
+    log "MODULES=($merged_modules)"
+  fi
+
+  log "Regenerating initramfs"
+  chroot "$MNT" mkinitcpio -P || warn "mkinitcpio failed (non-fatal — will regenerate on first boot)"
+  log "  Unmounting proc/sys/dev"
+  umount -R "$MNT/proc" "$MNT/sys" "$MNT/dev" 2>/dev/null || true
+
   log "Enabling nvidia suspend/resume services"
   chroot "$MNT" systemctl enable nvidia-suspend nvidia-resume nvidia-hibernate 2>/dev/null \
     || warn "Could not enable nvidia power services (non-fatal)"
+
+  # Bundle scan-hardware.sh for first-run on target machine.
+  log "Installing hardware scan for first-run"
+  cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MNT/usr/local/bin/scan-hardware"
+  chmod +x "$MNT/usr/local/bin/scan-hardware"
+
+  # Desktop notification on first login — runs scan, shows results.
+  mkdir -p "$MNT/home/deck/.config/autostart"
+  cat > "$MNT/home/deck/.config/autostart/scan-hardware.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Hardware Scan
+Comment=Scan for unclaimed hardware and missing drivers
+Exec=/usr/local/bin/scan-hardware
+Terminal=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=10
+EOF
+  chown -R 1000:1000 "$MNT/home/deck/.config/autostart"
 }

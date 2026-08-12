@@ -43,7 +43,12 @@ gui_scan_images() {
     done < <(find "$d" -maxdepth 1 \( \
       -name '*.img' -o -name '*.img.bz2' -o -name '*.img.gz' \
       -o -name '*.img.xz' -o -name '*.img.zst' \
-    \) -type f 2>/dev/null)
+    \) -type f \
+      ! -name '*.building' \
+      ! -name 'overlay-work.img' \
+      ! -name 'rootfs-writable.img' \
+      ! -name '*-nvidia-usbinstall.img.building' \
+      2>/dev/null)
   done
   printf '%s\n' "${imgs[@]}" | sort -u
 }
@@ -112,7 +117,7 @@ gui_warning() {
 gui_question() {
   local title="$1" text="$2" ok_label="${3:-OK}" cancel_label="${4:-Cancel}"
   yad --title="$title" --text="$text" \
-    --button="$ok_label:0" --button="$cancel_label:1" \
+    --button="$cancel_label:1" --button="$ok_label:0" \
     --width=500 2>/dev/null
 }
 
@@ -145,25 +150,104 @@ gui_build_form() {
   local script_dir="$1"
   local detected_img="$2"
 
-  local result
-  result="$(yad --form --title="Build Options" \
-    --text="<b>Configure image build</b>" \
-    --width=550 --height=500 \
-    --field="Source Image:FL" "$detected_img" \
-    --field="Driver Spec:CB" "latest!580!575!570" \
-    --field="Update Mode:CB" "selfheal!hold!stock" \
-    --field="Include Installer:CHK" TRUE \
-    --field="Trim CUDA (saves ~350MB):CHK" FALSE \
-    --field="Extra HW Support:CHK" FALSE \
-    --field="Thunderbolt Dock Support:CHK" FALSE \
-    --field="Boot to Desktop Mode:CHK" FALSE \
-    --field="Rootfs Size (MiB):NUM" "5120" \
-    --field="Skip Signature Check:CHK" FALSE \
-    --field="Fix Keyring:CHK" FALSE \
-    --field="Work Directory:" "" \
-    --field="Build Location:CB" "auto!ram!disk" \
-    --button="Build:0" --button="Cancel:1" \
-  2>/dev/null)" || return 1
+  local result rc
+  while true; do
+    result="$(yad --form --title="Build Options" \
+      --text="<b>Configure image build</b>" \
+      --width=550 --height=500 \
+      --field="Source Image:FL" "$detected_img" \
+      --field="Driver Spec:CB" "latest!580!575!570" \
+      --field="Update Mode:CB" "selfheal!hold!stock" \
+      --field="Include Installer:CHK" TRUE \
+      --field="Trim CUDA (saves ~350MB):CHK" FALSE \
+      --field="Extra HW Support:CHK" TRUE \
+      --field="Thunderbolt Dock Support:CHK" TRUE \
+      --field="Boot to Desktop Mode:CHK" FALSE \
+      --field="Rootfs Size (MiB):NUM" "10240" \
+      --field="Skip Signature Check:CHK" FALSE \
+      --field="Fix Keyring:CHK" TRUE \
+      --field="Work Directory:" "" \
+      --field="Build Location:CB" "auto!ram!disk" \
+      --button="Help:2" --button="Build:0" --button="Cancel:1" \
+    2>/dev/null)"
+    rc=$?
+
+    case $rc in
+      2) # Help
+        echo "<b>Source Image</b>
+  The clean SteamOS OOBE repair image (.img, .bz2, .gz, .xz, .zst).
+  Download from Valve's SteamOS recovery page.
+
+<b>Driver Spec</b>
+  Which NVIDIA driver to install.
+  • latest — whatever current Arch ships (default)
+  • 580, 575, 570 — branch prefix; newest build of that branch
+  • 580.105.08 — specific version
+  • 580.105.08-4 — exact pkgver-pkgrel
+  Needs RTX 20xx+ (Turing) for nvidia-open.
+
+<b>Update Mode</b>
+  • selfheal — OS updates work; driver is rebuilt for each new
+    slot automatically (recommended)
+  • hold — OS updates blocked; Steam always shows 'up to date'
+  • stock — normal updates; driver is lost on OS update
+
+<b>Include Installer</b>
+  Adds a one-click 'Install SteamOS (NVIDIA)' desktop icon
+  to the USB image. Lets you install to an internal disk.
+
+<b>Trim CUDA</b>
+  Removes CUDA/OpenCL/NVVM/OptiX libs (~350 MB smaller).
+  Only needed if you won't use CUDA workloads.
+
+<b>Extra HW Support</b>
+  Installs upstream linux-firmware (replaces Valve's Steam Deck
+  subset — needed for Intel NPU, AMD dGPU, WiFi, etc. on generic
+  hardware), libratbag (Logitech mice), libfprint (fingerprint
+  readers), and Logitech HID kernel modules from source.
+  Requires network during build.
+
+<b>Thunderbolt Dock Support</b>
+  Installs PCI rescan udev rules and enables bolt daemon
+  for Thunderbolt/USB4 docks.
+
+<b>Boot to Desktop Mode</b>
+  Default to Plasma desktop instead of gamescope/Steam.
+
+<b>Rootfs Size</b>
+  Size of the root partitions in MiB. Valve default: 5120.
+  Increase if you need more space for extra packages.
+
+<b>Skip Signature Check</b>
+  Disable pacman signature verification in the build chroot.
+  Use if the image's keyring is too old.
+
+<b>Fix Keyring</b>
+  Force-initialize the pacman keyring with fresh keys.
+  Use if signature checks fail despite valid packages.
+
+<b>Work Directory</b>
+  Where to store build artifacts. Leave blank for auto.
+  Needs ~3x the image size free.
+
+<b>Build Location</b>
+  • auto — prefer RAM if enough free, otherwise disk
+  • ram — force /dev/shm (fast, needs ~24 GB free)
+  • disk — force same directory as output image
+" | yad --text-info --title="Build Options Help" \
+        --width=550 --height=600 \
+        --fontname="sans 10" \
+        --wrap \
+        --button="Close:0" 2>/dev/null
+        ;;
+      0) # Build
+        break
+        ;;
+      *) # Cancel or closed
+        return 1
+        ;;
+    esac
+  done
 
   # Parse pipe-separated result
   IFS='|' read -r IMG DRIVER_SPEC UPDATE_MODE ADD_INSTALLER TRIM_CUDA \
@@ -202,13 +286,14 @@ gui_flash_select_image() {
     # Multiple images — let user pick
     local list_args=()
     for img in "${images[@]}"; do
-      list_args+=("FALSE" "$(gui_image_info "$img")" "$img")
+      list_args+=("$(gui_image_info "$img")" "$img")
     done
     FLASH_IMG="$(yad --list --title="Select Image" \
       --text="Multiple images found.  Select one to flash." \
-      --column="" --column="Image" --column="Path" \
+      --column="Image" --column="Path" \
       --width=700 --height=400 \
-      --print-column=3 \
+      --print-column=2 \
+      --selectable-rows \
       "${list_args[@]}" \
     2>/dev/null)" || return 1
     FLASH_IMG="${FLASH_IMG%|}"
@@ -231,19 +316,19 @@ gui_flash_select_device() {
   while IFS=$'\t' read -r dev size tran model tag; do
     local type_label="Internal"
     [[ "$tag" == "[removable]" ]] && type_label="Removable"
-    rows+=(FALSE "$dev" "$size" "$model" "$tran" "$type_label")
+    rows+=("$dev" "$size" "$model" "$tran" "$type_label")
   done <<< "$device_list"
 
   local img_info
   img_info="$(gui_image_info "$FLASH_IMG")"
 
-  FLASH_DEV="$(yad --list --radiolist \
+  FLASH_DEV="$(yad --list \
     --title="Select Target Device" \
     --text="Select the target USB device.\n\nImage: $img_info\n\n<b>ALL DATA ON THE SELECTED DEVICE WILL BE DESTROYED.</b>" \
-    --column="" --column="Device" --column="Size" --column="Model" --column="Bus" --column="Type" \
+    --column="Device" --column="Size" --column="Model" --column="Bus" --column="Type" \
     --width=750 --height=400 \
-    --print-column=2 \
-    --button="Select:0" --button="Cancel:1" \
+    --print-column=1 \
+    --selectable-rows \
     "${rows[@]}" \
   2>/dev/null)" || return 1
   FLASH_DEV="${FLASH_DEV%|}"
@@ -280,7 +365,7 @@ gui_build_confirm() {
   esac
 
   gui_question "Confirm Build" \
-    "<b>Build configuration:</b>\n\n  Source: $(basename "$IMG")\n  Driver: $DRIVER_SPEC\n  Updates: $update_desc\n  Installer: $([ $ADD_INSTALLER -eq 1 ] && echo yes || echo no)\n  Trim CUDA: $([ $TRIM_CUDA -eq 1 ] && echo yes || echo no)\n  HW Support: $([ $BUILD_HW_SUPPORT -eq 1 ] && echo yes || echo no)\n  Rootfs: ${ROOTFS_SIZE} MB\n  Build Location: $WORKDIR_LOCATION\n\n<b>This will build a new SteamOS NVIDIA image.</b>" \
+    "<b>Build configuration:</b>\n\n  Source: $(basename "$IMG")\n  Driver: $DRIVER_SPEC\n  Updates: $update_desc\n  Installer: $([ "$ADD_INSTALLER" -eq 1 ] && echo yes || echo no)\n  Trim CUDA: $([ "$TRIM_CUDA" -eq 1 ] && echo yes || echo no)\n  HW Support: $([ "$BUILD_HW_SUPPORT" -eq 1 ] && echo yes || echo no)\n  Rootfs: ${ROOTFS_SIZE} MB\n  Build Location: $WORKDIR_LOCATION\n\n<b>This will build a new SteamOS NVIDIA image.</b>" \
     "Build" "Cancel"
 }
 

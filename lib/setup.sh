@@ -11,11 +11,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 # If the user didn't explicitly set --workdir, pick RAM or disk automatically.
-# Strategy: prefer RAM if it has >= 3x the image size free (fast build),
-# otherwise fall back to disk.  Die if neither has enough.
-#
-# The build needs ~1.5x the image size (decompressed copy + overlay + packages).
-# We use 3x as headroom so the system doesn't thrash.
+# Strategy: read the decompressed image size from the GPT header, then require
+# that size + 15 GB working headroom.  Fall back to compressed × 3 if GPT
+# parsing fails.
 setup_resolve_workdir() {
   if [[ -n "${_WORKDIR_EXPLICIT:-}" ]]; then
     return 0  # user specified --workdir, don't override
@@ -24,40 +22,91 @@ setup_resolve_workdir() {
   # If the user forced a location via config, honour it.
   if [[ "${WORKDIR_LOCATION:-auto}" == "ram" ]]; then
     WORKDIR="/dev/shm/nvidia-build"
+    OUT_FINAL="$WORKDIR/$(basename "$OUT_FINAL")"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR"
     log "Build workspace: RAM (forced by config)"
     return 0
   fi
 
-  local disk_avail ram_avail img_size_mb need_mb
+  local disk_avail ram_avail need_mb
+
   disk_avail="$(df -m --output=avail "$(dirname "$OUT")" | tail -1 | tr -d ' ')"
   ram_avail="$(df -m --output=avail /dev/shm 2>/dev/null | tail -1 | tr -d ' ' || echo 0)"
 
-  # Estimate required space from the source image size.
+  # Get the actual decompressed image size from the GPT header.
+  # For a raw GPT disk image, the backup GPT header LBA (at offset 512+32)
+  # gives the last sector, which tells us the total image size.
+  # Only reads the first 1 MiB of the decompressed stream — fast even for
+  # compressed images.
+  local img_bytes
   if [[ -f "$IMG" ]]; then
-    img_size_mb=$(( $(stat -c '%s' "$IMG") / 1048576 ))
-  else
-    img_size_mb=8192  # conservative default (~8 GB)
+    case "$IMG" in
+      *.bz2)  img_bytes="$(bzip2 -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c '
+import sys, struct
+d = sys.stdin.buffer.read()
+if len(d) >= 520 and d[512:520] == b"EFI PART":
+    last_lba = struct.unpack_from("<Q", d, 512 + 32)[0]
+    print((last_lba + 1) * 512)
+' 2>/dev/null || true)" ;;
+      *.gz)   img_bytes="$(gzip -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c '
+import sys, struct
+d = sys.stdin.buffer.read()
+if len(d) >= 520 and d[512:520] == b"EFI PART":
+    last_lba = struct.unpack_from("<Q", d, 512 + 32)[0]
+    print((last_lba + 1) * 512)
+' 2>/dev/null || true)" ;;
+      *.xz)   img_bytes="$(xz -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c '
+import sys, struct
+d = sys.stdin.buffer.read()
+if len(d) >= 520 and d[512:520] == b"EFI PART":
+    last_lba = struct.unpack_from("<Q", d, 512 + 32)[0]
+    print((last_lba + 1) * 512)
+' 2>/dev/null || true)" ;;
+      *.zst)  img_bytes="$(zstd -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c '
+import sys, struct
+d = sys.stdin.buffer.read()
+if len(d) >= 520 and d[512:520] == b"EFI PART":
+    last_lba = struct.unpack_from("<Q", d, 512 + 32)[0]
+    print((last_lba + 1) * 512)
+' 2>/dev/null || true)" ;;
+      *)      img_bytes="$(stat -c '%s' "$IMG")" ;;
+    esac
   fi
-  need_mb=$(( img_size_mb * 3 ))
+
+  # Fall back to compressed size × 3 if GPT parsing failed.
+  if [[ -z "$img_bytes" || "$img_bytes" == "0" ]]; then
+    local compressed_mb
+    compressed_mb=$(( $(stat -c '%s' "$IMG") / 1048576 ))
+    need_mb=$(( compressed_mb * 3 ))
+    (( need_mb < 12288 )) && need_mb=12288
+    log "Could not read GPT header — estimating ${need_mb} MB from compressed size"
+  else
+    # Decompressed image + 15 GB working headroom (overlay, packages, build).
+    # The overlay-work.img is sparse, so its 8 GB nominal size doesn't fully
+    # consume space — 15 GB headroom is realistic.
+    local img_mb=$(( img_bytes / 1048576 ))
+    need_mb=$(( img_mb + 15360 ))
+    log "Decompressed image: ${img_mb} MB, need ~${need_mb} MB (image + 15 GB headroom)"
+  fi
 
   if [[ "${WORKDIR_LOCATION:-auto}" == "disk" ]]; then
-    (( disk_avail >= need_mb )) || die "Disk only has ${disk_avail} MB free, need ~${need_mb} MB (3x image)."
+    (( disk_avail >= need_mb )) || die "Disk only has ${disk_avail} MB free, need ~${need_mb} MB."
     log "Build workspace: disk (forced by config, ${disk_avail} MB free)"
     return 0
   fi
 
-  # Auto: prefer RAM if it has 3x headroom, otherwise disk.
+  # Auto: prefer RAM if it has enough headroom, otherwise disk.
   if (( ram_avail >= need_mb )); then
     WORKDIR="/dev/shm/nvidia-build"
+    OUT_FINAL="$WORKDIR/$(basename "$OUT_FINAL")"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR"
     log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free, need ~${need_mb})"
   elif (( disk_avail >= need_mb )); then
     log "Build workspace: disk (${disk_avail} MB free, RAM only ${ram_avail} MB)"
   else
-    die "Not enough space: RAM=${ram_avail} MB, disk=${disk_avail} MB. Need ~${need_mb} MB (3x image size)."
+    die "Not enough space: RAM=${ram_avail} MB, disk=${disk_avail} MB. Need ~${need_mb} MB."
   fi
 }
 
@@ -81,11 +130,14 @@ setup_clear_stale_state() {
 
   # Detach any loop device backed by our output image.
   local _loop_devs
-  _loop_devs="$(losetup -J 2>/dev/null     | python3 -c "import json,sys
-d=json.load(sys.stdin)
-for d in d.get('loopdevices',[]):
-    if d.get('back-file','')=='$OUT':
-        print(d['name'])" 2>/dev/null || true)"
+  _loop_devs="$(losetup -J 2>/dev/null \
+    | python3 -c '
+import json, sys
+target = sys.argv[1]
+for d in json.load(sys.stdin).get("loopdevices", []):
+    if d.get("back-file", "") == target:
+        print(d["name"])
+' "$OUT" 2>/dev/null || true)"
   while read -r dev; do
     [[ -n "$dev" ]] || continue
     findmnt -rn -o TARGET,SOURCE 2>/dev/null       | awk -v l="$dev" '$2 ~ "^"l {print $1}'       | tac | while read -r m; do
@@ -102,8 +154,9 @@ for d in d.get('loopdevices',[]):
     umount -R "$WORKDIR/overlay-mnt" 2>/dev/null || umount -Rl "$WORKDIR/overlay-mnt" 2>/dev/null
   fi
   # Remove the overlay workspace image if it's not attached to any loop device.
+  # losetup -j returns success even with no output, so check for empty output.
   if [[ -f "$WORKDIR/overlay-work.img" ]]; then
-    if ! losetup -j "$WORKDIR/overlay-work.img" >/dev/null 2>&1; then
+    if [[ -z "$(losetup -j "$WORKDIR/overlay-work.img" 2>/dev/null)" ]]; then
       warn "Removing orphaned overlay workspace image"
       rm -f "$WORKDIR/overlay-work.img"
     fi
@@ -125,10 +178,11 @@ for d in d.get('loopdevices',[]):
   done
 }
 
-# Keep udisks/desktop automounters away from loop partitions during the run.
+# Keep udisks/desktop automounters away from our loop device during the run.
 setup_udev_guard() {
   mkdir -p /run/udev/rules.d
-  echo 'SUBSYSTEM=="block", KERNEL=="loop*", ENV{UDISKS_IGNORE}="1"' > "$UDEV_RULE"
+  # Scope to our specific loop device rather than hiding all loop devices.
+  echo "SUBSYSTEM==\"block\", KERNEL==\"${LOOPDEV#/dev/}*\", ENV{UDISKS_IGNORE}=\"1\"" > "$UDEV_RULE"
   udevadm control --reload
 }
 
@@ -155,14 +209,23 @@ setup_copy_image() {
   esac
 
   # Check for a matching previous decompression.
-  if [[ -f "$OUT" && -f "$FINGERPRINT_FILE" ]]; then
-    _prev_fp="$(cat "$FINGERPRINT_FILE")"
+  # The decompressed image ($OUT_FINAL) is valid whenever the source fingerprint
+  # matches, regardless of whether the previous build succeeded.  The build
+  # modifies $OUT_FINAL in-place, so we always copy it to a fresh $OUT (.building)
+  # as a disposable working copy.
+  if [[ -f "$OUT_FINAL" && -f "${OUT_FINAL}.src-fingerprint" ]]; then
+    _prev_fp="$(cat "${OUT_FINAL}.src-fingerprint")"
     if [[ "$_src_fp" == "$_prev_fp" ]]; then
-      log "Reusing existing $(basename "$OUT") (source unchanged)"
+      log "Reusing existing $(basename "$OUT_FINAL") (source unchanged)"
+      cp --reflink=auto "$OUT_FINAL" "$OUT"
+      cp "${OUT_FINAL}.src-fingerprint" "${FINGERPRINT_FILE}"
       return 0
     fi
     log "Source changed — re-decompressing"
-    rm -f "$OUT" "$FINGERPRINT_FILE"
+    rm -f "$OUT_FINAL" "${OUT_FINAL}.src-fingerprint" "${OUT_FINAL}.build-complete" "$OUT" "${FINGERPRINT_FILE}"
+  elif [[ -f "$OUT" ]]; then
+    log "Previous decompression incomplete — starting fresh"
+    rm -f "$OUT" "${FINGERPRINT_FILE}"
   fi
 
   # Space check: decompressed image is ~8 GB, packages ~0.5 GB.
@@ -208,17 +271,131 @@ setup_loop_mount() {
   [[ -n "$ROOTPART" && -n "$EFIPART" && -n "$HOMEPART" ]] \
     || die "rootfs-A/efi-A/home partitions not found on $LOOPDEV — is this a SteamOS image?"
 
-  FSUUID="$(blkid -p -s UUID -o value "$ROOTPART")"
-  if findmnt -rn -S "UUID=$FSUUID" >/dev/null 2>&1; then
-    warn "UUID $FSUUID is already mounted — unmounting stale mount"
-    umount -R "$(findmnt -rn -o TARGET -S "UUID=$FSUUID")" 2>/dev/null \
-      || umount -Rl "$(findmnt -rn -o TARGET -S "UUID=$FSUUID")" 2>/dev/null
-  fi
+  # Diagnostic: check if this is a Btrfs seeding filesystem.
+  log "Rootfs superblock flags:"
+  btrfs inspect-internal dump-super "$ROOTPART" 2>/dev/null | grep -E 'flags|fsid|metadata_uuid' || true
+  log "Inspecting Btrfs FS_TREE root item"
+  btrfs inspect-internal dump-tree -t root "$ROOTPART" 2>/dev/null \
+    | grep -A12 -B2 'key (FS_TREE ROOT_ITEM 0)' || true
+  log "mkfs.btrfs version: $(mkfs.btrfs --version 2>/dev/null || echo 'unknown')"
+
+  # Unmount any stale mounts backed by our loop partition (use the device,
+  # not the UUID — cloned images may share UUIDs).
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    warn "Unmounting stale mount $target"
+    umount -R "$target" 2>/dev/null || umount -Rl "$target" 2>/dev/null
+  done < <(findmnt -rn -o TARGET -S "$ROOTPART" 2>/dev/null)
 }
 
-# Mount rootfs (btrfs), efi-A, and home; clear the btrfs RO property so we can
-# write into the image rootfs.
+# The SteamOS repair image's FS_TREE root item has the RDONLY flag set.
+# Btrfs won't let us write to it regardless of mount options.  Rebuild the
+# filesystem as writable using mkfs.btrfs --rootdir, preserving UUIDs.
+prepare_writable_rootfs() {
+  local root_item root_bytes root_uuid root_dev_uuid root_label
+  local srcmnt root_tmp new_bytes
+
+  root_item="$(
+    btrfs inspect-internal dump-tree -t root "$ROOTPART" 2>/dev/null |
+      awk '
+        /key \(FS_TREE ROOT_ITEM 0\)/ { found=1 }
+        found && /flags / { print; exit }
+      '
+  )"
+
+  if [[ "$root_item" != *"(RDONLY)"* ]]; then
+    log "Rootfs FS_TREE is already writable"
+    return 0
+  fi
+
+  log "Rootfs FS_TREE is RDONLY — rebuilding as writable Btrfs"
+
+  srcmnt="$WORKDIR/rootfs-ro-source"
+  root_tmp="$WORKDIR/rootfs-writable.img"
+
+  mkdir -p "$srcmnt"
+  rm -f "$root_tmp"
+
+  root_bytes="$(blockdev --getsize64 "$ROOTPART")"
+  root_uuid="$(blkid -s UUID -o value "$ROOTPART")"
+  root_dev_uuid="$(blkid -s UUID_SUB -o value "$ROOTPART" || true)"
+  root_label="$(blkid -s LABEL -o value "$ROOTPART" || true)"
+
+  log "  Size: $root_bytes bytes"
+  log "  UUID: $root_uuid"
+  log "  Device UUID: ${root_dev_uuid:-<none>}"
+  log "  Label: ${root_label:-<none>}"
+
+  # Source stays completely untouched.
+  mount -o ro "$ROOTPART" "$srcmnt"
+
+  log "Original rootfs Btrfs usage:"
+  btrfs filesystem usage -T "$srcmnt" >&2 || true
+
+  log "Source rootfs disk usage:"
+  du -sh "$srcmnt" >&2 || true
+  du -sh --apparent-size "$srcmnt" >&2 || true
+
+  truncate -s "$root_bytes" "$root_tmp"
+
+  local mkfs_args=(
+    -f
+    -K
+    -U "$root_uuid"
+    -d single
+    -m single
+    --compress zstd:3
+    --rootdir "$srcmnt"
+    --shrink
+  )
+
+  [[ -n "$root_label" ]] &&
+    mkfs_args+=(-L "$root_label")
+
+  [[ -n "$root_dev_uuid" ]] &&
+    mkfs_args+=(--device-uuid "$root_dev_uuid")
+
+  log "Creating writable replacement filesystem"
+  mkfs.btrfs "${mkfs_args[@]}" "$root_tmp" \
+    || die "Failed to rebuild writable Btrfs rootfs"
+
+  umount "$srcmnt"
+
+  new_bytes="$(stat -c '%s' "$root_tmp")"
+  if (( new_bytes > root_bytes )); then
+    die "Rebuilt rootfs image grew beyond partition size"
+  fi
+
+  log "Writing rebuilt filesystem back to rootfs-A"
+  dd if="$root_tmp" of="$ROOTPART" \
+    bs=16M conv=fsync status=progress \
+    || die "Failed to replace rootfs-A"
+
+  rm -f "$root_tmp"
+
+  # Make sure userspace sees the newly written filesystem.
+  udevadm settle
+  btrfs device scan "$ROOTPART" >/dev/null 2>&1 || true
+
+  # Offline verification before proceeding.
+  root_item="$(
+    btrfs inspect-internal dump-tree -t root "$ROOTPART" 2>/dev/null |
+      awk '
+        /key \(FS_TREE ROOT_ITEM 0\)/ { found=1 }
+        found && /flags / { print; exit }
+      '
+  )"
+
+  log "Rebuilt FS_TREE: $root_item"
+
+  [[ "$root_item" != *"(RDONLY)"* ]] \
+    || die "Rebuilt rootfs is unexpectedly still RDONLY"
+}
+
+# Mount rootfs (btrfs), efi-A, and home.
 setup_mount_partitions() {
+  log "Loop device RO: $(blockdev --getro "$LOOPDEV")"
+  log "Root partition RO: $(blockdev --getro "$ROOTPART")"
   log "Mounting rootfs ($ROOTPART) → $MNT"
   mount -o compress-force=zstd:3 "$ROOTPART" "$MNT"
   log "Mounting efi ($EFIPART) → $EFIMNT"
@@ -226,10 +403,59 @@ setup_mount_partitions() {
   log "Mounting home ($HOMEPART) → $HOMEMNT"
   mount "$HOMEPART" "$HOMEMNT"
 
-  if [[ "$(btrfs property get "$MNT" ro)" == "ro=true" ]]; then
-    log "Clearing btrfs read-only property"
-    btrfs property set "$MNT" ro false
+  log "Rootfs mount options: $(findmnt -no OPTIONS "$MNT")"
+
+  # Don't continue unless an actual write succeeds.
+  local rw_test="$MNT/.steamos-nvidia-rw-test"
+  if ! touch "$rw_test"; then
+    warn "Rootfs source: $(findmnt -no SOURCE "$MNT")"
+    warn "Rootfs filesystem: $(findmnt -no FSTYPE "$MNT")"
+    warn "Rootfs options: $(findmnt -no OPTIONS "$MNT")"
+    warn "Recent Btrfs kernel messages:"
+    dmesg | grep -i btrfs | tail -30 >&2 || true
+    die "Rootfs mount reports rw but an actual write failed"
   fi
+  rm -f "$rw_test"
+  log "Rootfs is writable"
+
+  # One-time metadata verification: compare source image against mounted copy
+  # to confirm reconstruction didn't strip capabilities, permissions, or ownership.
+  local src_mnt="$WORKDIR/src-mnt"
+  mkdir -p "$src_mnt"
+  local src_rootpart
+  for part in "${LOOPDEV}p"*; do
+    [[ -b "$part" ]] || continue
+    local pname
+    pname="$(blkid -p -s PART_ENTRY_NAME -o value "$part" 2>/dev/null)" || true
+    if [[ "$pname" == "rootfs-A" ]]; then
+      src_rootpart="$part"
+      break
+    fi
+  done
+  if [[ -n "${src_rootpart:-}" ]]; then
+    mount -o ro "$src_rootpart" "$src_mnt" 2>/dev/null || true
+    if mountpoint -q "$src_mnt" 2>/dev/null; then
+      log "Comparing source vs mounted metadata (caps, uid/gid, perms)..."
+      getcap -r "$src_mnt" 2>/dev/null | sort > /tmp/caps.old || true
+      getcap -r "$MNT"    2>/dev/null | sort > /tmp/caps.new || true
+      if ! diff -u /tmp/caps.old /tmp/caps.new >/dev/null 2>&1; then
+        warn "Capability differences detected:"
+        diff -u /tmp/caps.old /tmp/caps.new >&2 || true
+      else
+        log "  Capabilities: identical"
+      fi
+      find "$src_mnt" -xdev -printf '%P\t%u\t%g\t%m\n' 2>/dev/null | sort > /tmp/meta.old || true
+      find "$MNT"    -xdev -printf '%P\t%u\t%g\t%m\n' 2>/dev/null | sort > /tmp/meta.new || true
+      if ! diff -u /tmp/meta.old /tmp/meta.new >/dev/null 2>&1; then
+        warn "Metadata differences detected (uid/gid/perms):"
+        diff -u /tmp/meta.old /tmp/meta.new | head -50 >&2 || true
+      else
+        log "  Metadata (uid/gid/perms): identical"
+      fi
+      umount "$src_mnt" 2>/dev/null || true
+    fi
+  fi
+  rmdir "$src_mnt" 2>/dev/null || true
 }
 
 # Discover the neptune kernel, its installed pacman package, and the
@@ -242,6 +468,8 @@ setup_discover() {
   [[ -n "$KVER" ]] || die "No neptune kernel found in image"
   log "Image kernel: $KVER"
 
+  # Find the package that owns this exact kernel version, rather than
+  # independently globbing — avoids mismatch when multiple kernels exist.
   PACDB="$MNT/usr/lib/holo/pacmandb/local"
   KPKG_DIR=""
   for d in "$PACDB"/linux-neptune-*-[0-9]*; do
@@ -249,8 +477,21 @@ setup_discover() {
     case "$(basename "$d")" in
       *-headers-*|*firmware*|*rtw*) continue ;;
     esac
-    KPKG_DIR="$d"; break
+    # Verify this package actually owns the discovered kernel directory.
+    if grep -q "^usr/lib/modules/$KVER/$" "$d/files" 2>/dev/null; then
+      KPKG_DIR="$d"; break
+    fi
   done
+  # Fallback to the old glob approach if file-list check didn't work.
+  if [[ -z "$KPKG_DIR" ]]; then
+    for d in "$PACDB"/linux-neptune-*-[0-9]*; do
+      [[ -d "$d" ]] || continue
+      case "$(basename "$d")" in
+        *-headers-*|*firmware*|*rtw*) continue ;;
+      esac
+      KPKG_DIR="$d"; break
+    done
+  fi
   [[ -n "$KPKG_DIR" ]] || die "Could not find installed kernel package in pacman db"
   KPKG_FULL="$(basename "$KPKG_DIR")"
   KPKG_NAME="${KPKG_FULL%-*-*}"
@@ -262,7 +503,7 @@ setup_discover() {
   MIRROR="$(awk '/^Server/{print $3; exit}' "$MNT/etc/pacman.d/mirrorlist")"
   HDR_URL="${MIRROR/\$repo/$JUPITER_REPO}"
   HDR_URL="${HDR_URL/\$arch/x86_64}/${KPKG_NAME}-headers-${KPKG_VERREL}-x86_64.pkg.tar.zst"
-  curl -sfIL "$HDR_URL" -o /dev/null \
+  curl_retry 3 -sfIL "$HDR_URL" -o /dev/null \
     || die "Exact-match headers not found in Valve's pool: $HDR_URL"
   log "Headers package: $(basename "$HDR_URL")"
 }

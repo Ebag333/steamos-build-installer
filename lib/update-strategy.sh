@@ -88,8 +88,11 @@ UPPER="$WORK/upper"; OVLWORK="$WORK/ovlwork"; MERGED="$WORK/merged"
 
 cleanup() {
   set +e
-  for m in "$MERGED"/dev/pts "$MERGED"/dev "$MERGED"/sys "$MERGED"/proc "$MERGED" \
-           "$NEWROOT"/efi "$NEWROOT"/dev/pts "$NEWROOT"/dev "$NEWROOT"/sys "$NEWROOT"/proc "$NEWROOT" \
+  # Guard: if MERGED was never initialized, no mounts were created — bail out
+  # before the expansions resolve to the host's /dev, /proc, etc.
+  [[ -n "${MERGED:-}" ]] || return 0
+  for m in "$MERGED/dev/pts" "$MERGED/dev" "$MERGED/sys" "$MERGED/proc" "$MERGED/tmp" "$MERGED" \
+           "$NEWROOT/efi" "$NEWROOT/dev/pts" "$NEWROOT/dev" "$NEWROOT/sys" "$NEWROOT/proc" "$NEWROOT" \
            "$WORK"; do
     mountpoint -q "$m" 2>/dev/null && { umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null; }
   done
@@ -106,10 +109,16 @@ mkdir -p "$UPPER" "$OVLWORK" "$MERGED"
 
 log "Mounting $ROOTDEV"
 mount -o compress-force=zstd:3 "$ROOTDEV" "$NEWROOT"
-WAS_RO=0
-if [[ "$(btrfs property get "$NEWROOT" ro)" == "ro=true" ]]; then
-  WAS_RO=1; btrfs property set "$NEWROOT" ro false
+# Ensure rootfs is writable — check VFS mount state, not btrfs property
+# (subvolid=5 doesn't support the ro property).
+if findmnt -no OPTIONS "$NEWROOT" | tr ',' '\n' | grep -qx ro; then
+  log "Remounting $PARTSET rootfs rw"
+  mount -o remount,rw "$NEWROOT" || die "Could not remount $PARTSET rootfs read-write"
 fi
+if ! touch "$NEWROOT/.rw-test"; then
+  die "$PARTSET rootfs is not writable"
+fi
+rm -f "$NEWROOT/.rw-test"
 
 KVER=""
 for d in "$NEWROOT/usr/lib/modules/"*neptune*; do
@@ -130,7 +139,6 @@ if compgen -G "$NEWROOT/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/nul
   fi
   if [[ $HID_OK -eq 1 ]]; then
     log "Driver already present for $KVER — nothing to do"
-    [[ $WAS_RO -eq 1 ]] && btrfs property set "$NEWROOT" ro true
     exit 0
   fi
   log "NVIDIA present but HID modules/libratbag missing — rebuilding"
@@ -160,18 +168,38 @@ mount -t proc proc "$MERGED/proc"
 mount --rbind /sys "$MERGED/sys"; mount --make-rslave "$MERGED/sys"
 mount --rbind /dev "$MERGED/dev"; mount --make-rslave "$MERGED/dev"
 rm -f "$MERGED/etc/resolv.conf"; cp -L /etc/resolv.conf "$MERGED/etc/resolv.conf"
+ln -sf /proc/self/mounts "$MERGED/etc/mtab"
 in_chroot() { chroot "$MERGED" /bin/bash -c "$*"; }
 
-[[ -d "$MERGED/etc/pacman.d/gnupg/private-keys-v1.d" ]] \
-  || in_chroot "pacman-key --init && pacman-key --populate"
+# Bind-mount host /tmp into the chroot — the overlay mount path doesn't match
+# inside the chroot (host sees /path/to/merged, chroot sees /), so pacman
+# can't resolve mount points for its cachedir space check.  Using host /tmp
+# (tmpfs) gives pacman a real, detectable mount point.
+mount --bind /tmp "$MERGED/tmp"
+cp "$MERGED/etc/pacman.conf" "$MERGED/tmp/pacman-repatch.conf"
+mkdir -p "$MERGED/tmp/pkgcache"
+printf '\n[options]\nCacheDir = /tmp/pkgcache\n' >> "$MERGED/tmp/pacman-repatch.conf"
+# pacman 7+ has download sandboxing that creates temp dirs pacman can't
+# resolve mount points for; disable it on 7+, skip on older.
+PACMAN_MAJOR="$(
+  chroot "$MERGED" pacman --version 2>/dev/null |
+    sed -n 's/.*Pacman v\([0-9][0-9]*\).*/\1/p' | head -1
+)"
+if [[ "$PACMAN_MAJOR" =~ ^[0-9]+$ ]] && (( PACMAN_MAJOR >= 7 )); then
+  printf 'DisableSandbox\n' >> "$MERGED/tmp/pacman-repatch.conf"
+fi
+REPCONF="/tmp/pacman-repatch.conf"
+
+rm -rf "$MERGED/etc/pacman.d/gnupg"
+in_chroot "pacman-key --init && pacman-key --populate"
 in_chroot "curl -sfL '$HDR_URL' -o /tmp/headers.pkg.tar.zst"
-in_chroot "pacman -Sy"
-in_chroot "pacman -Qq" | LC_ALL=C sort > "$WORK/before.txt"
-in_chroot "pacman -U --noconfirm --needed /tmp/headers.pkg.tar.zst"
-in_chroot "pacman -S --noconfirm --needed dkms"
+in_chroot "pacman --config $REPCONF -Sy"
+in_chroot "pacman -Q" | LC_ALL=C sort > "$WORK/before.txt"
+in_chroot "pacman --config $REPCONF -U --noconfirm --needed /tmp/headers.pkg.tar.zst"
+in_chroot "pacman --config $REPCONF -S --noconfirm --needed dkms"
 # Install libratbag if the HID source bundle is present
 [[ -d /usr/lib/steamos-nvidia/hid ]] \
-  && in_chroot "pacman -S --noconfirm --needed libratbag"
+  && in_chroot "pacman --config $REPCONF -S --noconfirm --needed libratbag"
 
 # Driver = the exact pinned Arch packages this image was built with (NOT the
 # slot's frozen repo — that only has Valve's older driver).
@@ -182,12 +210,12 @@ in_chroot "mkdir -p /tmp/nvpkgs"
 for u in $PKG_URLS; do
   in_chroot "curl -sfL '$u' -o /tmp/nvpkgs/\$(basename '$u')" || die "download failed: $u"
 done
-if ! in_chroot "pacman -U --noconfirm --needed /tmp/nvpkgs/*.pkg.tar.zst"; then
+if ! in_chroot "pacman --config $REPCONF -U --noconfirm --needed /tmp/nvpkgs/*.pkg.tar.zst"; then
   # unattended context: a keyring mismatch (frozen image keyring vs current
   # Arch packager keys) must not brick updates — packages came over HTTPS
   # from Arch infrastructure, so retry unsigned rather than fail the update
   log "WARNING: pacman -U failed (keyring?) — retrying with signature checks off"
-  sed 's/^SigLevel.*/SigLevel = Never/' "$MERGED/etc/pacman.conf" > "$MERGED/tmp/pacman-nosig.conf"
+  sed 's/^SigLevel.*/SigLevel = Never/' "$MERGED/tmp/pacman-repatch.conf" > "$MERGED/tmp/pacman-nosig.conf"
   in_chroot "pacman --config /tmp/pacman-nosig.conf -U --noconfirm --needed /tmp/nvpkgs/*.pkg.tar.zst" \
     || die "driver package install failed"
 fi
@@ -210,12 +238,15 @@ if [[ -d /usr/lib/steamos-nvidia/hid ]]; then
     || die "upstream hid-logitech-dj module lacks the 046d:c547 alias"
   log "Built upstream Logitech modules for $KVER"
 fi
-in_chroot "pacman -Qq" | LC_ALL=C sort > "$WORK/after.txt"
+in_chroot "pacman -Q" | LC_ALL=C sort > "$WORK/after.txt"
 
 BUILD_ONLY_RE='^(dkms|nvidia-open-dkms|patch|gcc|gcc-libs|make|binutils|libisl|libmpc|mpfr|pahole|python-setuptools|linux-neptune.*-headers|.*-headers)$'
-mapfile -t NEW_PKGS < <(LC_ALL=C comm -13 "$WORK/before.txt" "$WORK/after.txt" | grep -Ev "$BUILD_ONLY_RE")
-[[ ${#NEW_PKGS[@]} -gt 0 ]] || die "payload list empty"
-log "Payload: ${NEW_PKGS[*]}"
+mapfile -t NEW_PKGS < <(LC_ALL=C comm -13 "$WORK/before.txt" "$WORK/after.txt" | awk '{print $1}' | grep -Ev "$BUILD_ONLY_RE")
+if [[ ${#NEW_PKGS[@]} -eq 0 ]]; then
+  log "No runtime package changes — module-only payload"
+else
+  log "Payload: ${NEW_PKGS[*]}"
+fi
 
 : > "$WORK/files.txt"
 for pkg in "${NEW_PKGS[@]}"; do in_chroot "pacman -Qlq $pkg" >> "$WORK/files.txt"; done
@@ -225,6 +256,9 @@ log "Copying driver into $PARTSET rootfs"
 rsync -a --files-from="$WORK/files.rel" "$MERGED/" "$NEWROOT/"
 rsync -a "$UPPER/usr/lib/modules/$KVER/updates" "$NEWROOT/usr/lib/modules/$KVER/"
 for pkg in "${NEW_PKGS[@]}"; do
+  # Remove old version entries first — otherwise upgrading nvidia-utils 580→590
+  # leaves both /local/nvidia-utils-580.../ and /local/nvidia-utils-590.../
+  rm -rf "$NEWROOT/usr/lib/holo/pacmandb/local/$pkg"-[0-9]*
   for ENTRY in "$UPPER/usr/lib/holo/pacmandb/local/$pkg"-[0-9]*; do
     [[ -d "$ENTRY" ]] && rsync -a "$ENTRY" "$NEWROOT/usr/lib/holo/pacmandb/local/" && break
   done
@@ -249,6 +283,30 @@ options nouveau modeset=0
 options nvidia-drm modeset=1 fbdev=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
 EOF
+
+log "Restoring module autoloading in mkinitcpio.conf"
+# Discover which modules the new slot's kernel would load for this machine's
+# hardware — depmod already ran above so the slot's alias db is current.
+auto_modules=""
+for dev in /sys/bus/pci/devices/*/modalias; do
+  auto_modules+="$(chroot "$NEWROOT" modprobe -R "$(cat "$dev")" 2>/dev/null)"$'\n'
+done
+auto_modules=$(echo "$auto_modules" | sort -u | grep -Ev '^nouveau$' | tr '\n' ' ')
+if [[ -n "$auto_modules" ]]; then
+  # Read any existing modules Valve already put in the image, merge, deduplicate.
+  existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$NEWROOT/etc/mkinitcpio.conf")
+  merged_modules=$(echo "$existing_modules $auto_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
+  sed -i "s|^MODULES=(.*)|MODULES=($merged_modules)|" "$NEWROOT/etc/mkinitcpio.conf"
+  log "MODULES=($merged_modules)"
+fi
+
+log "Regenerating initramfs"
+mount -t proc proc "$NEWROOT/proc"
+mount --rbind /sys "$NEWROOT/sys"; mount --make-rslave "$NEWROOT/sys"
+mount --rbind /dev "$NEWROOT/dev"; mount --make-rslave "$NEWROOT/dev"
+chroot "$NEWROOT" mkinitcpio -P || log "WARNING: mkinitcpio failed (non-fatal — will regenerate on first boot)"
+umount -R "$NEWROOT/proc" "$NEWROOT/sys" "$NEWROOT/dev" 2>/dev/null || true
+
 chroot "$NEWROOT" systemctl enable nvidia-suspend nvidia-resume nvidia-hibernate 2>/dev/null || true
 
 CMDLINE_ADD='rd.driver.blacklist=nouveau modprobe.blacklist=nouveau nvidia-drm.modeset=1 nvidia-drm.fbdev=1'
@@ -266,6 +324,19 @@ if [[ -d /usr/lib/steamos-nvidia/hid ]]; then
     [[ -f "$NEWROOT/usr/lib/steamos-nvidia/hid/$f" ]] \
       || die "HID self-heal source missing from $PARTSET: $f"
   done
+fi
+# Restore thunderbolt files from bundle into the new slot.
+if [[ -d /usr/lib/steamos-nvidia/thunderbolt ]]; then
+  log "Restoring thunderbolt support into $PARTSET"
+  mkdir -p "$NEWROOT/etc/udev/rules.d" "$NEWROOT/usr/local/bin" \
+           "$NEWROOT/etc/systemd/system/multi-user.target.wants"
+  cp /usr/lib/steamos-nvidia/thunderbolt/98-thunderbolt-rescan.rules \
+    "$NEWROOT/etc/udev/rules.d/"
+  cp /usr/lib/steamos-nvidia/thunderbolt/thunderbolt-rescan.sh \
+    "$NEWROOT/usr/local/bin/"
+  chmod +x "$NEWROOT/usr/local/bin/thunderbolt-rescan.sh"
+  ln -sf /usr/lib/systemd/system/bolt.service \
+    "$NEWROOT/etc/systemd/system/multi-user.target.wants/bolt.service"
 fi
 if [[ ! -f "$NEWROOT/usr/bin/steamos-update.orig" ]]; then
   mv "$NEWROOT/usr/bin/steamos-update" "$NEWROOT/usr/bin/steamos-update.orig"
@@ -290,7 +361,6 @@ grep -q 'rd.driver.blacklist=nouveau' "$NEWROOT/efi/EFI/steamos/grub.cfg" \
 log "Syncing"
 btrfs filesystem sync "$NEWROOT"
 sync -f "$NEWROOT"
-[[ $WAS_RO -eq 1 ]] && btrfs property set "$NEWROOT" ro true
 log "OK — $PARTSET is NVIDIA-ready ($KVER)"
 REPATCH
     chmod 755 "$MNT/usr/lib/steamos-nvidia/repatch.sh"
