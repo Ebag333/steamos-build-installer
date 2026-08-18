@@ -73,8 +73,7 @@ sudo ./steamos-nvidia-installer.sh steamdeck-<version>.img
 ```
 
 This copies the image (**the original is never modified**), resolves the
-NVIDIA open driver from Arch Linux (the current one, or the branch you asked
-for with `--driver`), pins it to permanent archive URLs, verifies every binary is compatible with the image's glibc, compiles
+NVIDIA open driver from Arch Linux, verifies every binary is compatible with the image's glibc, compiles
 the kernel module against the image's exact kernel in a throwaway build
 chroot, installs the driver, and adds a one-click installer to the desktop.
 Takes roughly 10–20 minutes. The result is:
@@ -82,28 +81,6 @@ Takes roughly 10–20 minutes. The result is:
 ```
 steamdeck-<version>-nvidia-usbinstall.img
 ```
-
-### Picking a driver branch
-
-By default you get whatever `nvidia-open` current Arch ships. To pin a
-specific branch instead — SteamOS itself ships 575.x — pass `--driver`:
-
-```bash
-sudo ./steamos-nvidia-installer.sh --driver 580 steamdeck-<version>.img
-```
-
-The argument is `latest` (default) or a version prefix: a branch (`580`), a
-release (`580.105.08`), or an exact build (`580.105.08-4`). The newest
-matching build is taken from
-[Arch's package archive](https://archive.archlinux.org/packages/n/nvidia-utils/),
-and the matching `nvidia-open-dkms`, `lib32-nvidia-utils` and any support
-package the frozen SteamOS image lacks (e.g. `egl-wayland2`, only a
-dependency from 590 on) are pinned to the same release. Turing (RTX
-20-series) or newer is required on every branch.
-
-Rebuilding with a different branch in the same `--workdir` is fine — the
-build overlay is cleared automatically when the cached version doesn't match
-(the downloaded packages are kept).
 
 ## Step 3 — Flash it to USB
 
@@ -140,9 +117,8 @@ automatically rebuilt for the new version before the reboot prompt appears
 the update is cancelled and the machine keeps booting the current working
 system — it fails safe.
 
-To move to a **different driver** later, rebuild the USB image (each run
-re-resolves the driver — latest by default, or whatever `--driver` names)
-and reinstall using the **Upgrade** icon. The installed system stays on the
+To move to a **different driver** later, rebuild the USB image and
+reinstall using the **Upgrade** icon. The installed system stays on the
 driver it was built with until you do; updates never drift it to another
 version.
 
@@ -157,8 +133,6 @@ Alternative update modes at build time:
 ## All options
 
 ```
---driver SPEC      Driver to install: latest (default), or a branch/version
-                   prefix — 580, 580.105.08, 580.105.08-4.
 --hold-updates     Hard-hold OS updates instead of self-healing.
 --no-hold-updates  Stock update behaviour (driver lost on update!).
 --no-installer     Skip the desktop installer — just a bootable patched OS.

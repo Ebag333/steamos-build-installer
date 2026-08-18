@@ -1,75 +1,172 @@
 #!/bin/bash
 #
-# scan-hardware.sh — scan for unclaimed PCI devices and check if modules exist.
+# scan-hardware.sh — scan PCI devices and show driver status with criticality.
 #
 # Usage: ./scan-hardware.sh
 #
 # Reports:
-#   - PCI devices with no kernel driver loaded
-#   - Whether a module exists that could handle each device
+#   - All PCI devices with their driver status
+#   - Whether each driver is critical, important, or normal
+#   - Unclaimed devices with available modules
 #
 # No root required (read-only operations).
 
-set -euo pipefail
+set -uo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
+# shellcheck disable=SC2034
+BOLD='\033[1m'
 NC='\033[0m'
 
-echo -e "${CYAN}=== Hardware scan: unclaimed PCI devices ===${NC}"
-echo ""
+# ---- driver classification ----
+# Critical: required for boot, storage, display, or essential hardware
+CRITICAL="nvme ahci sd_mod btrfs i915 xe nvidia nvidia_modeset nvidia_drm nvidia_uvm thunderbolt typec xhci_hcd usbhid hid_generic"
 
-found=0
+# Important: network, audio, sensors, USB controllers
+IMPORTANT="iwlwifi igc snd_hda_intel snd_sof_pci_intel_mtl mei_me i2c_i801 spi_intel_pci processor_thermal_device_pci"
+
+classify_driver() {
+  local driver="$1"
+  for d in $CRITICAL; do
+    [[ "$driver" == "$d" ]] && echo "CRITICAL" && return
+  done
+  for d in $IMPORTANT; do
+    [[ "$driver" == "$d" ]] && echo "IMPORTANT" && return
+  done
+  echo "normal"
+}
+
+# ---- header ----
+echo -e "${CYAN}=== Hardware Driver Scan ===${NC}"
+echo ""
+printf "%-12s %-6s %-30s %-20s %s\n" "DEVICE" "CLASS" "DESCRIPTION" "DRIVER" "STATUS"
+printf "%-12s %-6s %-30s %-20s %s\n" "------" "-----" "-----------" "------" "------"
+
+# ---- scan all PCI devices ----
+unclaimed=0
+critical_missing=0
 
 while IFS= read -r line; do
   # Parse: "00:1f.0 ISA bridge [0601]: Intel Corporation Device [8086:7e02] (rev 20)"
   dev=$(echo "$line" | cut -d' ' -f1)
-  desc=$(echo "$line" | cut -d' ' -f2-)
+  class_desc=$(echo "$line" | cut -d' ' -f2- | sed 's/\[.*//;s/(rev.*//;s/ *$//')
   vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
 
-  # Check if a driver is loaded
+  # Get device class
+  class_code=$(cat "/sys/bus/pci/devices/0000:${dev}/class" 2>/dev/null || echo "0x000000")
+  case "${class_code:0:6}" in
+    0x0108) class="NVMe" ;;
+    0x0106) class="SATA" ;;
+    0x0100) class="SCSI" ;;
+    0x0300) class="VGA" ;;
+    0x0302) class="3D" ;;
+    0x0200) class="NET" ;;
+    0x0403) class="AUDIO" ;;
+    0x0c03) class="USB" ;;
+    0x0880) class="SYS" ;;
+    0x0604) class="PCI" ;;
+    *)      class="OTHER" ;;
+  esac
+
+  # Get driver
   driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
-  [[ -n "$driver" ]] && continue
 
-  found=1
-  echo -e "${YELLOW}Unclaimed:${NC} $dev $desc"
+  # Classify
+  if [[ -n "$driver" ]]; then
+    priority=$(classify_driver "$driver")
+    case "$priority" in
+      CRITICAL) status="${GREEN}✓ critical${NC}" ;;
+      IMPORTANT) status="${GREEN}✓ important${NC}" ;;
+      *)        status="${GREEN}✓${NC}" ;;
+    esac
+    printf "%-12s %-6s %-30s %-20s %b\n" "$dev" "$class" "${class_desc:0:30}" "$driver" "$status"
+  else
+    ((unclaimed++))
+    status="${RED}✗ unclaimed${NC}"
 
-  # Try to find a module for this device
-  if [[ -n "$vendor_device" ]]; then
-    vendor="${vendor_device%:*}"
-    device="${vendor_device#*:}"
-
-    # Search for matching modalias
-    modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
-    modules=$(modprobe -R "$modalias" 2>/dev/null | head -5 || true)
+    # Check if a module exists
+    modules=""
+    if [[ -n "$vendor_device" ]]; then
+      vendor="${vendor_device%:*}"
+      device="${vendor_device#*:}"
+      modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
+      modules=$(modprobe -R "$modalias" 2>/dev/null | head -3 || true)
+    fi
 
     if [[ -n "$modules" ]]; then
-      echo -e "  ${GREEN}Module exists:${NC} $modules"
-      # Check if it's currently loadable
+      status="${YELLOW}✗ unclaimed (module: ${modules%% *})${NC}"
+    fi
+
+    printf "%-12s %-6s %-30s %-20s %b\n" "$dev" "$class" "${class_desc:0:30}" "-" "$status"
+
+    # Check if any missing critical module
+    if [[ -n "$modules" ]]; then
       for mod in $modules; do
-        if modinfo "$mod" >/dev/null 2>&1; then
-          echo -e "  ${GREEN}Available:${NC} $mod ($(modinfo -F description "$mod" 2>/dev/null || echo 'no description'))"
+        if [[ "$(classify_driver "$mod")" == "CRITICAL" ]]; then
+          ((critical_missing++))
         fi
       done
-    else
-      echo -e "  ${RED}No module found${NC} for vendor:device $vendor_device"
     fi
   fi
 
-  # Also check via /sys
-  syspath="/sys/bus/pci/devices/0000:${dev}/modalias"
-  if [[ -f "$syspath" ]]; then
-    sys_modules=$(modprobe -R "$(cat "$syspath")" 2>/dev/null | head -5 || true)
-    if [[ -n "$sys_modules" && "$sys_modules" != "$modules" ]]; then
-      echo -e "  ${GREEN}Also available:${NC} $sys_modules"
-    fi
-  fi
-
-  echo ""
 done < <(lspci -nn)
 
-if [[ $found -eq 0 ]]; then
-  echo -e "${GREEN}All PCI devices have drivers loaded.${NC}"
+# ---- summary ----
+echo ""
+echo -e "${CYAN}=== Summary ===${NC}"
+echo "  Total PCI devices: $(lspci -nn | wc -l)"
+echo "  Unclaimed: $unclaimed"
+if [[ $critical_missing -gt 0 ]]; then
+  echo -e "  ${RED}Critical drivers missing: $critical_missing${NC}"
+fi
+
+# ---- show loaded critical drivers ----
+echo ""
+echo -e "${CYAN}=== Loaded critical drivers ===${NC}"
+for mod in $CRITICAL; do
+  if lsmod 2>/dev/null | grep -q "^${mod} "; then
+    echo -e "  ${GREEN}✓${NC} $mod"
+  else
+    echo -e "  ${YELLOW}○${NC} $mod (not loaded)"
+  fi
+done
+
+# ---- claimed critical devices ----
+echo ""
+echo -e "${CYAN}=== Claimed critical devices ===${NC}"
+while IFS= read -r line; do
+  dev=$(echo "$line" | cut -d' ' -f1)
+  desc=$(echo "$line" | cut -d' ' -f2- | sed 's/\[.*//;s/(rev.*//;s/ *$//')
+  driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
+  [[ -z "$driver" ]] && continue
+  priority=$(classify_driver "$driver")
+  [[ "$priority" == "CRITICAL" ]] || continue
+  echo -e "  ${GREEN}✓${NC} $dev: $desc → $driver"
+done < <(lspci -nn)
+
+# ---- unclaimed devices with modules ----
+if [[ $unclaimed -gt 0 ]]; then
+  echo ""
+  echo -e "${CYAN}=== Unclaimed devices with available modules ===${NC}"
+  while IFS= read -r line; do
+    dev=$(echo "$line" | cut -d' ' -f1)
+    desc=$(echo "$line" | cut -d' ' -f2-)
+    driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
+    [[ -n "$driver" ]] && continue
+
+    vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
+    if [[ -n "$vendor_device" ]]; then
+      vendor="${vendor_device%:*}"
+      device="${vendor_device#*:}"
+      modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
+      modules=$(modprobe -R "$modalias" 2>/dev/null | head -3 || true)
+      if [[ -n "$modules" ]]; then
+        echo "  $dev: $desc"
+        echo "    Modules: $modules"
+      fi
+    fi
+  done < <(lspci -nn)
 fi

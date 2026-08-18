@@ -19,19 +19,10 @@ set -uo pipefail
 TITLE="SteamOS NVIDIA Configuration"
 LOG="/var/log/steamos-nvidia-post-install.log"
 SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT")"
 
-
-# ============================================================
-# Common helpers
-# ============================================================
-
-log() {
-    echo "[nvidia-usb] $*"
-}
-
-warn() {
-    echo "[warn] $*" >&2
-}
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
 
 
 # ============================================================
@@ -82,32 +73,32 @@ apply_thunderbolt() {
     log "Installing Thunderbolt support"
 
     install -d -m755 \
-        /etc/udev/rules.d \
-        /usr/local/bin \
-        /usr/lib/steamos-nvidia/thunderbolt \
+        "$config_root/etc/udev/rules.d" \
+        "$config_root/usr/local/bin" \
+        "$config_root/usr/lib/steamos-nvidia/thunderbolt" \
         || return 1
 
     #
     # Rescan PCI when an authorized Thunderbolt device appears.
     #
-    cat > /etc/udev/rules.d/98-thunderbolt-rescan.rules <<'EOF'
+    cat > "$config_root/etc/udev/rules.d/98-thunderbolt-rescan.rules" <<'EOF'
 # steamos-nvidia-installer
 # Rescan the PCI bus when an authorized Thunderbolt device appears.
 ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{authorized}=="1", RUN+="/usr/local/bin/thunderbolt-rescan.sh"
 EOF
 
-    chmod 644 /etc/udev/rules.d/98-thunderbolt-rescan.rules \
+    chmod 644 "$config_root/etc/udev/rules.d/98-thunderbolt-rescan.rules" \
         || return 1
 
     #
     # PCI rescan helper.
     #
-    cat > /usr/local/bin/thunderbolt-rescan.sh <<'EOF'
+    cat > "$config_root/usr/local/bin/thunderbolt-rescan.sh" <<'EOF'
 #!/bin/bash
 echo 1 > /sys/bus/pci/rescan
 EOF
 
-    chmod 755 /usr/local/bin/thunderbolt-rescan.sh \
+    chmod 755 "$config_root/usr/local/bin/thunderbolt-rescan.sh" \
         || return 1
 
     #
@@ -115,30 +106,37 @@ EOF
     # restore them after a SteamOS rootfs update.
     #
     install -m644 \
-        /etc/udev/rules.d/98-thunderbolt-rescan.rules \
-        /usr/lib/steamos-nvidia/thunderbolt/98-thunderbolt-rescan.rules \
+        "$config_root/etc/udev/rules.d/98-thunderbolt-rescan.rules" \
+        "$config_root/usr/lib/steamos-nvidia/thunderbolt/98-thunderbolt-rescan.rules" \
         || return 1
 
     install -m755 \
-        /usr/local/bin/thunderbolt-rescan.sh \
-        /usr/lib/steamos-nvidia/thunderbolt/thunderbolt-rescan.sh \
+        "$config_root/usr/local/bin/thunderbolt-rescan.sh" \
+        "$config_root/usr/lib/steamos-nvidia/thunderbolt/thunderbolt-rescan.sh" \
         || return 1
 
     #
-    # Activate the new rule immediately.
+    # Activate the new rule immediately (only for live OS).
     #
-    udevadm control --reload-rules \
-        || return 1
+    if [[ "$config_root" == "/" ]]; then
+        udevadm control --reload-rules \
+            || warn "Could not reload udev rules"
+        udevadm trigger --subsystem-match=thunderbolt \
+            || warn "Could not trigger thunderbolt udev events"
+    fi
 
     #
     # bolt/plasma-thunderbolt are already present in SteamOS.
+    # Enable only for live OS — offline roots will enable on boot.
     #
-    if systemctl list-unit-files bolt.service >/dev/null 2>&1; then
-        systemctl enable --now bolt.service \
-            || return 1
-    else
-        warn "bolt.service was not found"
-        return 1
+    if [[ "$config_root" == "/" ]]; then
+        if systemctl list-unit-files bolt.service >/dev/null 2>&1; then
+            systemctl enable --now bolt.service \
+                || return 1
+        else
+            warn "bolt.service was not found"
+            return 1
+        fi
     fi
 
     return 0
@@ -226,6 +224,9 @@ SCANEOF
     chmod 755 /usr/local/bin/scan-hardware \
         || return 1
 
+    log "Running hardware scan"
+    /usr/local/bin/scan-hardware
+
     return 0
 }
 
@@ -235,12 +236,256 @@ SCANEOF
 # ============================================================
 
 apply_desktop_mode() {
-    if ! command -v steamosctl >/dev/null 2>&1; then
-        warn "steamosctl is not available"
+    if command -v steamosctl >/dev/null 2>&1; then
+        sudo -u deck steamosctl set-default-login-mode desktop
+        return $?
+    fi
+
+    # Fallback: write config directly
+    log "steamosctl not available, writing config directly"
+    local config_dir="/home/deck/.config/steamos-manager"
+    install -d -m755 "$config_dir" || return 1
+    cat > "$config_dir/state.toml" <<'EOF'
+version = 1
+
+[services]
+
+[session_manager]
+default_login_mode = "Desktop"
+EOF
+    chown 1000:1000 "$config_dir/state.toml"
+    log "Default login mode set to Desktop"
+}
+
+
+# ============================================================
+# Set user password
+# ============================================================
+
+apply_set_password() {
+    if passwd -S deck 2>/dev/null | grep -q "P"; then
+        log "User 'deck' already has a password set"
+        echo "Password already set. Use 'passwd deck' to change it."
+        return 0
+    fi
+    log "Setting user password"
+    echo ""
+    echo "Enter a new password for the 'deck' user:"
+    passwd deck
+}
+
+
+# ============================================================
+# Lock screen
+# ============================================================
+
+apply_lock_screen() {
+    # Lock screen requires a password — check first.
+    if ! passwd -S deck 2>/dev/null | grep -q "P"; then
+        warn "User 'deck' has no password set"
+        echo "A password is required for the lock screen to work."
+        echo ""
+        echo "Set a password now:"
+        passwd deck || return 1
+    fi
+
+    log "Enabling lock screen"
+
+    # Write KDE lock screen config directly (kwriteconfig5 may not be available)
+    local config_dir="/home/deck/.config"
+    install -d -m755 "$config_dir" || return 1
+    cat > "$config_dir/kscreenlockerrc" <<'EOF'
+[Daemon]
+Autolock=true
+LockOnResume=true
+Timeout=5
+EOF
+    chown 1000:1000 "$config_dir/kscreenlockerrc"
+    log "Lock screen enabled (5 minute timeout)"
+}
+
+
+# ============================================================
+# Disk cleanup
+# ============================================================
+
+apply_cleanup() {
+    log "Cleaning up disk space"
+
+    echo "  Cleaning pacman package cache..."
+    pacman -Sc --noconfirm 2>/dev/null || warn "pacman cache cleanup failed"
+
+    echo "  Cleaning /tmp..."
+    rm -rf /tmp/* 2>/dev/null || true
+
+    echo "  Trimming journal logs to 50MB..."
+    journalctl --vacuum-size=50M 2>/dev/null || warn "journal cleanup failed"
+
+    local freed
+    freed="$(df -m / | awk 'NR==2{print $4}')"
+    log "Cleanup complete — ${freed}MB free on /"
+}
+
+
+# ============================================================
+# Expand root volumes to fill partitions
+# ============================================================
+
+apply_resize_roots() {
+    log "Expanding root filesystems to fill partitions"
+
+    # Find all rootfs partitions (rootfs-A and rootfs-B)
+    local part
+    for part in /dev/disk/by-partsets/*/rootfs; do
+        [[ -b "$part" ]] || continue
+
+        local label
+        label="$(lsblk -no PARTLABEL "$part" 2>/dev/null || basename "$(readlink -f "$part")")"
+        echo "  Processing $label ($part)..."
+
+        # If this is the active root, expand it directly
+        if findmnt -n -o SOURCE / 2>/dev/null | grep -q "$(readlink -f "$part")"; then
+            echo "    Active root — expanding online"
+            btrfs filesystem resize max / 2>/dev/null \
+                || warn "Failed to expand active root"
+        else
+            # Inactive root — mount temporarily, expand, unmount
+            local tmpmnt
+            tmpmnt="$(mktemp -d /tmp/resize-XXXXXX)"
+            if mount -o ro "$part" "$tmpmnt" 2>/dev/null; then
+                # Check if it's read-only btrfs (subvolid=5)
+                if [[ "$(btrfs property get "$tmpmnt" ro 2>/dev/null)" == "ro=true" ]]; then
+                    echo "    Inactive root is read-only (subvolid=5), skipping"
+                else
+                    # Remount rw and expand
+                    mount -o remount,rw "$tmpmnt" 2>/dev/null || true
+                    echo "    Expanding inactive root"
+                    btrfs filesystem resize max "$tmpmnt" 2>/dev/null \
+                        || warn "Failed to expand inactive root"
+                fi
+                umount "$tmpmnt" 2>/dev/null || true
+            fi
+            rmdir "$tmpmnt" 2>/dev/null || true
+        fi
+    done
+
+    # Also expand the active root if we haven't already
+    if ! findmnt -n -o SOURCE / 2>/dev/null | grep -q "rootfs"; then
+        # Active root isn't on a partset path, try direct resize
+        btrfs filesystem resize max / 2>/dev/null || true
+    fi
+
+    log "Root filesystem expansion complete"
+    df -h / 2>/dev/null || true
+}
+
+
+# ============================================================
+# Reboot to specific root slot
+# ============================================================
+
+apply_reboot_to() {
+    detect_roots
+
+    local -a options=()
+    [[ -n "$ROOT_A" ]] && options+=("A" "Root A ($ROOT_A)")
+    [[ -n "$ROOT_B" ]] && options+=("B" "Root B ($ROOT_B)")
+
+    if [[ ${#options[@]} -eq 0 ]]; then
+        warn "No root partitions found"
         return 1
     fi
 
-    steamosctl set-default-login-mode desktop
+    local selected
+    if command -v yad >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
+        selected="$(yad --list \
+            --title="Reboot to..." \
+            --text="Select which root to boot into on next restart:" \
+            --column="Slot" --column="Device" \
+            --width=400 --height=200 \
+            --selectable-rows \
+            --print-column=1 \
+            "${options[@]}" 2>/dev/null)" || return 0
+        selected="$(echo "$selected" | tr -d '|' | tr -d '\n' | xargs)"
+    else
+        echo ""
+        echo "Reboot to which slot?"
+        [[ -n "$ROOT_A" ]] && echo "  1) Root A ($ROOT_A)"
+        [[ -n "$ROOT_B" ]] && echo "  2) Root B ($ROOT_B)"
+        read -rp "Choice: " choice
+        case "$choice" in
+            1) selected="A" ;;
+            2) selected="B" ;;
+            *) return 0 ;;
+        esac
+    fi
+
+    local target_dev=""
+    case "$selected" in
+        A) target_dev="$ROOT_A" ;;
+        B) target_dev="$ROOT_B" ;;
+        *) return 0 ;;
+    esac
+
+    log "Setting next boot to Root $selected ($target_dev)"
+
+    # Use steamos-bootconf with the bootconf file path
+    local conf_file="/esp/SteamOS/conf/${selected}.conf"
+    if [[ -f "$conf_file" ]]; then
+        local now
+        now="$(date -u +%Y%m%d%H%M%S)"
+
+        # Set target slot to boot next
+        sed -i "s/^boot-requested-at:.*/boot-requested-at: $now/" "$conf_file" \
+            || { warn "Failed to set boot-requested-at for $selected"; return 1; }
+
+        # Clear the other slot
+        local other="A"
+        [[ "$selected" == "A" ]] && other="B"
+        local other_conf="/esp/SteamOS/conf/${other}.conf"
+        [[ -f "$other_conf" ]] && \
+            sed -i "s/^boot-requested-at:.*/boot-requested-at: 0/" "$other_conf" 2>/dev/null
+
+        log "Boot slot set: $selected will boot on next restart"
+        return 0
+    fi
+
+    # Fallback: try efibootmgr
+    if command -v efibootmgr >/dev/null 2>&1; then
+        local boot_num
+        boot_num="$(efibootmgr 2>/dev/null | grep -i "steam" | grep -oP 'Boot\K[0-9]+')"
+        if [[ -n "$boot_num" ]]; then
+            efibootmgr -n "$boot_num" 2>/dev/null && \
+                log "Boot slot set via efibootmgr: Boot$boot_num" && return 0
+        fi
+    fi
+
+    warn "Could not set boot slot automatically"
+    return 1
+}
+
+
+# ============================================================
+# Pacman keyring fix
+# ============================================================
+
+apply_keyring() {
+    log "Initialising pacman keyring"
+    rm -rf "$config_root/etc/pacman.d/gnupg" \
+        || return 1
+    if [[ "$config_root" == "/" ]]; then
+        pacman-key --init \
+            || return 1
+        pacman-key --populate archlinux holo \
+            || return 1
+    else
+        # Offline root: run inside chroot
+        chroot "$config_root" pacman-key --init \
+            || return 1
+        chroot "$config_root" pacman-key --populate archlinux holo \
+            || return 1
+    fi
+    log "Keyring initialised"
 }
 
 
@@ -248,75 +493,319 @@ apply_desktop_mode() {
 # NVIDIA initramfs configuration
 # ============================================================
 
-apply_initramfs() {
-    #
-    # Prefer dracut when available.
-    #
-    if command -v dracut >/dev/null 2>&1; then
-        log "Configuring NVIDIA modules for dracut"
+# ============================================================
+# Critical modules for initramfs
+# ============================================================
 
-        install -d -m755 /etc/dracut.conf.d \
-            || return 1
+# All critical modules that might be needed for early boot.
+CRITICAL_MODULES="thunderbolt typec xhci_hcd nvidia nvidia_modeset nvidia_drm nvidia_uvm nvme ahci btrfs i915 xe usbhid hid_generic"
 
-        cat > /etc/dracut.conf.d/99-steamos-nvidia.conf <<'EOF'
-add_drivers+=" nvidia nvidia_modeset nvidia_drm nvidia_uvm "
-EOF
+# Detect which root partition is currently active and which is A/B.
+detect_roots() {
+    local current_dev
+    current_dev="$(findmnt -n -o SOURCE / 2>/dev/null || true)"
 
-        chmod 644 /etc/dracut.conf.d/99-steamos-nvidia.conf \
-            || return 1
+    ROOT_CURRENT=""
+    ROOT_A=""
+    ROOT_B=""
+    ROOT_CURRENT_LABEL=""
 
-        log "Regenerating initramfs"
+    # Find rootfs-A and rootfs-B partitions
+    while IFS= read -r line; do
+        local dev label
+        dev="/dev/$(echo "$line" | awk '{print $1}')"
+        label="$(echo "$line" | awk '{print $2}')"
+        case "$label" in
+            rootfs-A) ROOT_A="$dev" ;;
+            rootfs-B) ROOT_B="$dev" ;;
+        esac
+    done < <(lsblk -dno NAME,PARTLABEL /dev/nvme[0-9]* 2>/dev/null)
 
-        dracut -f \
-            || return 1
+    # Identify which is current
+    if [[ -n "$current_dev" ]]; then
+        if [[ "$current_dev" == "$ROOT_A" ]]; then
+            # shellcheck disable=SC2034
+            ROOT_CURRENT="A"
+            ROOT_CURRENT_LABEL="Root A (current)"
+        elif [[ "$current_dev" == "$ROOT_B" ]]; then
+            # shellcheck disable=SC2034
+            ROOT_CURRENT="B"
+            ROOT_CURRENT_LABEL="Root B (current)"
+        fi
+    fi
+}
 
-        return 0
+apply_critical_modules() {
+    log "Configuring critical modules for initramfs"
+
+    # Detect if Thunderbolt is present (eGPU indicator).
+    local has_thunderbolt=0
+    if lspci 2>/dev/null | grep -qi thunderbolt; then
+        has_thunderbolt=1
     fi
 
+    # Ask about eGPU if Thunderbolt is detected.
+    local egpu_mode="none"
+    if [[ $has_thunderbolt -eq 1 ]]; then
+        egpu_mode="$(yad --list \
+            --title="GPU Configuration" \
+            --text="Thunderbolt detected. How is your NVIDIA GPU connected?" \
+            --column="Mode" --column="Description" \
+            --width=500 --height=250 \
+            --selectable-rows \
+            --print-column=1 \
+            "internal" "NVIDIA GPU is built-in (load early from initramfs)" \
+            "egpu" "NVIDIA GPU is external via Thunderbolt (load after TB ready)" \
+            2>/dev/null)" || true
+        egpu_mode="$(echo "$egpu_mode" | tr -d '|' | tr -d '\n' | xargs)"
+    fi
+    log "GPU mode: ${egpu_mode:-internal}"
 
-    #
-    # Fall back to mkinitcpio.
-    #
-    if command -v mkinitcpio >/dev/null 2>&1; then
-        log "Configuring NVIDIA modules for mkinitcpio"
+    # Scan which modules are currently loaded or have hardware present.
+    local -a recommended=()
+    local mod
 
-        if [[ -d /etc/mkinitcpio.conf.d ]]; then
-            cat > /etc/mkinitcpio.conf.d/99-steamos-nvidia.conf <<'EOF'
-MODULES+=(nvidia nvidia_modeset nvidia_drm nvidia_uvm)
-EOF
+    for mod in $CRITICAL_MODULES; do
+        # Skip nvidia modules for eGPU — they must load after Thunderbolt.
+        if [[ "$egpu_mode" == "egpu" && "$mod" == nvidia* ]]; then
+            continue
+        fi
+        # Check if module is loaded or has PCI hardware that needs it
+        if lsmod 2>/dev/null | grep -q "^${mod} " || \
+           modinfo "$mod" >/dev/null 2>&1; then
+            recommended+=("$mod")
+        fi
+    done
 
-            chmod 644 /etc/mkinitcpio.conf.d/99-steamos-nvidia.conf \
-                || return 1
+    # Show checklist with recommended modules pre-checked.
+    local -a checklist_args=()
+    for mod in $CRITICAL_MODULES; do
+        local desc=""
+        case "$mod" in
+            thunderbolt)      desc="Thunderbolt dock/eGPU support" ;;
+            typec)            desc="USB Type-C (Thunderbolt dependency)" ;;
+            xhci_hcd)         desc="USB 3.0 controller" ;;
+            nvidia)           desc="NVIDIA GPU driver" ;;
+            nvidia_modeset)   desc="NVIDIA display modesetting" ;;
+            nvidia_drm)       desc="NVIDIA DRM/KMS support" ;;
+            nvidia_uvm)       desc="NVIDIA unified memory (CUDA)" ;;
+            nvme)             desc="NVMe storage" ;;
+            ahci)             desc="SATA storage" ;;
+            btrfs)            desc="Btrfs filesystem" ;;
+            i915)             desc="Intel integrated GPU" ;;
+            xe)               desc="Intel discrete GPU (Arc)" ;;
+            usbhid)           desc="USB input devices (keyboard/mouse)" ;;
+            hid_generic)      desc="Generic HID support" ;;
+        esac
 
-        elif [[ -f /etc/mkinitcpio.conf ]]; then
+        local check="FALSE"
+        for r in "${recommended[@]}"; do
+            [[ "$r" == "$mod" ]] && check="TRUE" && break
+        done
 
-            if grep -q '^MODULES=()' /etc/mkinitcpio.conf; then
-                sed -i \
-                    's/^MODULES=()/MODULES=(nvidia nvidia_modeset nvidia_drm nvidia_uvm)/' \
-                    /etc/mkinitcpio.conf \
-                    || return 1
+        checklist_args+=("$check" "$mod" "$desc")
+    done
 
-            elif ! grep -q 'nvidia_drm' /etc/mkinitcpio.conf; then
-                warn "Could not safely update MODULES in /etc/mkinitcpio.conf"
+    local selected
+    local egpu_note=""
+    if [[ "$egpu_mode" == "egpu" ]]; then
+        egpu_note="\n\n<b>eGPU mode:</b> nvidia modules excluded — they load via udev after Thunderbolt."
+    fi
+    selected="$(yad --list --checklist \
+        --title="Critical Modules for Initramfs" \
+        --text="Select modules to include in the initramfs.\n\nThese load before the root filesystem mounts.\nChecked = recommended for your hardware.$egpu_note" \
+        --column="" --column="Module" --column="Description" \
+        --width=550 --height=500 \
+        --separator=' ' \
+        --print-column=2 \
+        "${checklist_args[@]}" 2>/dev/null)" || return 0
+
+    # Clean up selection
+    selected="$(echo "$selected" | tr -d '|' | xargs)"
+    [[ -n "$selected" ]] || { log "No modules selected"; return 0; }
+
+    log "Selected modules: $selected"
+
+    # Verify each selected module exists in the target rootfs.
+    # Use the kernel version from the target rootfs, not the running kernel.
+    local kver
+    # shellcheck disable=SC2012
+    kver="$(ls "$config_root/usr/lib/modules/" 2>/dev/null | head -1)"
+    if [[ -z "$kver" ]]; then
+        warn "Could not detect kernel version in $config_root/usr/lib/modules/"
+        kver="$(uname -r)"
+        log "Falling back to running kernel: $kver"
+    else
+        log "Target kernel: $kver"
+    fi
+
+    local missing_modules=""
+    for mod in $selected; do
+        if ! find "$config_root/usr/lib/modules/$kver" -name "${mod}.ko*" 2>/dev/null | head -1 | grep -q .; then
+            missing_modules+=" $mod"
+        fi
+    done
+    if [[ -n "$missing_modules" ]]; then
+        warn "These modules were not found in $config_root/usr/lib/modules/$kver:$missing_modules"
+        warn "They will be added to the config but won't load until installed."
+    fi
+
+    # Write config to the target root
+    if command -v dracut >/dev/null 2>&1 || [[ -x "$config_root/usr/bin/dracut" ]]; then
+        log "Configuring for dracut"
+        install -d -m755 "$config_root/etc/dracut.conf.d" || return 1
+        echo "add_drivers+=\" $selected \"" > "$config_root/etc/dracut.conf.d/99-steamos-nvidia.conf"
+        chmod 644 "$config_root/etc/dracut.conf.d/99-steamos-nvidia.conf"
+        if [[ "$config_root" == "/" ]]; then
+            log "Regenerating initramfs (dracut)"
+            dracut -f || warn "dracut regeneration failed"
+        else
+            log "Config written to $TARGET_ROOT_LABEL (regenerate initramfs after booting it)"
+        fi
+    elif command -v mkinitcpio >/dev/null 2>&1 || [[ -x "$config_root/usr/bin/mkinitcpio" ]]; then
+        log "Configuring for mkinitcpio"
+        if [[ -d "$config_root/etc/mkinitcpio.conf.d" ]]; then
+            echo "MODULES+=($selected)" > "$config_root/etc/mkinitcpio.conf.d/99-steamos-nvidia.conf"
+            chmod 644 "$config_root/etc/mkinitcpio.conf.d/99-steamos-nvidia.conf"
+        elif [[ -f "$config_root/etc/mkinitcpio.conf" ]]; then
+            if grep -q '^MODULES=()' "$config_root/etc/mkinitcpio.conf"; then
+                sed -i "s/^MODULES=()/MODULES=($selected)/" "$config_root/etc/mkinitcpio.conf"
+            elif ! grep -q 'nvidia_drm' "$config_root/etc/mkinitcpio.conf"; then
+                warn "Could not safely update MODULES in $config_root/etc/mkinitcpio.conf"
+                [[ $needs_umount -eq 1 ]] && umount "$config_root" 2>/dev/null
                 return 1
             fi
-
-        else
-            warn "mkinitcpio configuration not found"
-            return 1
         fi
-
-        log "Regenerating initramfs"
-
-        mkinitcpio -P \
-            || return 1
-
-        return 0
+        if [[ "$config_root" == "/" ]]; then
+            # Check boot space before regenerating
+            local boot_avail
+            boot_avail="$(df -m /boot 2>/dev/null | awk 'NR==2{print $4}' || echo 0)"
+            if (( boot_avail < 200 )); then
+                warn "/boot has only ${boot_avail}MB free — skipping initramfs regeneration"
+                warn "Run 'mkinitcpio -P' manually after freeing space on /boot"
+            else
+                log "Regenerating initramfs (mkinitcpio)"
+                mkinitcpio -P || warn "mkinitcpio regeneration failed"
+            fi
+        else
+            log "Config written (regenerate initramfs after booting target)"
+        fi
+    else
+        warn "Neither dracut nor mkinitcpio found"
+        return 1
     fi
 
+    log "Critical modules configured: $selected"
 
-    warn "Neither dracut nor mkinitcpio was found"
-    return 1
+    # If eGPU mode, remove nvidia early-loading from grub so nvidia loads
+    # via udev after Thunderbolt is ready.
+    # The grub config is shared (EFI partition), so clean both target root AND current system.
+    if [[ "$egpu_mode" == "egpu" ]]; then
+        log "eGPU mode: removing nvidia early-loading from grub"
+        local nvidia_params=" $NVIDIA_CMDLINE_ADD"
+        local grub_changed=0
+
+        # Clean target root's grub config
+        if [[ -f "$config_root/etc/default/grub" ]]; then
+            if grep -q "nvidia-drm.modeset" "$config_root/etc/default/grub"; then
+                sed -i "s/$nvidia_params//" "$config_root/etc/default/grub"
+                grub_changed=1
+                log "  Removed from $config_root/etc/default/grub"
+            fi
+        fi
+
+        # Clean EFI grub.cfg on target root
+        local efi_grub="$config_root/efi/EFI/steamos/grub.cfg"
+        if [[ -f "$efi_grub" ]]; then
+            if grep -q "nvidia-drm.modeset" "$efi_grub"; then
+                sed -i "s/$nvidia_params//" "$efi_grub"
+                grub_changed=1
+                log "  Removed from $efi_grub"
+            fi
+        fi
+
+        # Also clean current system's grub (shared EFI partition)
+        if [[ "$config_root" != "/" ]]; then
+            if [[ -f "/etc/default/grub" ]] && grep -q "nvidia-drm.modeset" "/etc/default/grub"; then
+                sed -i "s/$nvidia_params//" "/etc/default/grub"
+                grub_changed=1
+                log "  Removed from current system /etc/default/grub"
+            fi
+            if [[ -f "/efi/EFI/steamos/grub.cfg" ]] && grep -q "nvidia-drm.modeset" "/efi/EFI/steamos/grub.cfg"; then
+                sed -i "s/$nvidia_params//" "/efi/EFI/steamos/grub.cfg"
+                grub_changed=1
+                log "  Removed from current system EFI grub.cfg"
+            fi
+        fi
+
+        if [[ $grub_changed -eq 1 ]]; then
+            log "Nvidia early-loading removed — nvidia will load via udev after Thunderbolt"
+        else
+            log "No nvidia early-loading params found in grub"
+        fi
+    fi
+}
+
+
+# ============================================================
+# Root detection and selection
+# ============================================================
+
+select_target_root() {
+    detect_roots
+
+    log "Detected roots: A=${ROOT_A:-none} B=${ROOT_B:-none} Current=${ROOT_CURRENT_LABEL:-unknown}"
+
+    local -a options=()
+    local current_label="${ROOT_CURRENT_LABEL:-Current (unknown)}"
+
+    # selectable-rows: click a row to select it, OK to confirm
+    options+=("current" "$current_label")
+    [[ -n "$ROOT_A" ]] && options+=("A" "Root A ($ROOT_A)")
+    [[ -n "$ROOT_B" ]] && options+=("B" "Root B ($ROOT_B)")
+
+    log "Options: ${options[*]}"
+
+    local selected
+
+    # Use yad (consistent with gui.sh)
+    if command -v yad >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
+        selected="$(yad --list \
+            --title="Select Target Root" \
+            --text="Which root filesystem should be configured?" \
+            --column="Target" --column="Device" \
+            --width=400 --height=250 \
+            --selectable-rows \
+            --print-column=1 \
+            "${options[@]}" 2>/dev/null)" || true
+        selected="$(echo "$selected" | tr -d '|' | tr -d '\n' | xargs)"
+    fi
+
+    # Fall back to terminal if no display
+    if [[ -z "$selected" ]]; then
+        echo ""
+        echo "Select target root filesystem:"
+        echo "  1) Current (${ROOT_CURRENT_LABEL:-unknown})"
+        [[ -n "$ROOT_A" ]] && echo "  2) Root A ($ROOT_A)"
+        [[ -n "$ROOT_B" ]] && echo "  3) Root B ($ROOT_B)"
+        echo ""
+        read -rp "Choice [1]: " choice
+        case "${choice:-1}" in
+            1) selected="current" ;;
+            2) selected="A" ;;
+            3) selected="B" ;;
+            *) selected="current" ;;
+        esac
+    fi
+
+    log "User selected: '$selected'"
+
+    case "$selected" in
+        current) TARGET_ROOT=""; TARGET_ROOT_LABEL="Current root" ;;
+        A)       TARGET_ROOT="$ROOT_A"; TARGET_ROOT_LABEL="Root A" ;;
+        B)       TARGET_ROOT="$ROOT_B"; TARGET_ROOT_LABEL="Root B" ;;
+        *)       log "Unknown selection: '$selected'"; return 1 ;;
+    esac
 }
 
 
@@ -326,6 +815,7 @@ EOF
 
 apply_actions() {
     local selected="$1"
+    local target_root="${2:-}"  # empty = current root
     local action
     local -a actions
 
@@ -350,6 +840,27 @@ apply_actions() {
     date
     echo
 
+    # ---- Set up chroot for offline root ----
+    local config_root="/"
+    local needs_umount=0
+    local target_label="Current root"
+
+    if [[ -n "$target_root" ]]; then
+        target_label="$(lsblk -no PARTLABEL "$target_root" 2>/dev/null || echo "$target_root")"
+        config_root="/tmp/post-install-root-$$"
+        mkdir -p "$config_root"
+        log "Mounting $target_label ($target_root) at $config_root"
+        mount -o rw "$target_root" "$config_root" || die "Failed to mount $target_root"
+        needs_umount=1
+
+        # Set up chroot environment
+        mount -t proc proc "$config_root/proc"
+        mount --rbind /sys "$config_root/sys"
+        mount --rbind /dev "$config_root/dev"
+    fi
+
+    log "Target: $target_label"
+
     make_rootfs_writable
 
     #
@@ -359,9 +870,16 @@ apply_actions() {
     trap restore_rootfs_readonly EXIT
 
     IFS='|' read -r -a actions <<< "$selected"
+    log "Worker received ${#actions[@]} actions: ${actions[*]}"
 
     for action in "${actions[@]}"; do
         case "$action" in
+
+            resize)
+                run_action \
+                    "Expanding root filesystems" \
+                    apply_resize_roots
+                ;;
 
             thunderbolt)
                 run_action \
@@ -383,8 +901,38 @@ apply_actions() {
 
             initramfs)
                 run_action \
-                    "Adding NVIDIA modules to initramfs" \
-                    apply_initramfs
+                    "Configuring critical modules for initramfs" \
+                    apply_critical_modules
+                ;;
+
+            keyring)
+                run_action \
+                    "Initialising pacman keyring" \
+                    apply_keyring
+                ;;
+
+            password)
+                run_action \
+                    "Setting user password" \
+                    apply_set_password
+                ;;
+
+            lockscreen)
+                run_action \
+                    "Enabling lock screen" \
+                    apply_lock_screen
+                ;;
+
+            cleanup)
+                run_action \
+                    "Cleaning up disk space" \
+                    apply_cleanup
+                ;;
+
+            reboot)
+                run_action \
+                    "Selecting boot slot" \
+                    apply_reboot_to
                 ;;
 
             "")
@@ -396,6 +944,61 @@ apply_actions() {
                 ;;
         esac
     done
+
+    # ---- Regenerate initramfs if targeting offline root ----
+    if [[ $needs_umount -eq 1 ]]; then
+        log "Regenerating initramfs for $target_label"
+        local regen_done=0
+        if [[ -x "$config_root/usr/bin/dracut" ]]; then
+            if chroot "$config_root" dracut -f; then
+                regen_done=1
+            else
+                warn "dracut regeneration failed"
+            fi
+        elif [[ -x "$config_root/usr/bin/mkinitcpio" ]]; then
+            if chroot "$config_root" mkinitcpio -P; then
+                regen_done=1
+            else
+                warn "mkinitcpio regeneration failed"
+            fi
+        fi
+        if [[ $regen_done -eq 0 ]]; then
+            warn "No initramfs tool found in $target_label"
+            warn "Creating first-boot service to regenerate initramfs"
+            # Create a oneshot service that regenerates initramfs on first boot
+            mkdir -p "$config_root/etc/systemd/system"
+            cat > "$config_root/etc/systemd/system/steamos-nvidia-initramfs.service" <<'SVCEOF'
+[Unit]
+Description=Regenerate initramfs with NVIDIA modules
+DefaultDependencies=no
+After=local-fs.target
+Before=display-manager.service
+ConditionPathExists=/etc/mkinitcpio.conf.d/99-steamos-nvidia.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mkinitcpio -P
+ExecStartPost=/bin/rm -f /etc/systemd/system/steamos-nvidia-initramfs.service
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+            # Enable the service (symlink in multi-user.target.wants)
+            mkdir -p "$config_root/etc/systemd/system/multi-user.target.wants"
+            ln -sf ../steamos-nvidia-initramfs.service \
+                "$config_root/etc/systemd/system/multi-user.target.wants/steamos-nvidia-initramfs.service"
+            log "First-boot initramfs service created"
+        fi
+    fi
+
+    # ---- Cleanup chroot ----
+    if [[ $needs_umount -eq 1 ]]; then
+        log "Unmounting $target_label"
+        umount -R "$config_root/proc" "$config_root/sys" "$config_root/dev" 2>/dev/null || true
+        umount "$config_root" 2>/dev/null || true
+        rmdir "$config_root" 2>/dev/null || true
+    fi
 
     echo
     echo "=============================================="
@@ -424,13 +1027,20 @@ if [[ "${1:-}" == "--apply" ]]; then
     shift
 
     selected="${1:-}"
+    TARGET_ROOT="${2:-}"  # empty = current root, otherwise partition device
 
     if [[ -z "$selected" ]]; then
         echo "No configuration actions supplied." >&2
         exit 1
     fi
 
-    apply_actions "$selected"
+    apply_actions "$selected" "$TARGET_ROOT"
+    exit $?
+fi
+
+# --reboot-only: just show the reboot-to-slot dialog
+if [[ "${1:-}" == "--reboot-only" ]]; then
+    apply_reboot_to
     exit $?
 fi
 
@@ -450,18 +1060,18 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 
-if ! command -v zenity >/dev/null 2>&1; then
-    echo "zenity is required for the graphical configuration utility."
+if ! command -v yad >/dev/null 2>&1; then
+    echo "yad is required for the graphical configuration utility."
     exit 1
 fi
 
 
-if ! command -v pkexec >/dev/null 2>&1; then
-    zenity \
+if ! command -v pkexec >/dev/null 2>&1 && ! command -v sudo >/dev/null 2>&1; then
+    yad \
         --error \
         --title="$TITLE" \
         --width=400 \
-        --text="<b>pkexec was not found.</b>
+        --text="<b>Neither pkexec nor sudo was found.</b>
 
 Administrator privileges are required to apply system configuration changes."
 
@@ -473,33 +1083,74 @@ fi
 # Configuration checklist
 # ============================================================
 
-SELECTED="$(
-    zenity \
+# Select target root first
+TARGET_ROOT=""
+if ! select_target_root; then
+    log "Root selection failed or cancelled"
+    exit 0
+fi
+
+    target_label="Online (current root)"
+    pw_check="TRUE"
+    cleanup_check="TRUE"
+    desktop_check="TRUE"
+    lockscreen_check="TRUE"
+    hw_scan_desc="Scan for unclaimed hardware and missing drivers"
+    pw_desc="Set user password (requires running system)"
+    cleanup_desc="Clean up disk space (pacman cache, /tmp, logs)"
+    desktop_desc="Boot into Desktop Mode by default"
+    lockscreen_desc="Enable lock screen (requires password)"
+
+    if [[ -n "$TARGET_ROOT" ]]; then
+        target_label="Offline: $TARGET_ROOT_LABEL ($TARGET_ROOT)"
+        # Online-only actions are not available for offline roots
+        pw_check="FALSE"
+        cleanup_check="FALSE"
+        desktop_check="FALSE"
+        lockscreen_check="FALSE"
+        hw_scan_desc="Scan for unclaimed hardware [runs against current OS]"
+        pw_desc="Set user password (requires running system) [N/A offline]"
+        cleanup_desc="Clean up disk space (pacman cache, /tmp, logs) [N/A offline]"
+        desktop_desc="Boot into Desktop Mode by default [N/A offline]"
+        lockscreen_desc="Enable lock screen (requires password) [N/A offline]"
+    fi
+
+    SELECTED="$(
+    yad \
         --list \
         --checklist \
         --title="$TITLE" \
-        --text="Select the changes you want to apply:" \
+        --text="Select the changes you want to apply:\n\n<b>Target: $target_label</b>\n\nOnline actions require the running system.\nOffline actions can be applied to a mounted root." \
         --width=760 \
         --height=420 \
         --column="Apply" \
+        --column="#" \
         --column="ID" \
+        --column="Mode" \
         --column="Configuration change" \
-        --hide-column=2 \
-        --print-column=2 \
+        --hide-column=3 \
+        --print-column=3 \
         --separator='|' \
-        TRUE  thunderbolt   "Configure Thunderbolt dock and hotplug support" \
-        TRUE  hardware-scan "Install the hardware driver scan utility" \
-        TRUE  desktop       "Boot into Desktop Mode by default" \
-        TRUE  initramfs     "Add NVIDIA modules to the initramfs"
+        --sort-column=2 \
+        TRUE         1  resize        "offline" "Expand root filesystems to fill partitions" \
+        TRUE         2  thunderbolt   "offline" "Configure Thunderbolt dock and hotplug support" \
+        TRUE         3  hardware-scan "offline" "$hw_scan_desc" \
+        "$desktop_check" 4  desktop    "online"  "$desktop_desc" \
+        TRUE         5  initramfs     "offline" "Add critical modules to initramfs (interactive)" \
+        TRUE         6  keyring       "offline" "Fix pacman keyring (required for package installs)" \
+        "$pw_check"  7  password      "online"  "$pw_desc" \
+        "$lockscreen_check" 8  lockscreen "online" "$lockscreen_desc" \
+        "$cleanup_check" 9  cleanup    "online"  "$cleanup_desc" \
+        TRUE         10 reboot        "online"  "Reboot to specific root slot (A/B)"
 )"
 
-ZENITY_RC=$?
+YAD_RC=$?
 
 
 #
 # Cancel or window close.
 #
-if [[ $ZENITY_RC -ne 0 ]]; then
+if [[ $YAD_RC -ne 0 ]]; then
     exit 0
 fi
 
@@ -507,8 +1158,12 @@ fi
 #
 # OK with nothing selected.
 #
+# yad returns multiple selected rows separated by newlines (or | if only column)
+# Normalize to pipe-separated, strip empty entries
+SELECTED="$(echo "$SELECTED" | tr -s '\n' '|' | sed 's/^|//;s/|$//')"
+log "Selected actions: '$SELECTED'"
 if [[ -z "$SELECTED" ]]; then
-    zenity \
+    yad \
         --info \
         --title="$TITLE" \
         --width=360 \
@@ -526,9 +1181,19 @@ COUNT="${#SELECTED_ARRAY[@]}"
 # Elevate only the worker
 # ============================================================
 
-if pkexec /bin/bash "$SCRIPT" --apply "$SELECTED"; then
+# Elevate only the worker — prefer sudo, fall back to pkexec.
+if command -v sudo >/dev/null 2>&1; then
+    sudo /bin/bash "$SCRIPT" --apply "$SELECTED" "$TARGET_ROOT"
+elif command -v pkexec >/dev/null 2>&1; then
+    pkexec /bin/bash "$SCRIPT" --apply "$SELECTED" "$TARGET_ROOT"
+else
+    echo "Neither sudo nor pkexec found." >&2
+    exit 1
+fi
+RC=$?
+if [[ $RC -eq 0 ]]; then
 
-    zenity \
+    yad \
         --info \
         --title="$TITLE" \
         --width=450 \
@@ -539,9 +1204,7 @@ $COUNT selected configuration item(s) completed successfully.
 Some changes may require a reboot to take effect."
 
 else
-    RC=$?
-
-    zenity \
+    yad \
         --warning \
         --title="$TITLE" \
         --width=500 \

@@ -12,26 +12,67 @@ fi
 
 finalize() {
   log "Sanity checks"
-  compgen -G "$MNT/usr/lib/modules/$KVER/updates/dkms/nvidia.ko*" >/dev/null || die "nvidia.ko missing from image"
 
-  # Verify modprobe will actually select our installed modules.
-  for mod in nvidia; do
-    local path
-    path="$(chroot "$MNT" modinfo -k "$KVER" -n "$mod" 2>/dev/null)" \
-      || die "modinfo cannot resolve $mod for $KVER"
-    case "$path" in
-      /usr/lib/modules/"$KVER"/updates/*|/lib/modules/"$KVER"/updates/*) ;;
-      *) die "$mod resolves to unexpected module: $path" ;;
+  # ── Package verification ───────────────────────────────────────────────
+  # Query the image's pacman database for required packages.
+  local nvidia_ver lib32_ver fw_ver
+  nvidia_ver="$(
+    pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" nvidia-utils 2>/dev/null \
+      | awk '{print $2}' || true
+  )"
+  lib32_ver="$(
+    pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" lib32-nvidia-utils 2>/dev/null \
+      | awk '{print $2}' || true
+  )"
+  fw_ver="$(
+    pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" linux-firmware 2>/dev/null \
+      | awk '{print $2}' || true
+  )"
+
+  [[ -n "$nvidia_ver" ]] \
+    || die "nvidia-utils missing from final image pacman database"
+  [[ -n "$lib32_ver" ]] \
+    || die "lib32-nvidia-utils missing from final image pacman database"
+  [[ -n "$fw_ver" ]] \
+    || die "linux-firmware missing from final image pacman database"
+
+  log "  nvidia-utils:       $nvidia_ver"
+  log "  lib32-nvidia-utils: $lib32_ver"
+  log "  linux-firmware:     $fw_ver"
+
+  # ── Module verification ────────────────────────────────────────────────
+  # Verify kmod can resolve each module for the target kernel, that it
+  # lands in our /updates tree (not stock), and that the version matches
+  # the pacman package.
+  for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+    local modfile
+    modfile="$(modinfo -b "$MNT" -k "$KVER" -n "$mod" 2>/dev/null || true)"
+    [[ -n "$modfile" ]] \
+      || die "$mod not resolvable for kernel $KVER"
+    case "$modfile" in
+      */updates/*) ;;
+      *) die "$mod resolves to $modfile — stock module winning over our replacement" ;;
     esac
     local vermagic
-    vermagic="$(chroot "$MNT" modinfo -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
+    vermagic="$(modinfo -b "$MNT" -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
       || die "modinfo cannot read vermagic for $mod"
     [[ "$vermagic" == "$KVER "* ]] \
       || die "$mod vermagic '$vermagic' does not match $KVER"
+    log "  ✓ $mod: $modfile"
   done
 
-  # HID module checks (only if --hw-support was used).
-  if [[ $BUILD_HW_SUPPORT -eq 1 ]]; then
+  # Cross-check: module version must match the pacman package version.
+  local module_ver
+  module_ver="$(modinfo -b "$MNT" -k "$KVER" -F version nvidia 2>/dev/null || true)"
+  [[ -n "$module_ver" ]] \
+    || die "Could not determine NVIDIA kernel module version"
+  [[ "${nvidia_ver%-*}" == "$module_ver" ]] \
+    || die "NVIDIA version mismatch: pacman=$nvidia_ver module=$module_ver"
+  log "  NVIDIA kernel module: $module_ver for $KVER"
+
+  # HID module checks (only if logitech-hid was selected).
+  if [[ -n "${HW_SUPPORT_ITEMS:-}" && " $HW_SUPPORT_ITEMS " == *" logitech-hid "* ]] \
+     || [[ -z "${HW_SUPPORT_ITEMS:-}" && "${BUILD_HW_SUPPORT:-0}" -eq 1 ]]; then
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
       || die "hid-logitech-dj.ko missing from image"
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" >/dev/null \
@@ -39,8 +80,6 @@ finalize() {
     chroot "$MNT" modinfo -F alias "/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko" \
       | grep -qi 'v0000046Dp0000C547' \
       || die "image hid-logitech-dj module lacks the 046d:c547 alias"
-    compgen -G "$PACDB/libratbag-[0-9]*" >/dev/null \
-      || die "libratbag missing from image package database"
 
     # Verify HID modules resolve to our /updates replacement, not stock.
     for mod in hid-logitech-dj hid-logitech-hidpp; do
@@ -64,11 +103,13 @@ finalize() {
     grep -q 'self-healing' "$MNT/usr/bin/steamos-update" || die "update wrapper missing"
     [[ -f "$MNT/usr/bin/steamos-update.orig" ]] || die "original steamos-update not preserved"
     grep -q 'repatch' "$MNT/usr/lib/steamos-nvidia/repatch.sh" || die "repatch tool missing"
-    grep -q "^DRIVER_VERSION=\"$DRIVER_VERSION\"" "$MNT/usr/lib/steamos-nvidia/driver.conf" || die "driver.conf missing/wrong"
-    # Verify HID source bundle for self-heal.
-    if [[ $BUILD_HW_SUPPORT -eq 1 ]]; then
+    [[ -f "$MNT/usr/lib/steamos-nvidia/overlay.sh" ]] || die "overlay helper missing"
+    [[ -f "$MNT/usr/lib/steamos-nvidia/driver.conf" ]] || die "driver.conf missing"
+    # Verify HID source bundle for self-heal (only if logitech-hid was selected).
+    if [[ -n "${HW_SUPPORT_ITEMS:-}" && " $HW_SUPPORT_ITEMS " == *" logitech-hid "* ]] \
+       || [[ -z "${HW_SUPPORT_ITEMS:-}" && "${BUILD_HW_SUPPORT:-0}" -eq 1 ]]; then
       for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
-        [[ -f "$MNT/usr/lib/steamos-nvidia/hid/$f" ]] \
+        [[ -f "$HOMEMNT/.driver-packages/hid/$f" ]] \
           || die "self-heal HID source missing: $f"
       done
     fi
@@ -86,6 +127,46 @@ finalize() {
   AVAIL_AFTER="$(df -m --output=avail "$MNT" | tail -1 | tr -d ' ')"
   log "Rootfs free space after install: ${AVAIL_AFTER} MB"
 
+  # Disk usage diagnostics — distinguishes original SteamOS from our additions.
+  log "Disk usage breakdown:"
+  log "  /usr:        $(du -shx "$MNT/usr" 2>/dev/null | cut -f1)"
+  log "  /usr/lib:    $(du -shx "$MNT/usr/lib" 2>/dev/null | cut -f1)"
+  log "  /usr/lib/firmware: $(du -shx "$MNT/usr/lib/firmware" 2>/dev/null | cut -f1)"
+  log "  /usr/lib/modules: $(du -shx "$MNT/usr/lib/modules" 2>/dev/null | cut -f1)"
+  log "  /usr/share:  $(du -shx "$MNT/usr/share" 2>/dev/null | cut -f1)"
+
+  # Per-package apparent size — this is what WE added to the original SteamOS.
+  # Directories excluded (du on /usr/ would recursively count everything).
+  if [[ ${#NEW_PKGS[@]} -gt 0 ]]; then
+    log "  Per-package additions (apparent, files only):"
+    local pkg total_payload_kb=0
+    for pkg in "${NEW_PKGS[@]}"; do
+      local pkg_usage
+      pkg_usage="$(pacman -Qlq --dbpath "$MNT/usr/lib/holo/pacmandb" "$pkg" 2>/dev/null \
+        | while IFS= read -r f; do
+            [[ -f "$MNT$f" || -L "$MNT$f" ]] && printf '%s\0' "$MNT$f"
+          done \
+        | xargs -0 du -c --apparent-size --no-dereference 2>/dev/null \
+        | tail -1 | cut -f1)" || true
+      pkg_usage="${pkg_usage:-0}"
+      log "    $pkg: ${pkg_usage} KiB"
+      total_payload_kb=$(( total_payload_kb + pkg_usage ))
+    done
+    log "  Total payload additions: $(( total_payload_kb / 1024 )) MB apparent"
+  fi
+
+  # Top-level /usr breakdown for quick triage.
+  log "  /usr top-level:"
+  du -xhd1 "$MNT/usr" 2>/dev/null | sort -h | tail -10 | while IFS= read -r line; do
+    log "    $line"
+  done
+
+  # Convenience symlink so boot logs are easy to find from the command line.
+  if [[ -d "$HOMEMNT/deck/logs/boot" ]]; then
+    ln -sfn /home/deck/logs/boot "$MNT/boot-logs"
+    log "Boot logs accessible at /boot-logs -> /home/deck/logs/boot"
+  fi
+
   # Final writability check — confirms the rootfs is still usable after all
   # modifications.  The RDONLY rebuild in prepare_writable_rootfs() made it
   # writable, but verify nothing broke that.
@@ -98,31 +179,33 @@ finalize() {
   btrfs filesystem sync "$MNT"
   sync -f "$MNT"; sync -f "$HOMEMNT"; sync -f "$EFIMNT"
 
-  # Mark the build as complete — setup_copy_image checks this before
-  # reusing a cached decompressed image.
-  touch "${OUT}.build-complete"
-
-  # Rename .building to final output — the wrapper uses a temp name so a
-  # failed build doesn't destroy a previous successful image.
-  if [[ -n "${OUT_FINAL:-}" && "$OUT" != "$OUT_FINAL" ]]; then
-    mv "$OUT" "$OUT_FINAL"
-    mv "${OUT}.src-fingerprint" "${OUT_FINAL}.src-fingerprint" 2>/dev/null || true
-    mv "${OUT}.build-complete" "${OUT_FINAL}.build-complete" 2>/dev/null || true
-    OUT="$OUT_FINAL"
-  fi
-
+  # Unmount/detach everything.  This must succeed before we publish the image
+  # so that a cleanup failure never coexists with a .build-complete marker.
   log "Unmounting"
   cleanup
   trap - EXIT
 
+  # Publish: rename .building to final output, then atomically mark complete.
+  # The wrapper uses a temp name so a failed build doesn't destroy a previous
+  # successful image.
+  if [[ -n "${OUT_FINAL:-}" && "$OUT" != "$OUT_FINAL" ]]; then
+    mv "$OUT" "$OUT_FINAL"
+    mv "${OUT}.src-fingerprint" "${OUT_FINAL}.src-fingerprint" 2>/dev/null || true
+    OUT="$OUT_FINAL"
+  fi
+
+  # Mark the build as complete — setup_copy_image and flash_image_is_complete
+  # check this before reusing a cached image.  Written last so a failed
+  # teardown never produces a false-positive marker.
+  touch "${OUT}.build-complete"
+
   log "DONE — $OUT"
   cat <<EOF
 
-  Driver:  nvidia-open (DKMS) $NVIDIA_VER for kernel $KVER
-           (latest Arch at build time, pinned — Valve's mirror only has 575.x)
+  Driver:  nvidia-open (DKMS) for kernel $KVER
 $( case $UPDATE_MODE in
-     selfheal) echo "  Updates: SELF-HEALING — updating from within Steam works; the SAME
-           pinned driver is rebuilt for each new OS version automatically
+     selfheal) echo "  Updates: SELF-HEALING — updating from within Steam works; the
+           driver is rebuilt for each new OS version automatically
            (adds 10-20 min per update; failed rebuilds cancel the update,
            system stays working). For a NEWER driver later: rerun this
            script and reinstall from the fresh USB image." ;;

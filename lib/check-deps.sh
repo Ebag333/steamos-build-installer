@@ -22,17 +22,6 @@ MODE="interactive"  # interactive | install | check-only
 [[ "${1:-}" == "--install" ]] && MODE="install"
 [[ "${1:-}" == "--check-only" ]] && MODE="check-only"
 
-# ---- permission check ----
-can_install() {
-  if [[ $EUID -eq 0 ]]; then
-    return 0
-  elif command -v sudo >/dev/null 2>&1; then
-    return 0
-  else
-    return 1
-  fi
-}
-
 HAS_PERMS="no"
 if [[ $EUID -eq 0 ]]; then
   HAS_PERMS="root"
@@ -45,29 +34,28 @@ MISSING_OPTIONAL=()
 
 # Required tools -> package name
 declare -A REQUIRED=(
-  [losetup]="util-linux"
+  [awk]="gawk"
   [blkid]="util-linux"
   [btrfs]="btrfs-progs"
-  [rsync]="rsync"
+  [bzip2]="bzip2"
   [curl]="curl"
   [depmod]="kmod"
-  [sed]="sed"
-  [awk]="gawk"
-  [tar]="tar"
-  [zstd]="zstd"
+  [gzip]="gzip"
+  [losetup]="util-linux"
   [pacman]="pacman"
+  [partx]="util-linux"
+  [pv]="pv"
   [python3]="python"
   [readelf]="binutils"
+  [rsync]="rsync"
+  [sed]="sed"
+  [tar]="tar"
+  [xz]="xz"
+  [zstd]="zstd"
 )
 
 # Optional tools -> "package:description"
 declare -A OPTIONAL=(
-  [bzip2]="bzip2:compressed .bz2 image support"
-  [gzip]="gzip:compressed .gz image support"
-  [xz]="xz:compressed .xz image support"
-  [pv]="pv:flash progress bar"
-  [yad]="yad:GUI wizard"
-  [zenity]="zenity:CLI flash wrapper GUI"
 )
 
 # ---- check phase ----
@@ -142,7 +130,8 @@ echo ""
 
 # ---- required-only: no required deps means success ----
 # Optional deps should never block the build or cause a nonzero exit.
-if [[ ${#REQUIRED_PKGS[@]} -eq 0 ]]; then
+# But in --install mode, we still want to install them.
+if [[ ${#REQUIRED_PKGS[@]} -eq 0 && "$MODE" != "install" ]]; then
   echo -e "${GREEN}All required dependencies satisfied.${NC}"
   if [[ ${#OPTIONAL_PKGS[@]} -gt 0 ]]; then
     echo -e "${YELLOW}Optional packages not installed: ${OPTIONAL_PKGS[*]}${NC}"
@@ -171,11 +160,7 @@ fi
 
 # ---- install mode: skip prompt ----
 if [[ "$MODE" == "install" ]]; then
-  TO_INSTALL=("${REQUIRED_PKGS[@]}")
-  # Include optional only if explicitly requested via env
-  if [[ "${INSTALL_OPTIONAL:-0}" -eq 1 ]]; then
-    TO_INSTALL+=("${OPTIONAL_PKGS[@]}")
-  fi
+  TO_INSTALL=("${REQUIRED_PKGS[@]}" "${OPTIONAL_PKGS[@]}")
   echo "Installing: ${TO_INSTALL[*]}"
   if [[ "$HAS_PERMS" == "root" ]]; then
     pacman -S --noconfirm "${TO_INSTALL[@]}"

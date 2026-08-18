@@ -1,0 +1,120 @@
+#!/bin/bash
+#
+# steamos-nvidia-installer — lib/common_system.sh
+# System helpers: chroot filesystem mounting, depmod, ldconfig, nvidia services.
+# Sourced by the wrapper — do not run directly.
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "lib/common_system.sh is a library — source it from the wrapper, not run directly." >&2
+  exit 1
+fi
+
+# Mount proc/sys/dev into a chroot directory.
+# Args: $1 = root path (e.g. $MNT, $MERGED, $NEWROOT)
+mount_chroot_fs() {
+  local root="${1:?mount_chroot_fs: missing root}"
+  log "Mounting chroot filesystems in $root"
+  mkdir -p "$root/proc" "$root/sys" "$root/dev"
+  mount -t proc proc "$root/proc"
+  mount --rbind /sys "$root/sys"; mount --make-rslave "$root/sys"
+  mount --rbind /dev "$root/dev"; mount --make-rslave "$root/dev"
+  log "  chroot mounts ready: proc sys dev"
+}
+
+# Unmount proc/sys/dev from a chroot directory.
+# Args: $1 = root path, $2 = mode (optional: "strict" to die on failure, default: permissive)
+umount_chroot_fs() {
+  local root="${1:?umount_chroot_fs: missing root}"
+  local mode="${2:-}"
+  log "Unmounting chroot filesystems in $root"
+  if ! umount -R "$root/proc" "$root/sys" "$root/dev" 2>/dev/null; then
+    if [[ "$mode" == "strict" ]]; then
+      warn "Failed to unmount chroot filesystems in $root"
+      warn "  Active mounts:"
+      findmnt --target "$root" -o SOURCE,TARGET,OPTIONS 2>/dev/null | while IFS= read -r line; do
+        warn "    $line"
+      done
+      die "Could not cleanly unmount chroot in $root"
+    else
+      warn "Strict unmount failed for $root, trying lazy unmount"
+      umount -Rl "$root/proc" "$root/sys" "$root/dev" 2>/dev/null || true
+    fi
+  fi
+  log "  chroot mounts removed"
+}
+
+# Run depmod + ldconfig in a chroot.
+# Args: $1 = root path, $2 = kernel version
+run_depmod_ldconfig() {
+  local root="${1:?run_depmod_ldconfig: missing root}"
+  local kver="${2:?run_depmod_ldconfig: missing kver}"
+  chroot "$root" depmod "$kver"
+  chroot "$root" ldconfig
+}
+
+# Enable nvidia power management services in a chroot.
+# Args: $1 = root path
+enable_nvidia_power_services() {
+  local root="${1:?enable_nvidia_power_services: missing root}"
+  chroot "$root" systemctl enable nvidia-suspend nvidia-resume nvidia-hibernate 2>/dev/null \
+    || warn "Could not enable nvidia power services (non-fatal)"
+}
+
+# Backup steamos-update and install the self-heal wrapper.
+# Args: $1 = root path
+backup_original_updater() {
+  local root="${1:?backup_original_updater: missing root}"
+  if [[ ! -f "$root/usr/bin/steamos-update.orig" ]]; then
+    mv "$root/usr/bin/steamos-update" "$root/usr/bin/steamos-update.orig"
+  fi
+}
+
+# Unmount a path if it is a mountpoint.  No-op when not mounted.
+# Args: $1 = path, $2 = label (used in error message)
+ensure_unmounted() {
+  local path="${1:?ensure_unmounted: missing path}"
+  local label="${2:-$path}"
+  if mountpoint -q "$path" 2>/dev/null; then
+    strict_unmount "$path" "$label" || die "Could not clean stale $label"
+  fi
+}
+
+# Log entry count and human-readable size of a directory tree.
+# Args: $1 = directory path
+count_dir_entries() {
+  local dir="${1:?count_dir_entries: missing dir}" count bytes
+  count="$(find "$dir" -mindepth 1 -printf '.' 2>/dev/null | wc -c)"
+  bytes="$(du -sh "$dir" 2>/dev/null | awk '{print $1}')"
+  log "  ${count:-0} entries, ${bytes:-unknown} on disk"
+}
+
+# Rsync with ownership/permissions/xattrs, then verify with a dry-run diff.
+# Dies if the copy or verification fails.  Optional trailing args are mount
+# paths to unmount (in order) before dying on failure.
+# Args: $1 = source (trailing slash), $2 = destination (trailing slash)
+#       $3 = label for error messages
+#       $4… = mount paths to unmount on failure (optional)
+rsync_verified() {
+  local src="${1:?}" dst="${2:?}" label="${3:-rsync}"
+  shift 3
+
+  rsync -aHAX --numeric-ids "$src" "$dst" || {
+    local m; for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
+    die "Failed to $label"
+  }
+
+  local _diff
+  _diff="$(
+    rsync -aHAXcn --numeric-ids --delete --itemize-changes "$src" "$dst"
+  )" || {
+    local m; for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
+    die "Failed to verify $label"
+  }
+
+  if [[ -n "$_diff" ]]; then
+    warn "$label verification — content differs:"
+    printf '%s\n' "$_diff" >&2
+    local m; for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
+    die "$label verification failed"
+  fi
+}
