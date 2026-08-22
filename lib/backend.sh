@@ -31,13 +31,17 @@ ADD_INSTALLER=1
 TRIM_CUDA=0
 SKIP_SIG=0
 BUILD_HW_SUPPORT=0
-HW_SUPPORT_ITEMS=""          # space-separated items: logitech-hid linux-firmware libfprint fprintd bolt dkms
+HW_SUPPORT_ITEMS=""          # space-separated items: linux-firmware libfprint fprintd bolt dkms
 THUNDERBOLT=0
 DEFAULT_SESSION=""           # "" | desktop | game
 FIX_KEYRING=0
 INITRAMFS_MODULES=""         # space-separated module list; empty = stock
-GAMING_ITEMS=""              # space-separated: trim-cuda gamemode pci-realloc tb-host-reset resize-bar fix-keyring skip-sigcheck debug-boot
+GAMING_ITEMS=""              # space-separated: trim-cuda gamemode pci-realloc tb-host-reset resize-bar fix-keyring skip-sigcheck debug-boot thunderbolt logitech-hid unset-libva-driver scx-lavd vm-tunables cpu-performance gpu-power-limit
 DEBUG_BOOT=0                 # 1 = add rd.debug rd.log=all to kernel cmdline
+INSTALL_PIPX=0               # 1 = install pipx packages from pipx-packages.conf
+PIPX_ITEMS=""                # space-separated pipx package names to install
+TARGET_VARIANT="steamdeck"    # steamdeck | steamdeck-oobe
+UPDATE_BRANCH="stable"        # stable | beta | preview | rc | bc | pc | main
 ROOTFS_SIZE=""
 WORKDIR=""
 WORKDIR_LOCATION="auto"      # auto | ram | disk
@@ -58,7 +62,7 @@ UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 backend_usage() {
   cat <<'EOF'
 Usage:
-  backend.sh --action <build|flash|list-images|list-devices|is-system-disk|configure|reboot> [options]
+  backend.sh --action <build|flash|flashless|list-images|list-devices|is-system-disk|configure|reboot> [options]
 
 Common:
   --action ACTION
@@ -77,12 +81,14 @@ Build:
   --trim-cuda
   --thunderbolt
   --hw-support
-  --hw-support-items ITEMS  Space-separated: logitech-hid linux-firmware libfprint fprintd bolt dkms
+  --hw-support-items ITEMS  Space-separated: linux-firmware libfprint fprintd bolt dkms
   --initramfs MODULES   Space-separated module list for initramfs (empty = stock)
   --gaming-items ITEMS  Space-separated: trim-cuda gamemode pci-realloc tb-host-reset resize-bar fix-keyring skip-sigcheck debug-boot
   --debug-boot          Add rd.debug rd.log=all to kernel cmdline for boot debugging
   --skip-sigcheck
   --fix-keyring
+  --oobe-variant VARIANT  steamdeck | steamdeck-oobe
+  --branch BRANCH         stable | beta | preview | rc | bc | pc | main
 
 Flash:
   --device /dev/sdX
@@ -137,6 +143,10 @@ while [[ $# -gt 0 ]]; do
     --debug-boot)        DEBUG_BOOT=1; shift ;;
     --skip-sigcheck)     SKIP_SIG=1; shift ;;
     --fix-keyring)       FIX_KEYRING=1; shift ;;
+    --oobe-variant)      TARGET_VARIANT="${2:?--oobe-variant requires a value}"; shift 2 ;;
+    --branch)            UPDATE_BRANCH="${2:?--branch requires a value}"; shift 2 ;;
+    --pipx-packages)     INSTALL_PIPX=1; shift ;;
+    --pipx-items)        PIPX_ITEMS="${2:?--pipx-items requires a list}"; INSTALL_PIPX=1; shift 2 ;;
 
     --confirm)           FLASH_CONFIRMED=1; shift ;;
     --allow-system-disk) ALLOW_SYSTEM_DISK=1; shift ;;
@@ -245,7 +255,7 @@ load_build_libs() {
   local m
   for m in common common_system common_modules common_drivers overlay rootfs-etc setup \
          grub install-hw-libs \
-         update-strategy installer finalize; do
+         update-strategy installer finalize flashless; do
     # shellcheck disable=SC1090
     source "$BACKEND_DIR/$m.sh"
   done
@@ -377,6 +387,7 @@ backend_build() {
   [[ " $GAMING_ITEMS " == *" skip-sigcheck "* ]] && SKIP_SIG=1
   # shellcheck disable=SC2034
   [[ " $GAMING_ITEMS " == *" fix-keyring "* ]]   && FIX_KEYRING=1
+  [[ " $GAMING_ITEMS " == *" thunderbolt "* ]]   && THUNDERBOLT=1
 
   # Preserve the current builder behavior while the output/publication cleanup
   # is handled as a separate refactor.
@@ -452,6 +463,11 @@ backend_build() {
   progress_emit resolve_driver
 
   # Packages + NVIDIA
+  # Temporary symlink so install-hw-libs.sh finds configs at the canonical
+  # /usr/lib/steamos-nvidia/configs/ path during the build (the real files
+  # don't land there until install_payload).  Removed below.
+  mkdir -p "$MNT/usr/lib/steamos-nvidia"
+  ln -sfn "$SCRIPT_DIR/lib/configs" "$MNT/usr/lib/steamos-nvidia/configs"
   install_hw_libs
   progress_emit install_hw
 
@@ -462,22 +478,22 @@ backend_build() {
   # Hardware configuration
   install_thunderbolt_support
 
+  # Update channel (variant + branch) and OOBE suppression
+  configure_update_channel
+
+  # Pipx packages (linuxgamebench, etc.)
+  install_pipx_packages
+
   # Build payload
   compute_payload
+
+  # Remove the temp symlink before install_payload — its mkdir -p and cp
+  # must create a real directory at the canonical path, not follow the link.
+  rm -f "$MNT/usr/lib/steamos-nvidia/configs"
 
   # Install payload
   install_payload
   progress_emit copy_payload
-
-  if [[ "$UPDATE_MODE" == selfheal ]]; then
-    log "Bundling self-heal helper libraries"
-    local helper src_helper
-    for helper in common_system common_modules common_drivers grub; do
-      src_helper="$BACKEND_DIR/$helper.sh"
-      [[ -f "$src_helper" ]] || die "Self-heal helper missing: $src_helper"
-      install -m 0644 "$src_helper" "$MNT/usr/lib/steamos-nvidia/$helper.sh"
-    done
-  fi
 
   # ── Final parameter accumulation checkpoint ──────────────────────────────
   # All add_kernel_param() calls must happen BEFORE this point.
@@ -507,6 +523,14 @@ backend_build() {
 
   if [[ -n "$DEFAULT_SESSION" ]]; then
     log "Setting default login mode to $DEFAULT_SESSION"
+
+    # Select persistent desktop session variant if available.
+    if [[ "$DEFAULT_SESSION" == "desktop" ]] \
+      && chroot "$MNT" command -v steamos-session-select >/dev/null 2>&1; then
+      chroot "$MNT" steamos-session-select plasma-wayland-persistent 2>/dev/null \
+        || warn "steamos-session-select failed in chroot (non-fatal)"
+    fi
+
     local state_toml_content
     state_toml_content="$(cat <<EOF
 version = 1
@@ -533,8 +557,45 @@ EOF
     chown -R 1000:1000 "$usb_cfg"
   fi
 
+  # Build manifest — captures the exact options used for this image.
+  # Written into the rootfs so it propagates through self-heal and can
+  # be re-ingested for reinstallation.
+  local manifest_content
+  manifest_content="$(cat <<EOF
+# steamos-nvidia build manifest — generated $(date -Iseconds)
+# This records the exact options used to produce this image.
+
+UPDATE_MODE="$UPDATE_MODE"
+TARGET_VARIANT="$TARGET_VARIANT"
+UPDATE_BRANCH="$UPDATE_BRANCH"
+DEFAULT_SESSION="$DEFAULT_SESSION"
+ADD_INSTALLER=$ADD_INSTALLER
+TRIM_CUDA=$TRIM_CUDA
+SKIP_SIG=$SKIP_SIG
+BUILD_HW_SUPPORT=$BUILD_HW_SUPPORT
+HW_SUPPORT_ITEMS="$HW_SUPPORT_ITEMS"
+THUNDERBOLT=$THUNDERBOLT
+INITRAMFS_MODULES="$INITRAMFS_MODULES"
+GAMING_ITEMS="$GAMING_ITEMS"
+DEBUG_BOOT=$DEBUG_BOOT
+FIX_KEYRING=$FIX_KEYRING
+ROOTFS_SIZE="$ROOTFS_SIZE"
+EOF
+  )"
+
+  log "Baking build manifest into rootfs"
+  mkdir -p "$MNT/usr/lib/steamos-nvidia"
+  echo "$manifest_content" > "$MNT/usr/lib/steamos-nvidia/build.conf"
+  chmod 644 "$MNT/usr/lib/steamos-nvidia/build.conf"
+
   progress_emit finalize
   finalize
+
+  # Also write alongside the image for external inspection/re-ingestion.
+  local manifest="${OUT}.conf"
+  log "Writing build manifest: $manifest"
+  echo "$manifest_content" > "$manifest"
+  chmod 644 "$manifest"
 }
 
 backend_configure() {
@@ -543,6 +604,16 @@ backend_configure() {
     exit 1
   }
   exec bash "$BACKEND_DIR/post-install.sh"
+}
+
+backend_flashless() {
+  [[ $EUID -eq 0 ]] || die "Flashless install requires root."
+  [[ -n "$IMG" ]] || die "--image is required for flashless install"
+  [[ -f "$IMG" ]] || die "Image not found: $IMG"
+  IMG="$(readlink -f "$IMG")"
+
+  load_build_libs
+  flashless_install "$IMG"
 }
 
 backend_reboot() {
@@ -564,6 +635,9 @@ case "$ACTION" in
   flash)
     load_flash_libs
     backend_flash
+    ;;
+  flashless)
+    backend_flashless
     ;;
   list-images)
     flash_discover_images

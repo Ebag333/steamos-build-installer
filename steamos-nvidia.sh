@@ -310,7 +310,7 @@ build_backend_args() {
 
 backend_needs_root() {
   case "$1" in
-    build|flash|reboot) return 0 ;;
+    build|flash|flashless|reboot) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -443,6 +443,27 @@ run_backend_gui() {
     }
     if [[ $EUID -ne 0 ]]; then
       if command -v sudo >/dev/null 2>&1; then
+        # Cache sudo credentials before launching — yad has no terminal
+        # for sudo to read a password from.
+        if ! sudo -n true 2>/dev/null; then
+          echo "[gui] sudo -n failed, prompting for password (build)..." >&2
+          local pass
+          pass="$(yad --entry \
+            --title="Authentication required" \
+            --text="Enter your password to run the build as root:" \
+            --hide-text \
+            --button="Cancel":1 \
+            --button="OK":0 \
+            --center \
+            --width=400 \
+            2>/dev/null)" || { rm -rf "$tmpdir"; return 1; }
+          printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
+            || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+          sudo -n true 2>/dev/null \
+            || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+        else
+          echo "[gui] sudo credentials cached, skipping password prompt (build)" >&2
+        fi
         launcher=(sudo
           unshare --mount --propagation private --
           bash "$BACKEND" "$@")
@@ -466,6 +487,25 @@ run_backend_gui() {
   elif [[ $EUID -ne 0 ]]; then
     # Non-build actions (flash, reboot, etc.) — no namespace isolation.
     if command -v sudo >/dev/null 2>&1; then
+      if ! sudo -n true 2>/dev/null; then
+        echo "[gui] sudo -n failed, prompting for password (non-build)..." >&2
+        local pass
+        pass="$(yad --entry \
+          --title="Authentication required" \
+          --text="Enter your password to run as root:" \
+          --hide-text \
+          --button="Cancel":1 \
+          --button="OK":0 \
+          --center \
+          --width=400 \
+          2>/dev/null)" || { rm -rf "$tmpdir"; return 1; }
+        printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
+          || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+        sudo -n true 2>/dev/null \
+          || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+      else
+        echo "[gui] sudo credentials cached, skipping password prompt (non-build)" >&2
+      fi
       launcher=(sudo bash "$BACKEND" "$@")
       echo "[gui] using sudo for elevation" >&2
     elif command -v pkexec >/dev/null 2>&1; then
@@ -655,7 +695,10 @@ ui_select_action() {
     --button="Cancel":1 \
     --button="OK":0 \
     "Build" "Build a patched SteamOS NVIDIA installer image" \
+    "Generate Config" "Save a build configuration file for later use" \
     "Flash" "Flash a completed installer image to USB" \
+    "Flashless" "Install a built image to inactive A/B slot (no USB)" \
+    "Diagnostics" "System diagnostics and reporting" \
     "Configure" "Run post-install configuration" \
     "Reboot" "Run the project reboot helper" \
     "Quit" "Exit"
@@ -760,32 +803,84 @@ eGPU users: recommended not to select video/display drivers.</span>" \
 
 # Hardware support component selection dialog.
 # Prints space-separated item list to stdout; empty if cancelled.
-# Items: logitech-hid linux-firmware libfprint fprintd bolt thunderbolt
+# Items: logitech-hid linux-firmware libfprint fprintd bolt
 ui_select_hw_support() {
+  local arch_conf="$SCRIPT_DIR/lib/configs/hw-packages-arch.conf"
+  local valve_conf="$SCRIPT_DIR/lib/configs/hw-packages-valve.conf"
+  local -a rows=()
+  local -a bad_lines=()
+  local line rest group pkg version default desc line_num
+
+  # Read Valve manifest.
+  if [[ -f "$valve_conf" ]]; then
+    line_num=0
+    while IFS= read -r line; do
+      (( ++line_num ))
+      [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
+      if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
+        bad_lines+=("  $(basename "$valve_conf"):$line_num: $line")
+        continue
+      fi
+      group="${line%%|*}"; rest="${line#*|}"
+      pkg="${rest%%|*}"; rest="${rest#*|}"
+      version="${rest%%|*}"; rest="${rest#*|}"
+      default="${rest%%|*}"; desc="${rest#*|}"
+      rows+=("$default" "$group" "$pkg" "$version" "valve" "$desc")
+    done < "$valve_conf"
+  fi
+
+  # Read Arch manifest.
+  if [[ -f "$arch_conf" ]]; then
+    line_num=0
+    while IFS= read -r line; do
+      (( ++line_num ))
+      [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
+      if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
+        bad_lines+=("  $(basename "$arch_conf"):$line_num: $line")
+        continue
+      fi
+      group="${line%%|*}"; rest="${line#*|}"
+      pkg="${rest%%|*}"; rest="${rest#*|}"
+      version="${rest%%|*}"; rest="${rest#*|}"
+      default="${rest%%|*}"; desc="${rest#*|}"
+      rows+=("$default" "$group" "$pkg" "$version" "arch" "$desc")
+    done < "$arch_conf"
+  fi
+
+  if (( ${#bad_lines[@]} > 0 )); then
+    ui_error "Malformed lines in hardware config:
+
+$(printf '%s\n' "${bad_lines[@]}")
+
+Expected format: group|package|version|default|description
+Example: Firmware|linux-firmware|latest|TRUE|Full firmware suite"
+    echo ""
+    return
+  fi
+
+  (( ${#rows[@]} > 0 )) || { ui_error "No hardware packages found in config files."; echo ""; return; }
+
   local selected
   selected="$(yad --list --checklist \
     --title="Hardware Support Components" \
     --text="<b>Select hardware support components to install.</b>
 
-<span fgcolor='gray'>Each component is independent. linux-firmware replaces Valve's Deck subset
-with the full Arch firmware suite — may cause WiFi/Bluetooth issues on Deck.</span>" \
+<span fgcolor='gray'>linux-firmware replaces Valve's Deck subset with the full Arch firmware suite.
+Packages are sourced from Valve's repository or official Arch repositories.</span>" \
     --column="Install" \
-    --column="Component" \
-    --column="Risk" \
+    --column="Group" \
+    --column="Package" \
+    --column="Version" \
+    --column="Source" \
     --column="Description" \
     --separator=" " \
-    --print-column=2 \
+    --print-column=3 \
     --center \
-    --width=700 \
-    --height=420 \
+    --width=1500 \
+    --height=840 \
     --button="Cancel":1 \
     --button="OK":0 \
-    TRUE  logitech-hid   "medium"  "Logitech receiver/HID++ kernel modules (hid-logitech-dj, hid-logitech-hidpp)" \
-    TRUE  linux-firmware  "medium"  "Full Arch firmware suite — replaces Valve's Deck subset (not recommended for Steam Deck/Machine)" \
-    TRUE  libfprint      "low"     "Fingerprint reader library" \
-    TRUE  fprintd        "low"     "Fingerprint reader daemon" \
-    TRUE  bolt           "low"     "Thunderbolt device manager (already in SteamOS, just enables service)" \
-    TRUE  thunderbolt    "low"     "Thunderbolt dock support: PCI rescan udev rule + bolt service enable" \
+    "${rows[@]}" \
     2>/dev/null)" || selected=""
 
   # Clean trailing separators.
@@ -794,22 +889,73 @@ with the full Arch firmware suite — may cause WiFi/Bluetooth issues on Deck.</
   echo "$selected"
 }
 
+# Pipx package selection dialog.
+# Reads from pipx-packages.conf and shows a checklist.
+# Prints space-separated package names to stdout; empty if cancelled.
+ui_select_pipx_packages() {
+  local conf="$SCRIPT_DIR/lib/configs/pipx-packages.conf"
+  local -a rows=()
+  local line rest group pkg spec default venv desc
+
+  if [[ -f "$conf" ]]; then
+    while IFS= read -r line; do
+      [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
+      [[ "$line" == *"|"*"|"*"|"*"|"*"|"* ]] || continue
+      group="${line%%|*}"; rest="${line#*|}"
+      pkg="${rest%%|*}"; rest="${rest#*|}"
+      spec="${rest%%|*}"; rest="${rest#*|}"
+      default="${rest%%|*}"; rest="${rest#*|}"
+      venv="${rest%%|*}"; desc="${rest#*|}"
+      rows+=("$default" "$group" "$pkg" "$spec" "$venv" "$desc")
+    done < "$conf"
+  fi
+
+  (( ${#rows[@]} > 0 )) || { echo ""; return; }
+
+  local selected
+  selected="$(yad --list --checklist \
+    --title="Pipx Packages" \
+    --text="<b>Select pipx packages to install.</b>
+
+<span fgcolor='gray'>Packages are installed via pipx in isolated Python environments.
+Packages sharing a venv name are installed together.</span>" \
+    --column="Install" \
+    --column="Group" \
+    --column="Package" \
+    --column="Spec" \
+    --column="Venv" \
+    --column="Description" \
+    --separator=" " \
+    --print-column=3 \
+    --center \
+    --width=1000 \
+    --height=400 \
+    --button="Cancel":1 \
+    --button="OK":0 \
+    "${rows[@]}" \
+    2>/dev/null)" || selected=""
+
+  selected="${selected%%|*}"
+  selected="${selected% }"
+  echo "$selected"
+}
+
 # System tweaks selection dialog.
 # Prints space-separated item list to stdout; empty if cancelled.
-# Items: trim-cuda gamemode pci-realloc tb-host-reset resize-bar
+# Items: trim-cuda gamemode pci-realloc tb-host-reset resize-bar thunderbolt
 ui_select_system_tweaks() {
   local selected
   selected="$(yad --list --checklist \
-    --title="Gaming Tweaks" \
-    --text="<b>Select gaming optimizations to apply.</b>" \
+    --title="System Optimizations" \
+    --text="<b>Select system optimizations to apply.</b>" \
     --column="Enable" \
     --column="Tweak" \
     --column="Description" \
     --separator=" " \
     --print-column=2 \
     --center \
-    --width=700 \
-    --height=340 \
+    --width=800 \
+    --height=600 \
     --button="Cancel":1 \
     --button="OK":0 \
     FALSE trim-cuda "Remove CUDA/OpenCL/NVVM/OptiX libraries (~350 MB) — not needed for gaming, required for AI models" \
@@ -820,6 +966,13 @@ ui_select_system_tweaks() {
     TRUE  fix-keyring "Force initialize Arch + holo pacman keyrings" \
     FALSE skip-sigcheck "Disable pacman signature checks in build chroot" \
     FALSE debug-boot "Add rd.debug rd.log=all to kernel cmdline for boot debugging" \
+    TRUE  thunderbolt "Thunderbolt dock support: PCI rescan udev rule + bolt service enable" \
+    TRUE  logitech-hid "Logitech receiver/HID++ kernel modules (hid-logitech-dj, hid-logitech-hidpp)" \
+    TRUE  unset-libva-driver "Remove /etc/profile.d/libva.sh — stops forcing LIBVA_DRIVER_NAME=radeonsi so browser auto-detects VA-API driver" \
+    TRUE  scx-lavd "Enable scx_lavd scheduler (autopilot) — best frametime consistency, requires scx-scheds package" \
+    TRUE  vm-tunables "Tune vm.swappiness for zram (180) or disk swap (10) — SteamOS ships zram at default 60" \
+    TRUE  cpu-performance "Set CPU governor + EPP to performance on every boot" \
+    TRUE  gpu-power-limit "Raise discrete GPU power limit to vendor ceiling on every boot" \
     2>/dev/null)" || selected=""
 
   selected="${selected%%|*}"
@@ -827,12 +980,9 @@ ui_select_system_tweaks() {
   echo "$selected"
 }
 
-ui_build() {
-  require_action_dependencies build || return 0
-
-  # YAD form defaults are supplied as the values following the field
-  # declarations.  Combo entries prefixed with ^ are selected by default.
-  # This lets the entire build configuration live in one pre-populated form.
+# Collect build configuration from the shared form + sub-dialogs.
+# Prints one arg per line to stdout.  Returns 1 if cancelled.
+ui_collect_build_args() {
   local sep=$'\x1f'
   local form
 
@@ -842,14 +992,16 @@ ui_build() {
 
 Select the clean SteamOS repair image and adjust any settings you want.
 NVIDIA packages follow the version policy in hw-packages-arch.conf." \
-    --columns=2 \
+    --columns=1 \
     --separator="$sep" \
     --item-separator="!" \
     --align=left \
     --center \
     --width=1000 \
-    --height=520 \
+    --height=600 \
     --field="Base image!Clean SteamOS repair image (.img or compressed):FL" \
+    --field="OOBE:CB" \
+    --field="Branch:CB" \
     --field="Rootfs size!Size in MiB, or use K/M/G suffixes" \
     --field="Default session:CB" \
     --field="Update mode:CB" \
@@ -859,12 +1011,12 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK" \
     --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK" \
     --field="Add one-click installer!Adds desktop icon to install SteamOS to internal drive:CHK" \
-    --field=":LBL" \
-    --field=":LBL" \
-    --field=":LBL" \
+    --field="Pipx packages!Install Python applications via pipx from pipx-packages.conf:CHK" \
     --button="Cancel":1 \
-    --button="Build":0 \
+    --button="OK":0 \
     "" \
+    "^steamdeck!steamdeck-oobe" \
+    "^stable!beta!preview!rc!bc!pc!main" \
     "10240" \
     "^stock!game!desktop" \
     "^selfheal!hold!stock" \
@@ -874,31 +1026,54 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     "FALSE" \
     "TRUE" \
     "TRUE" \
-    "" "" "" \
-    2>/dev/null)" || return 0
+    "TRUE" \
+    2>/dev/null)" || return 1
 
-  local base_image rootfs session update workspace workdir
-  local hw_support initramfs_support system_tweaks add_installer
-  local _spacer1 _spacer2 _spacer3
+  local base_image target_variant update_branch rootfs session update workspace workdir
+  local hw_support initramfs_support system_tweaks add_installer pipx_support
 
   IFS="$sep" read -r \
-    base_image rootfs session update workspace workdir \
-    hw_support initramfs_support system_tweaks add_installer \
-    _spacer1 _spacer2 _spacer3 \
+    base_image target_variant update_branch rootfs session update workspace workdir \
+    hw_support initramfs_support system_tweaks add_installer pipx_support \
     <<<"$form"
-
-  [[ -n "$base_image" && -f "$base_image" ]] || {
-    ui_error "Select a valid SteamOS repair image."
-    return 0
-  }
 
   rootfs="${rootfs:-10240}"
   session="${session:-stock}"
   update="${update:-selfheal}"
   workspace="${workspace:-auto}"
+  target_variant="${target_variant:-steamdeck}"
+  update_branch="${update_branch:-stable}"
 
-  # "automatic" is a UI sentinel.  Do not pass --workingdir in that case,
-  # because an explicit directory disables backend auto workspace selection.
+  if [[ "$target_variant" == "steamdeck-oobe" ]]; then
+    yad --question \
+      --title="OOBE Reset Warning" \
+      --text="<b>Warning: OOBE will destroy the Steam library, settings, and configuration.</b>
+
+This includes all downloaded games unless they are in a non-default location. It is recommended to use this option only if you also want to reset the Steam client in addition to the base operating system.
+
+All other files on /home/ are preserved (downloads, documents, desktop, Flatpak apps, etc)." \
+      --button="Cancel":1 \
+      --button="Accept":0 \
+      --width=500 \
+      --center \
+      2>/dev/null || return 1
+  fi
+
+  if [[ "$update_branch" != "stable" ]]; then
+    local branch_text="<b>The Stable branch is recommended for most users.</b> Beta and preview are more prone to unexpected issues."
+    if [[ "$update_branch" != "beta" && "$update_branch" != "preview" ]]; then
+      branch_text+=$'\n\n'"Branches other than stable, beta, and preview are undocumented, choose at your own risk!"
+    fi
+    yad --question \
+      --title="Branch Warning" \
+      --text="$branch_text" \
+      --button="Cancel":1 \
+      --button="Accept":0 \
+      --width=500 \
+      --center \
+      2>/dev/null || return 1
+  fi
+
   if [[ -z "$workdir" || "$workdir" == "automatic" ]]; then
     workdir=""
   fi
@@ -918,53 +1093,73 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     stock) args+=(--no-hold-updates) ;;
   esac
 
-  # Hardware support — show component selection dialog if checkbox is checked.
   if [[ "${hw_support^^}" == "TRUE" ]]; then
     local hw_items
     hw_items="$(ui_select_hw_support)"
-    if [[ -z "$hw_items" ]]; then
-      return 0  # cancelled — back to main menu
-    fi
-    # Normalize: yad may output newlines instead of spaces.
+    if [[ -z "$hw_items" ]]; then return 1; fi
     hw_items="$(echo "$hw_items" | tr '\n' ' ' | xargs)"
     args+=(--hw-support-items "$hw_items")
-    # Thunderbolt is now selected inside the hardware support dialog.
-    [[ " $hw_items " == *" thunderbolt "* ]] && args+=(--thunderbolt)
   fi
   [[ "${add_installer^^}" != "TRUE" ]] && args+=(--no-installer)
 
-  # System tweaks — show dialog if checkbox is checked.
+  # Pipx packages — show selection dialog if checkbox is checked.
+  if [[ "${pipx_support^^}" == "TRUE" ]]; then
+    local pipx_items
+    pipx_items="$(ui_select_pipx_packages)"
+    if [[ -z "$pipx_items" ]]; then return 1; fi
+    pipx_items="$(echo "$pipx_items" | tr '\n' ' ' | xargs)"
+    args+=(--pipx-items "$pipx_items")
+  fi
+
   if [[ "${system_tweaks^^}" == "TRUE" ]]; then
     local gaming_items
     gaming_items="$(ui_select_system_tweaks)"
-    if [[ -z "$gaming_items" ]]; then
-      return 0  # cancelled — back to main menu
-    fi
+    if [[ -z "$gaming_items" ]]; then return 1; fi
     gaming_items="$(echo "$gaming_items" | tr '\n' ' ' | xargs)"
     args+=(--gaming-items "$gaming_items")
-    # Backward compat: pass --trim-cuda if selected.
-    [[ " $gaming_items " == *" trim-cuda "* ]] && args+=(--trim-cuda)
-    # Pass individual flags extracted from gaming items.
-    [[ " $gaming_items " == *" skip-sigcheck "* ]] && args+=(--skip-sigcheck)
-    [[ " $gaming_items " == *" fix-keyring "* ]]    && args+=(--fix-keyring)
-    [[ " $gaming_items " == *" debug-boot "* ]]     && args+=(--debug-boot)
+    [[ " $gaming_items" == *" trim-cuda "* ]] && args+=(--trim-cuda)
+    [[ " $gaming_items" == *" skip-sigcheck "* ]] && args+=(--skip-sigcheck)
+    [[ " $gaming_items" == *" fix-keyring "* ]]    && args+=(--fix-keyring)
+    [[ " $gaming_items" == *" debug-boot "* ]]     && args+=(--debug-boot)
+    [[ " $gaming_items" == *" thunderbolt "* ]]    && args+=(--thunderbolt)
   fi
 
-  # Initramfs module selection — show dialog if checkbox is checked.
   if [[ "${initramfs_support^^}" == "TRUE" ]]; then
     local initramfs_mods
     initramfs_mods="$(ui_select_initramfs_modules)"
-    if [[ -z "$initramfs_mods" ]]; then
-      return 0  # cancelled — back to main menu
-    fi
+    if [[ -z "$initramfs_mods" ]]; then return 1; fi
     args+=(--initramfs "$initramfs_mods")
   fi
 
+  args+=(--oobe-variant "$target_variant")
+  args+=(--branch "$update_branch")
+
+  printf '%s\n' "${args[@]}"
+}
+
+ui_build() {
+  require_action_dependencies build || return 0
+
+  local -a args
+  mapfile -t args < <(ui_collect_build_args) || return 0
+  (( ${#args[@]} > 0 )) || return 0
+
+  # Extract source image for the confirm dialog.
+  local source_img=""
+  local i
+  for (( i=0; i<${#args[@]}; i++ )); do
+    if [[ "${args[$i]}" == "--image" ]]; then
+      source_img="${args[$((i+1))]}"
+      break
+    fi
+  done
+
   local feature_summary=""
-  [[ "${hw_support^^}" == "TRUE" ]]  && feature_summary+="Hardware support\n"
-  [[ "${initramfs_support^^}" == "TRUE" ]] && feature_summary+="Initramfs customization\n"
-  [[ "${system_tweaks^^}" == "TRUE" ]] && feature_summary+="System tweaks\n"
-  [[ "${add_installer^^}" == "TRUE" ]] && feature_summary+="One-click installer\n"
+  [[ " ${args[*]} " == *" --hw-support-items "* ]]  && feature_summary+="Hardware support\n"
+  [[ " ${args[*]} " == *" --initramfs "* ]]          && feature_summary+="Initramfs customization\n"
+  [[ " ${args[*]} " == *" --gaming-items "* ]]       && feature_summary+="System tweaks\n"
+  [[ " ${args[*]} " == *" --pipx-items "* ]]         && feature_summary+="Pipx packages\n"
+  [[ " ${args[*]} " != *" --no-installer "* ]]       && feature_summary+="One-click installer\n"
   [[ -n "$feature_summary" ]] || feature_summary="None\n"
 
   yad --question \
@@ -972,13 +1167,7 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     --text="<b>Build NVIDIA-patched SteamOS image?</b>
 
 <b>Source:</b>
-$base_image
-
-<b>Rootfs:</b> $rootfs
-<b>Session:</b> $session
-<b>Update mode:</b> $update
-<b>Workspace:</b> $workspace
-<b>Working directory:</b> ${workdir:-automatic}
+$source_img
 
 <b>Features:</b>
 $(printf '%b' "$feature_summary")" \
@@ -998,6 +1187,63 @@ $output
 }<b>Log:</b>
 $GUI_LAST_LOG"
   fi
+}
+
+ui_generate_conf() {
+  local -a args
+  mapfile -t args < <(ui_collect_build_args) || return 0
+
+  (( ${#args[@]} > 0 )) || { ui_error "No configuration collected."; return 0; }
+
+  # Parse the args into a conf file.
+  local conf_content="# steamos-nvidia build config — generated $(date -Iseconds)\n"
+  local i key val
+  for (( i=0; i<${#args[@]}; i++ )); do
+    case "${args[$i]}" in
+      --image)            key=""; val="${args[$((i+1))]}" ; conf_content+="IMG=\"$val\"\n" ; (( i++ )) ; continue ;;
+      --rootfs-size)      key="ROOTFS_SIZE" ;;
+      --session)          key="DEFAULT_SESSION" ;;
+      --workdir-location) key="WORKDIR_LOCATION" ;;
+      --workingdir)       key="WORKDIR" ;;
+      --hold-updates)     conf_content+="UPDATE_MODE=\"hold\"\n" ; continue ;;
+      --no-hold-updates)  conf_content+="UPDATE_MODE=\"stock\"\n" ; continue ;;
+      --hw-support-items) key="HW_SUPPORT_ITEMS" ;;
+      --no-installer)     conf_content+="ADD_INSTALLER=0\n" ; continue ;;
+      --gaming-items)     key="GAMING_ITEMS" ;;
+      --trim-cuda)        conf_content+="TRIM_CUDA=1\n" ; continue ;;
+      --skip-sigcheck)    conf_content+="SKIP_SIG=1\n" ; continue ;;
+      --fix-keyring)      conf_content+="FIX_KEYRING=1\n" ; continue ;;
+      --debug-boot)       conf_content+="DEBUG_BOOT=1\n" ; continue ;;
+      --thunderbolt)      conf_content+="THUNDERBOLT=1\n" ; continue ;;
+      --initramfs)        key="INITRAMFS_MODULES" ;;
+      --oobe-variant)     key="TARGET_VARIANT" ;;
+      --branch)           key="UPDATE_BRANCH" ;;
+      --action)           (( i++ )) ; continue ;;
+      *) continue ;;
+    esac
+    val="${args[$((i+1))]}"
+    conf_content+="$key=\"$val\"\n"
+    (( i++ ))
+  done
+
+  # Ask where to save.
+  local outfile
+  outfile="$(yad --file --save \
+    --title="Save Build Configuration" \
+    --filename="steamos-nvidia-build.conf" \
+    --file-filter="Config files (*.conf) | *.conf" \
+    --center \
+    --width=600 \
+    2>/dev/null)" || return 0
+
+  printf '%b' "$conf_content" > "$outfile"
+  chmod 644 "$outfile"
+
+  ui_info "<b>Configuration saved.</b>
+
+$outfile
+
+Use <tt>--config $outfile</tt> to re-ingest this configuration, or load it from the Build menu."
 }
 
 ui_flash_pick_image() {
@@ -1250,6 +1496,127 @@ $device — $model ($tran, $size)
   fi
 }
 
+ui_flashless() {
+  require_action_dependencies flash || return 0
+
+  local image
+  image="$(ui_flash_pick_image)" || return 0
+  [[ -n "$image" ]] || return 0
+  image="${image%%|*}"
+
+  yad --question \
+    --title="Flashless Install" \
+    --text="<b>Install NVIDIA-patched image directly to inactive A/B slot?</b>
+
+Image: $image
+
+This will:
+  - Identify the inactive slot (A or B)
+  - Write the rootfs to that slot
+  - Rebuild the boot environment
+  - Activate the slot for next boot
+
+The currently running slot is preserved as a rollback target.
+No USB stick is required." \
+    --button="Cancel":1 \
+    --button="Install":0 \
+    --center \
+    --width=560 2>/dev/null || return 0
+
+  if run_backend_gui "Flashless install to inactive slot..." --action flashless --image "$image"; then
+    yad --info \
+      --title="Flashless Install Complete" \
+      --text="<b>Image installed to inactive slot.</b>
+
+Reboot to activate the new slot.
+If it fails to boot, SteamOS will automatically fall back." \
+      --button="OK":0 \
+      --center \
+      --width=500 2>/dev/null || true
+  fi
+}
+
+ui_diagnostics() {
+  local sep=$'\x1f'
+  local form
+
+  form="$(yad --form \
+    --title="Diagnostics" \
+    --text="<b>System Diagnostics</b>
+
+Select diagnostic options to run against the current system." \
+    --columns=2 \
+    --separator="$sep" \
+    --item-separator="!" \
+    --align=left \
+    --center \
+    --width=800 \
+    --height=400 \
+    --field="Collect boot logs:CHK" \
+    --field="Collect hardware info:CHK" \
+    --field="Collect driver state:CHK" \
+    --field="Collect package manifest:CHK" \
+    --button="Cancel":1 \
+    --button="Run":0 \
+    "TRUE" \
+    "TRUE" \
+    "TRUE" \
+    "TRUE" \
+    2>/dev/null)" || return 0
+
+  local boot_logs hw_info driver_state pkg_manifest
+
+  IFS="$sep" read -r \
+    boot_logs hw_info driver_state pkg_manifest \
+    <<<"$form"
+
+  local -a output=()
+
+  if [[ "${hw_info^^}" == "TRUE" ]]; then
+    local hw_output
+    hw_output="$(bash "$SCRIPT_DIR/lib/scan-hardware.sh" 2>&1)" || true
+    output+=("=== Hardware Info ===")
+    output+=("$hw_output")
+    output+=("")
+  fi
+
+  if [[ "${boot_logs^^}" == "TRUE" ]]; then
+    output+=("=== Boot Logs ===")
+    output+=("(not yet implemented)")
+    output+=("")
+  fi
+
+  if [[ "${driver_state^^}" == "TRUE" ]]; then
+    output+=("=== Driver State ===")
+    output+=("(not yet implemented)")
+    output+=("")
+  fi
+
+  if [[ "${pkg_manifest^^}" == "TRUE" ]]; then
+    output+=("=== Package Manifest ===")
+    output+=("(not yet implemented)")
+    output+=("")
+  fi
+
+  if (( ${#output[@]} == 0 )); then
+    ui_error "No diagnostic options selected."
+    return 0
+  fi
+
+  printf '%s\n' "${output[@]}" \
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    | yad --text-info \
+    --title="Diagnostic Results" \
+    --text="<b>Diagnostic output</b>" \
+    --fontname="monospace" \
+    --wrap \
+    --center \
+    --width=1000 \
+    --height=600 \
+    --button="OK":0 \
+    2>/dev/null || true
+}
+
 ui_main() {
   ui_require_yad
 
@@ -1275,8 +1642,17 @@ ui_main() {
       Build)
         ui_build
         ;;
+      "Generate Config")
+        ui_generate_conf
+        ;;
       Flash)
         ui_flash
+        ;;
+      Flashless)
+        ui_flashless
+        ;;
+      Diagnostics)
+        ui_diagnostics
         ;;
       Configure)
         require_action_dependencies configure || continue

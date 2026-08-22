@@ -18,8 +18,10 @@ fi
 inject_log_collector() {
   log "Injecting boot log collector"
 
+  # Ensure the persistent .steamos-nvidia tree exists (logs + recovery).
+  ensure_steamos_nvidia_dirs "$HOMEMNT"
+
   # Marker file so the collector script can find the USB at runtime.
-  mkdir -p "$HOMEMNT/.steamos-nvidia"
   touch "$HOMEMNT/.steamos-nvidia/usb-marker"
 
   # Log output directory.
@@ -207,11 +209,12 @@ install_one_click_installer() {
       -e 's|^DISK_SUFFIX=p$|DISK_SUFFIX=""; [[ "$DISK" =~ [0-9]$ ]] \&\& DISK_SUFFIX="p"|' \
       "$TOOLS/repair_device.sh"
     grep -q 'STEAMOS_TARGET_DISK' "$TOOLS/repair_device.sh" || die "DISK patch failed"
-    # skip NVMe sanitize for non-NVMe targets (it error-traps on SATA/virtio)
+    # make sanitize fault-tolerant: some NVMe drives (e.g. older WD Gen3)
+    # don't support the command and hard-fail with "Access Denied"
     # shellcheck disable=SC2016
-    sed -i '/^all)$/,/^  ;;$/ s|^  sanitize_all$|  if [[ "$DISK" == /dev/nvme* ]]; then sanitize_all; else ewarn "Non-NVMe target: skipping NVMe sanitize"; fi|' \
+    sed -i '/^all)$/,/^  ;;$/ s#^  sanitize_all$#  sanitize_all || ewarn "NVMe sanitize failed or unsupported — continuing"#' \
       "$TOOLS/repair_device.sh"
-    grep -q 'skipping NVMe sanitize' "$TOOLS/repair_device.sh" || die "sanitize patch failed"
+    grep -q 'sanitize failed or unsupported' "$TOOLS/repair_device.sh" || die "sanitize patch failed"
 
     # --rootfs-size: make rootfs-A/B bigger than Valve's default 5120 MiB and
     # expand the btrfs filesystem to fill the larger partitions after imaging.

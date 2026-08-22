@@ -26,8 +26,22 @@ mount_chroot_fs() {
 umount_chroot_fs() {
   local root="${1:?umount_chroot_fs: missing root}"
   local mode="${2:-}"
+
+  # Collect only the children that are actually mounted — avoids spurious
+  # warnings when cleanup runs before mount_chroot_fs was called.
+  local -a targets=()
+  local child
+  for child in proc sys dev; do
+    mountpoint -q "$root/$child" 2>/dev/null && targets+=("$root/$child")
+  done
+
+  if [[ ${#targets[@]} -eq 0 ]]; then
+    log "Unmounting chroot filesystems in $root (nothing mounted)"
+    return 0
+  fi
+
   log "Unmounting chroot filesystems in $root"
-  if ! umount -R "$root/proc" "$root/sys" "$root/dev" 2>/dev/null; then
+  if ! umount -R "${targets[@]}" 2>/dev/null; then
     if [[ "$mode" == "strict" ]]; then
       warn "Failed to unmount chroot filesystems in $root"
       warn "  Active mounts:"
@@ -37,7 +51,7 @@ umount_chroot_fs() {
       die "Could not cleanly unmount chroot in $root"
     else
       warn "Strict unmount failed for $root, trying lazy unmount"
-      umount -Rl "$root/proc" "$root/sys" "$root/dev" 2>/dev/null || true
+      umount -Rl "${targets[@]}" 2>/dev/null || true
     fi
   fi
   log "  chroot mounts removed"

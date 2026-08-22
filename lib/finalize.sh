@@ -70,9 +70,8 @@ finalize() {
     || die "NVIDIA version mismatch: pacman=$nvidia_ver module=$module_ver"
   log "  NVIDIA kernel module: $module_ver for $KVER"
 
-  # HID module checks (only if logitech-hid was selected).
-  if [[ -n "${HW_SUPPORT_ITEMS:-}" && " $HW_SUPPORT_ITEMS " == *" logitech-hid "* ]] \
-     || [[ -z "${HW_SUPPORT_ITEMS:-}" && "${BUILD_HW_SUPPORT:-0}" -eq 1 ]]; then
+  # HID module checks (only if logitech-hid was selected in system tweaks).
+  if [[ -n "${GAMING_ITEMS:-}" && " $GAMING_ITEMS " == *" logitech-hid "* ]]; then
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
       || die "hid-logitech-dj.ko missing from image"
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" >/dev/null \
@@ -106,10 +105,9 @@ finalize() {
     [[ -f "$MNT/usr/lib/steamos-nvidia/overlay.sh" ]] || die "overlay helper missing"
     [[ -f "$MNT/usr/lib/steamos-nvidia/driver.conf" ]] || die "driver.conf missing"
     # Verify HID source bundle for self-heal (only if logitech-hid was selected).
-    if [[ -n "${HW_SUPPORT_ITEMS:-}" && " $HW_SUPPORT_ITEMS " == *" logitech-hid "* ]] \
-       || [[ -z "${HW_SUPPORT_ITEMS:-}" && "${BUILD_HW_SUPPORT:-0}" -eq 1 ]]; then
+    if [[ -n "${GAMING_ITEMS:-}" && " $GAMING_ITEMS " == *" logitech-hid "* ]]; then
       for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
-        [[ -f "$HOMEMNT/.driver-packages/hid/$f" ]] \
+        [[ -f "$MNT/usr/lib/steamos-nvidia/hid/$f" ]] \
           || die "self-heal HID source missing: $f"
       done
     fi

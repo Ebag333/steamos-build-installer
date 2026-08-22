@@ -294,9 +294,19 @@ setup_pacman_conf() {
   # Persist downloaded packages on the ext4 workspace so they survive upper
   # layer clears between builds.  The bind mount puts the cache at /tmp/pkgcache
   # inside the chroot — the CacheDir in pacman.conf.
-  mkdir -p "$OVL_MNT/pkg-cache" "$MERGED/tmp/pkgcache"
+  local overlay_storage="${OVL_MNT:-}"
+
+  # overlay_mount_with_image() supplies OVL_MNT.
+  # Direct overlay_mount() callers such as repatch store upper/work directly
+  # beneath the supplied work directory, so derive that directory from UPPER.
+  if [[ -z "$overlay_storage" ]]; then
+    overlay_storage="$(dirname "${UPPER:?setup_pacman_conf: UPPER is not set}")"
+  fi
+
+  mkdir -p "$overlay_storage/pkg-cache" "$MERGED/tmp/pkgcache"
+
   if ! mountpoint -q "$MERGED/tmp/pkgcache" 2>/dev/null; then
-    mount --bind "$OVL_MNT/pkg-cache" "$MERGED/tmp/pkgcache" \
+    mount --bind "$overlay_storage/pkg-cache" "$MERGED/tmp/pkgcache" \
       || die "Failed to bind-mount persistent pacman cache"
   fi
 

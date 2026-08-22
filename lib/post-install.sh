@@ -150,10 +150,10 @@ EOF
 apply_hardware_scan() {
     log "Installing hardware scan utility"
 
-    install -d -m755 /usr/local/bin \
+    install -d -m755 /usr/local/bin/diagnostics \
         || return 1
 
-    cat > /usr/local/bin/scan-hardware <<'SCANEOF'
+    cat > /usr/local/bin/diagnostics/scan-hardware <<'SCANEOF'
 #!/bin/bash
 
 echo "=== Hardware scan: unclaimed PCI devices ==="
@@ -221,11 +221,11 @@ if [[ $found -eq 0 ]]; then
 fi
 SCANEOF
 
-    chmod 755 /usr/local/bin/scan-hardware \
+    chmod 755 /usr/local/bin/diagnostics/scan-hardware \
         || return 1
 
     log "Running hardware scan"
-    /usr/local/bin/scan-hardware
+    /usr/local/bin/diagnostics/scan-hardware
 
     return 0
 }
@@ -236,6 +236,14 @@ SCANEOF
 # ============================================================
 
 apply_desktop_mode() {
+    log "Configuring desktop session"
+
+    # Select persistent desktop session variant (idempotent).
+    if command -v steamos-session-select >/dev/null 2>&1; then
+        steamos-session-select plasma-wayland-persistent 2>/dev/null \
+            || warn "steamos-session-select failed (non-fatal)"
+    fi
+
     if command -v steamosctl >/dev/null 2>&1; then
         sudo -u deck steamosctl set-default-login-mode desktop
         return $?
@@ -486,6 +494,168 @@ apply_keyring() {
             || return 1
     fi
     log "Keyring initialised"
+}
+
+
+# ============================================================
+# Gamemode: group membership + user service
+# ============================================================
+
+apply_gamemode() {
+    log "Configuring gamemode"
+    if [[ "$config_root" == "/" ]]; then
+        if getent group gamemode >/dev/null 2>&1; then
+            usermod -aG gamemode deck \
+                || warn "Failed to add deck to gamemode group"
+        else
+            warn "gamemode group not found — skipping group membership"
+        fi
+        install -d -m755 /etc/systemd/user/graphical-session.target.wants
+        ln -sf /usr/lib/systemd/user/gamemoded.service \
+            /etc/systemd/user/graphical-session.target.wants/gamemoded.service \
+            || warn "Failed to enable gamemoded user service"
+    else
+        if chroot "$config_root" getent group gamemode >/dev/null 2>&1; then
+            chroot "$config_root" usermod -aG gamemode deck \
+                || warn "Failed to add deck to gamemode group"
+        else
+            warn "gamemode group not found — skipping group membership"
+        fi
+        install -d -m755 "$config_root/etc/systemd/user/graphical-session.target.wants"
+        ln -sf /usr/lib/systemd/user/gamemoded.service \
+            "$config_root/etc/systemd/user/graphical-session.target.wants/gamemoded.service" \
+            || warn "Failed to enable gamemoded user service"
+    fi
+    log "Gamemode configured"
+}
+
+
+# ============================================================
+# scx_lavd scheduler (autopilot)
+# ============================================================
+
+apply_scx_lavd() {
+    log "Configuring scx_lavd scheduler"
+    if [[ ! -x "$config_root/usr/bin/scx_lavd" ]]; then
+        warn "scx_lavd not found in $config_root — install scx-scheds first"
+        return 1
+    fi
+    local config_src="$SCRIPT_DIR/configs/scx_loader_config.toml"
+    local config_dir="$config_root/etc/scx_loader"
+    local wants_dir="$config_root/etc/systemd/system/multi-user.target.wants"
+    if [[ ! -f "$config_src" ]]; then
+        warn "scx_loader_config.toml not found in installer configs"
+        return 1
+    fi
+    if [[ "$config_root" == "/" ]]; then
+        install -d -m755 "$config_dir"
+        cp "$config_src" "$config_dir/config.toml"
+        install -d -m755 "$wants_dir"
+        ln -sf /usr/lib/systemd/system/scx.service \
+            "$wants_dir/scx.service" \
+            || warn "Failed to enable scx.service"
+        systemctl daemon-reload
+        systemctl restart scx.service 2>/dev/null \
+            || warn "Failed to start scx.service (will activate on next boot)"
+    else
+        install -d -m755 "$config_dir"
+        cp "$config_src" "$config_dir/config.toml"
+        install -d -m755 "$wants_dir"
+        ln -sf /usr/lib/systemd/system/scx.service \
+            "$wants_dir/scx.service" \
+            || warn "Failed to enable scx.service"
+    fi
+    log "scx_lavd configured via scx_loader (autopilot, pinned-slice-us 500)"
+}
+
+
+# ============================================================
+# VM tunables (swappiness)
+# ============================================================
+
+apply_vm_tunables() {
+    log "Configuring vm.swappiness"
+    local has_zram=0 current_swappiness conf_src
+
+    if [[ "$config_root" == "/" ]]; then
+        # Online: detect zram from the running system.
+        [[ -e /sys/block/zram0 ]] && has_zram=1
+        current_swappiness="$(cat /proc/sys/vm/swappiness 2>/dev/null || echo 60)"
+    else
+        # Offline: detect zram from the target image's generator config.
+        if [[ -e "$config_root/usr/lib/systemd/zram-generator.conf" ]] \
+            || [[ -e "$config_root/etc/systemd/zram-generator.conf" ]] \
+            || [[ -e "$config_root/usr/lib/systemd/zram-generator.conf.d" ]] \
+            || [[ -e "$config_root/etc/systemd/zram-generator.conf.d" ]]; then
+            has_zram=1
+        fi
+        current_swappiness="$(cat "$config_root/proc/sys/vm/swappiness" 2>/dev/null || echo 60)"
+    fi
+
+    if (( has_zram )) && (( current_swappiness < 100 )); then
+        conf_src="$SCRIPT_DIR/configs/swappiness-zram.conf"
+    elif (( ! has_zram )) && (( current_swappiness > 10 )); then
+        conf_src="$SCRIPT_DIR/configs/swappiness-disk.conf"
+    else
+        log "vm.swappiness already appropriate (${current_swappiness}, zram=${has_zram}) — skipping"
+        return 0
+    fi
+
+    install -d -m755 "$config_root/etc/sysctl.d"
+    cp "$conf_src" "$config_root/etc/sysctl.d/99-vm-swappiness.conf"
+
+    if [[ "$config_root" == "/" ]]; then
+        local target_val
+        target_val="$(grep -oP 'vm\.swappiness\s*=\s*\K[0-9]+' "$conf_src")"
+        sysctl -q -w "vm.swappiness=$target_val" 2>/dev/null \
+            || warn "Failed to apply swappiness live (will take effect on next boot)"
+    fi
+    log "vm.swappiness configured (zram=${has_zram}, was ${current_swappiness})"
+}
+
+
+# ============================================================
+# Boot-time performance hooks
+# ============================================================
+
+apply_boot_framework() {
+    local item="${1:-all}"
+    log "Installing steam-perf boot framework ($item)"
+
+    local boot_src="$SCRIPT_DIR/configs/boot"
+    local boot_dst="/usr/lib/steam-perf"
+
+    if [[ ! -d "$boot_src" ]]; then
+        warn "Boot hook sources not found at $boot_src"
+        return 1
+    fi
+
+    install -d -m755 "$boot_dst/boot.d"
+    install -d -m755 /etc/steam-perf
+
+    cp "$boot_src/apply-boot" "$boot_dst/apply-boot"
+    chmod 755 "$boot_dst/apply-boot"
+    cp "$boot_src/config.conf" /etc/steam-perf/config.conf
+
+    if [[ "$item" == "cpu-performance" || "$item" == "all" ]]; then
+        cp "$boot_src/30-cpu" "$boot_dst/boot.d/30-cpu"
+        chmod 755 "$boot_dst/boot.d/30-cpu"
+    fi
+    if [[ "$item" == "gpu-power-limit" || "$item" == "all" ]]; then
+        cp "$boot_src/20-nvidia-gpu" "$boot_dst/boot.d/20-nvidia-gpu"
+        chmod 755 "$boot_dst/boot.d/20-nvidia-gpu"
+        cp "$boot_src/25-amd-gpu" "$boot_dst/boot.d/25-amd-gpu"
+        chmod 755 "$boot_dst/boot.d/25-amd-gpu"
+    fi
+
+    cp "$boot_src/steam-perf.service" /etc/systemd/system/steam-perf.service
+    install -d -m755 /etc/systemd/system/multi-user.target.wants
+    ln -sf ../steam-perf.service \
+        /etc/systemd/system/multi-user.target.wants/steam-perf.service \
+        || warn "Failed to enable steam-perf.service"
+    systemctl daemon-reload 2>/dev/null || true
+
+    log "steam-perf boot framework installed ($item)"
 }
 
 
@@ -911,6 +1081,36 @@ apply_actions() {
                     apply_keyring
                 ;;
 
+            gamemode)
+                run_action \
+                    "Configuring gamemode" \
+                    apply_gamemode
+                ;;
+
+            scx-lavd)
+                run_action \
+                    "Configuring scx_lavd scheduler" \
+                    apply_scx_lavd
+                ;;
+
+            vm-tunables)
+                run_action \
+                    "Configuring vm.swappiness" \
+                    apply_vm_tunables
+                ;;
+
+            cpu-performance)
+                run_action \
+                    "Installing CPU performance boot hook" \
+                    apply_boot_framework "cpu-performance"
+                ;;
+
+            gpu-power-limit)
+                run_action \
+                    "Installing GPU power limit boot hook" \
+                    apply_boot_framework "gpu-power-limit"
+                ;;
+
             password)
                 run_action \
                     "Setting user password" \
@@ -998,6 +1198,19 @@ SVCEOF
         umount -R "$config_root/proc" "$config_root/sys" "$config_root/dev" 2>/dev/null || true
         umount "$config_root" 2>/dev/null || true
         rmdir "$config_root" 2>/dev/null || true
+    fi
+
+    # ---- Run user-provided custom script if present (fail open) ----
+    local _custom="$config_root/home/.steamos-nvidia/recovery/custom.sh"
+    if [[ -x "$_custom" ]]; then
+        log "Running custom script: $_custom"
+        if bash "$_custom" 2>&1; then
+            log "Custom script completed successfully"
+        else
+            warn "Custom script exited with non-zero status (non-fatal)"
+        fi
+    else
+        log "No custom script at $_custom — skipping"
     fi
 
     echo
@@ -1138,10 +1351,15 @@ fi
         "$desktop_check" 4  desktop    "online"  "$desktop_desc" \
         TRUE         5  initramfs     "offline" "Add critical modules to initramfs (interactive)" \
         TRUE         6  keyring       "offline" "Fix pacman keyring (required for package installs)" \
-        "$pw_check"  7  password      "online"  "$pw_desc" \
-        "$lockscreen_check" 8  lockscreen "online" "$lockscreen_desc" \
-        "$cleanup_check" 9  cleanup    "online"  "$cleanup_desc" \
-        TRUE         10 reboot        "online"  "Reboot to specific root slot (A/B)"
+        TRUE         7  gamemode      "online"  "Enable gamemode: add deck to group + enable gamemoded service" \
+        TRUE         8  scx-lavd      "offline" "Enable scx_lavd scheduler (autopilot) for frametime consistency" \
+        TRUE         9  vm-tunables   "offline" "Tune vm.swappiness for zram (180) or disk swap (10)" \
+        TRUE         10 cpu-performance "offline" "Set CPU governor + EPP to performance on every boot" \
+        TRUE         11 gpu-power-limit "offline" "Raise discrete GPU power limit to vendor ceiling on every boot" \
+        "$pw_check"  12 password      "online"  "$pw_desc" \
+        "$lockscreen_check" 13 lockscreen "online" "$lockscreen_desc" \
+        "$cleanup_check" 14 cleanup    "online"  "$cleanup_desc" \
+        TRUE         15 reboot        "online"  "Reboot to specific root slot (A/B)"
 )"
 
 YAD_RC=$?

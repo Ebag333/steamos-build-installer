@@ -290,18 +290,18 @@ install_payload() {
   # Bundle configs for repatch self-heal.
   log "Bundling config files for self-heal"
   mkdir -p "$MERGED/usr/lib/steamos-nvidia/configs"
-  cp "$SCRIPT_DIR/lib/configs/"* "$MERGED/usr/lib/steamos-nvidia/configs/"
+  cp -r "$SCRIPT_DIR/lib/configs/"* "$MERGED/usr/lib/steamos-nvidia/configs/"
   mkdir -p "$MNT/usr/lib/steamos-nvidia/configs"
-  cp "$SCRIPT_DIR/lib/configs/"* "$MNT/usr/lib/steamos-nvidia/configs/"
+  cp -r "$SCRIPT_DIR/lib/configs/"* "$MNT/usr/lib/steamos-nvidia/configs/"
 
   # Bundle scan-hardware.sh for manual use.
   log "Installing hardware scan tool"
-  mkdir -p "$MERGED/usr/local/bin"
-  cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MERGED/usr/local/bin/scan-hardware"
-  chmod +x "$MERGED/usr/local/bin/scan-hardware"
-  mkdir -p "$MNT/usr/local/bin"
-  cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MNT/usr/local/bin/scan-hardware"
-  chmod +x "$MNT/usr/local/bin/scan-hardware"
+  mkdir -p "$MERGED/usr/local/bin/diagnostics"
+  cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MERGED/usr/local/bin/diagnostics/scan-hardware"
+  chmod +x "$MERGED/usr/local/bin/diagnostics/scan-hardware"
+  mkdir -p "$MNT/usr/local/bin/diagnostics"
+  cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MNT/usr/local/bin/diagnostics/scan-hardware"
+  chmod +x "$MNT/usr/local/bin/diagnostics/scan-hardware"
 
   # Bundle post-install.sh for manual configuration.
   log "Installing post-install configuration script"
@@ -322,7 +322,8 @@ install_payload() {
 
   # System tweaks applied via GAMING_ITEMS.
   if [[ -n "${GAMING_ITEMS:-}" ]]; then
-    # gamemode: add deck user to gamemode group for CPU performance switching.
+    # gamemode: add deck user to gamemode group and enable the user service
+    # so games can request CPU performance switching via D-Bus.
     if [[ " $GAMING_ITEMS " == *" gamemode "* ]]; then
       log "Adding deck user to gamemode group"
       if chroot "$MNT" getent group gamemode >/dev/null 2>&1; then
@@ -331,23 +332,213 @@ install_payload() {
       else
         warn "gamemode group not found in image — skipping"
       fi
+      log "Enabling gamemoded user service"
+      mkdir -p "$MNT/etc/systemd/user/graphical-session.target.wants"
+      ln -sf /usr/lib/systemd/user/gamemoded.service \
+        "$MNT/etc/systemd/user/graphical-session.target.wants/gamemoded.service" \
+        || warn "Failed to enable gamemoded user service (non-fatal)"
     fi
 
     # Register kernel parameters with grub.sh.
     [[ " $GAMING_ITEMS " == *" pci-realloc "* ]]   && add_kernel_param "pci=realloc=on"
     [[ " $GAMING_ITEMS " == *" tb-host-reset "* ]]  && add_kernel_param "thunderbolt.host_reset=0"
     [[ " $GAMING_ITEMS " == *" resize-bar "* ]]     && add_kernel_param "nvidia.NVreg_EnableResizableBar=1"
+
+    # Remove the Valve-shipped profile.d snippet that forces
+    # LIBVA_DRIVER_NAME=radeonsi, so the browser auto-detects the
+    # correct VA-API driver instead of being forced to Radeon.
+    if [[ " $GAMING_ITEMS " == *" unset-libva-driver "* ]]; then
+      log "Removing /etc/profile.d/libva.sh (was forcing LIBVA_DRIVER_NAME=radeonsi)"
+      rm -f "$MNT/etc/profile.d/libva.sh"
+    fi
+
+    # Enable scx_lavd scheduler in autopilot mode for frametime consistency.
+    # Requires scx-scheds package providing /usr/bin/scx_lavd.
+    if [[ " $GAMING_ITEMS " == *" scx-lavd "* ]]; then
+      if [[ -x "$MNT/usr/bin/scx_lavd" ]]; then
+        log "Configuring scx_lavd scheduler (autopilot) via scx_loader"
+        mkdir -p "$MNT/etc/scx_loader"
+        cp "$SCRIPT_DIR/lib/configs/scx_loader_config.toml" \
+          "$MNT/etc/scx_loader/config.toml"
+        mkdir -p "$MNT/etc/systemd/system/multi-user.target.wants"
+        ln -sf /usr/lib/systemd/system/scx.service \
+          "$MNT/etc/systemd/system/multi-user.target.wants/scx.service" \
+          || warn "Failed to enable scx.service (non-fatal)"
+      else
+        warn "scx-lavd selected but /usr/bin/scx_lavd not found in image — skipping"
+      fi
+    fi
+
+    # Tune vm.swappiness for the target image's swap configuration.
+    # Detection uses the target's zram generator config (not the build host's
+    # /sys/block/zram0, which describes the host, not the image).
+    if [[ " $GAMING_ITEMS " == *" vm-tunables "* ]]; then
+      local _has_zram=0 _target_swappiness
+      if [[ -e "$MNT/usr/lib/systemd/zram-generator.conf" ]] \
+        || [[ -e "$MNT/etc/systemd/zram-generator.conf" ]] \
+        || [[ -e "$MNT/usr/lib/systemd/zram-generator.conf.d" ]] \
+        || [[ -e "$MNT/etc/systemd/zram-generator.conf.d" ]]; then
+        _has_zram=1
+      fi
+      # Read the target's current swappiness (fall back to kernel default 60).
+      _target_swappiness="$(cat "$MNT/proc/sys/vm/swappiness" 2>/dev/null || echo 60)"
+      if (( _has_zram )) && (( _target_swappiness < 100 )); then
+        log "Setting vm.swappiness=180 (zram present, was $_target_swappiness)"
+        mkdir -p "$MNT/etc/sysctl.d"
+        cp "$SCRIPT_DIR/lib/configs/swappiness-zram.conf" \
+          "$MNT/etc/sysctl.d/99-vm-swappiness.conf"
+      elif (( ! _has_zram )) && (( _target_swappiness > 10 )); then
+        log "Setting vm.swappiness=10 (no zram, was $_target_swappiness)"
+        mkdir -p "$MNT/etc/sysctl.d"
+        cp "$SCRIPT_DIR/lib/configs/swappiness-disk.conf" \
+          "$MNT/etc/sysctl.d/99-vm-swappiness.conf"
+      else
+        log "vm.swappiness already appropriate (${_target_swappiness}, zram=${_has_zram}) — skipping"
+      fi
+    fi
+
+    # Install boot-time performance hooks (cpu-performance / gpu-power-limit).
+    # Each hook is self-contained and idempotent — detects hardware at runtime.
+    if [[ " $GAMING_ITEMS " == *" cpu-performance "* ]] \
+      || [[ " $GAMING_ITEMS " == *" gpu-power-limit "* ]]; then
+      log "Installing steam-perf boot framework"
+      local _boot_src="$SCRIPT_DIR/lib/configs/boot"
+      local _boot_dst="$MNT/usr/lib/steam-perf"
+
+      mkdir -p "$_boot_dst/boot.d"
+      cp "$_boot_src/apply-boot" "$_boot_dst/apply-boot"
+      chmod 755 "$_boot_dst/apply-boot"
+      mkdir -p "$MNT/etc/steam-perf"
+      cp "$_boot_src/config.conf" "$MNT/etc/steam-perf/config.conf"
+
+      # Always install the runner + config; hooks are added per-item below.
+      if [[ " $GAMING_ITEMS " == *" cpu-performance "* ]]; then
+        cp "$_boot_src/30-cpu" "$_boot_dst/boot.d/30-cpu"
+        chmod 755 "$_boot_dst/boot.d/30-cpu"
+      fi
+      if [[ " $GAMING_ITEMS " == *" gpu-power-limit "* ]]; then
+        cp "$_boot_src/20-nvidia-gpu" "$_boot_dst/boot.d/20-nvidia-gpu"
+        chmod 755 "$_boot_dst/boot.d/20-nvidia-gpu"
+        cp "$_boot_src/25-amd-gpu" "$_boot_dst/boot.d/25-amd-gpu"
+        chmod 755 "$_boot_dst/boot.d/25-amd-gpu"
+      fi
+
+      mkdir -p "$MNT/etc/systemd/system/multi-user.target.wants"
+      cp "$_boot_src/steam-perf.service" \
+        "$MNT/etc/systemd/system/steam-perf.service"
+      ln -sf ../steam-perf.service \
+        "$MNT/etc/systemd/system/multi-user.target.wants/steam-perf.service" \
+        || warn "Failed to enable steam-perf.service (non-fatal)"
+    fi
   fi
+
+  # Run user-provided custom script if present (fail open).
+  local _custom="/home/.steamos-nvidia/recovery/custom.sh"
+  if [[ -x "$_custom" ]]; then
+    log "Running custom script: $_custom"
+    if bash "$_custom" 2>&1; then
+      log "Custom script completed successfully"
+    else
+      warn "Custom script exited with non-zero status (non-fatal)"
+    fi
+  else
+    log "No custom script at $_custom — skipping"
+  fi
+}
+
+# Install pipx packages from pipx-packages.conf or PIPX_ITEMS.
+# Runs inside the chroot after pacman packages are installed.
+# Uses globals: INSTALL_PIPX, PIPX_ITEMS, MNT
+install_pipx_packages() {
+  [[ "${INSTALL_PIPX:-0}" -eq 1 ]] || return 0
+
+  local conf="$SCRIPT_DIR/lib/configs/pipx-packages.conf"
+
+  log "Installing pipx packages"
+
+  # Ensure pipx is available in the chroot (check the overlay where packages
+  # were installed, not the raw image which hasn't been merged yet).
+  if ! in_chroot "command -v pipx >/dev/null 2>&1"; then
+    warn "pipx not found in chroot — skipping pipx packages"
+    return 0
+  fi
+
+  # Build a lookup of selected items from the UI.
+  local -a selected=()
+  if [[ -n "${PIPX_ITEMS:-}" ]]; then
+    read -ra selected <<< "$PIPX_ITEMS"
+  fi
+
+  # Track which venvs have been created (first package = install, rest = inject).
+  local -A venv_created=()
+
+  local line group pkg spec default venv desc
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" == *"|"*"|"*"|"*"|"*"|"* ]] || continue
+
+    group="${line%%|*}"; line="${line#*|}"
+    pkg="${line%%|*}"; line="${line#*|}"
+    spec="${line%%|*}"; line="${line#*|}"
+    default="${line%%|*}"; line="${line#*|}"
+    venv="${line%%|*}"; desc="${line#*|}"
+
+    # Install if explicitly selected by UI, or if default=TRUE and no
+    # explicit selection was made (fallback for non-UI builds).
+    local install_this=0
+    if (( ${#selected[@]} > 0 )); then
+      local s
+      for s in "${selected[@]}"; do
+        [[ "$s" == "$pkg" ]] && { install_this=1; break; }
+      done
+    else
+      [[ "$default" == "TRUE" ]] && install_this=1
+    fi
+    (( install_this )) || continue
+
+    if [[ -z "$venv" ]]; then
+      # No venv specified — standalone install.
+      log "  Installing $pkg ($spec)"
+      if in_chroot "pipx install --include-deps '$spec'" 2>/dev/null; then
+        log "    ✓ $pkg installed"
+      else
+        warn "    Failed to install $pkg via pipx (non-fatal)"
+      fi
+    elif [[ -z "${venv_created[$venv]:-}" ]]; then
+      # First package in this venv — create it.
+      log "  Installing $pkg ($spec) into venv '$venv'"
+      if in_chroot "pipx install --include-deps --suffix '' --spec '$spec' '$venv'" 2>/dev/null \
+         || in_chroot "pipx install --include-deps '$spec'" 2>/dev/null; then
+        venv_created[$venv]=1
+        log "    ✓ $pkg installed (venv: $venv)"
+      else
+        warn "    Failed to install $pkg via pipx (non-fatal)"
+      fi
+    else
+      # Subsequent package in existing venv — inject.
+      log "  Injecting $pkg ($spec) into venv '$venv'"
+      if in_chroot "pipx inject --include-deps '$venv' '$spec'" 2>/dev/null; then
+        log "    ✓ $pkg injected into $venv"
+      else
+        warn "    Failed to inject $pkg into $venv (non-fatal)"
+      fi
+    fi
+  done < "$conf"
+
+  # Ensure pipx bin dir is on PATH.
+  in_chroot "pipx ensurepath" 2>/dev/null \
+    || warn "pipx ensurepath failed (non-fatal)"
+
+  log "Pipx packages installed"
 }
 
 
 fetch_hid_sources() {
-  # Only fetch if logitech-hid was explicitly selected, or legacy --hw-support
-  # was used without --hw-support-items.
-  if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then
-    [[ " $HW_SUPPORT_ITEMS " == *" logitech-hid "* ]] || return 0
+  # Only fetch if logitech-hid was explicitly selected in system tweaks.
+  if [[ -n "${GAMING_ITEMS:-}" ]]; then
+    [[ " $GAMING_ITEMS " == *" logitech-hid "* ]] || return 0
   else
-    [[ "${BUILD_HW_SUPPORT:-0}" -eq 1 ]] || return 0
+    return 0
   fi
 
   # Default to Linux master for the latest device IDs.  Use parameter
@@ -472,12 +663,11 @@ install_thunderbolt_support() {
 }
 
 build_hid() {
-  # Only build if logitech-hid was explicitly selected, or legacy --hw-support
-  # was used without --hw-support-items.
-  if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then
-    [[ " $HW_SUPPORT_ITEMS " == *" logitech-hid "* ]] || return 0
+  # Only build if logitech-hid was explicitly selected in system tweaks.
+  if [[ -n "${GAMING_ITEMS:-}" ]]; then
+    [[ " $GAMING_ITEMS " == *" logitech-hid "* ]] || return 0
   else
-    [[ "${BUILD_HW_SUPPORT:-0}" -eq 1 ]] || return 0
+    return 0
   fi
 
   log "Building upstream Logitech receiver and HID++ modules for $KVER"
@@ -557,4 +747,130 @@ build_hid() {
   done
 
   log "Built upstream Logitech HID modules for $KVER"
+}
+
+# Configure the OS update channel (variant + branch) and optionally suppress
+# the OOBE first-boot flow.  Writes config files directly (offline-safe)
+# rather than calling atomupd-manager, which requires a live D-Bus session.
+#
+# Uses globals: TARGET_VARIANT, UPDATE_BRANCH, MNT
+configure_update_channel() {
+  local variant="${TARGET_VARIANT:-steamdeck}"
+  local branch="${UPDATE_BRANCH:-stable}"
+  local suppress_oobe=0
+
+  [[ "$variant" == "steamdeck" ]] && suppress_oobe=1
+
+  log "Configuring update channel: variant=$variant branch=$branch (suppress_oobe=$suppress_oobe)"
+
+  # ── 1) Write atomupd preferences.conf (offline — no D-Bus needed) ────────
+  local prefs_dir="$MNT/etc/steamos-atomupd"
+  local prefs="$prefs_dir/preferences.conf"
+  mkdir -p "$prefs_dir"
+  cat > "$prefs" <<EOF
+[Choices]
+Variant=$variant
+Branch=$branch
+EOF
+  chmod 644 "$prefs"
+  log "  Wrote $prefs"
+
+  if (( suppress_oobe )); then
+    # ── 2) Neutralize the destructive OOBE Steam reset in steam-jupiter ────
+    local jupiter="$MNT/usr/bin/steam-jupiter"
+    if [[ -f "$jupiter" ]]; then
+      log "  Patching steam-jupiter to remove OOBE data wipe"
+      sed -i 's/rm -rf --one-file-system "\$STEAM_DIR" "\$STEAM_LINKS"/: # neutralized by steamos-nvidia-installer/' "$jupiter"
+
+      # Fail closed: if the destructive line survived (whitespace change,
+      # restructure), abort the build rather than shipping a silently
+      # unpatched image.
+      if grep -Fq 'rm -rf --one-file-system "$STEAM_DIR" "$STEAM_LINKS"' "$jupiter"; then
+        die "failed to neutralize destructive OOBE Steam reset in steam-jupiter"
+      fi
+      log "  steam-jupiter: destructive reset line confirmed absent"
+    else
+      die "steam-jupiter not found — cannot neutralize OOBE data wipe"
+    fi
+  fi
+
+  # ── 3) Stamp variant in manifest.json (canonical path, not symlink) ──────
+  # /etc/steamos-atomupd/manifest.json may symlink into /usr/lib; resolve
+  # inside the target root namespace so relative symlinks don't escape.
+  local manifest_target manifest
+  manifest_target="$(chroot "$MNT" readlink -f /usr/lib/steamos-atomupd/manifest.json 2>/dev/null)" \
+    || manifest_target="/usr/lib/steamos-atomupd/manifest.json"
+  manifest="$MNT$manifest_target"
+  if [[ -f "$manifest" ]]; then
+    log "  Setting variant=$variant in $manifest_target"
+    sed -i "s/\"variant\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"variant\": \"$variant\"/" "$manifest"
+  else
+    die "manifest.json not found at $manifest_target"
+  fi
+
+  # ── 4) Stamp VARIANT_ID in os-release (canonical path, not symlink) ──────
+  local osrelease_target os_release
+  osrelease_target="$(chroot "$MNT" readlink -f /etc/os-release 2>/dev/null)" \
+    || osrelease_target="/etc/os-release"
+  os_release="$MNT$osrelease_target"
+  if [[ -f "$os_release" ]]; then
+    log "  Setting VARIANT_ID=$variant in $osrelease_target"
+    if grep -q "^VARIANT_ID=" "$os_release"; then
+      sed -i "s/^VARIANT_ID=.*/VARIANT_ID=$variant/" "$os_release"
+    else
+      echo "VARIANT_ID=$variant" >> "$os_release"
+    fi
+  else
+    die "/etc/os-release not found at $osrelease_target"
+  fi
+
+  # ── 5) Verify final state ────────────────────────────────────────────────
+  log "Verifying update channel configuration"
+  local verify_failed=0
+
+  # preferences.conf
+  if ! grep -q "^Variant=$variant$" "$prefs"; then
+    warn "  VERIFY FAILED: preferences.conf Variant != $variant"
+    verify_failed=1
+  else
+    log "  OK preferences.conf Variant=$variant"
+  fi
+  if ! grep -q "^Branch=$branch$" "$prefs"; then
+    warn "  VERIFY FAILED: preferences.conf Branch != $branch"
+    verify_failed=1
+  else
+    log "  OK preferences.conf Branch=$branch"
+  fi
+
+  # manifest.json
+  if ! grep -q "\"variant\"[[:space:]]*:[[:space:]]*\"$variant\"" "$manifest"; then
+    warn "  VERIFY FAILED: manifest.json variant != $variant"
+    verify_failed=1
+  else
+    log "  OK manifest.json variant=$variant"
+  fi
+
+  # os-release
+  if ! grep -q "^VARIANT_ID=$variant$" "$os_release"; then
+    warn "  VERIFY FAILED: os-release VARIANT_ID != $variant"
+    verify_failed=1
+  else
+    log "  OK os-release VARIANT_ID=$variant"
+  fi
+
+  # steam-jupiter safety (only when OOBE is suppressed)
+  if (( suppress_oobe )); then
+    if grep -Fq 'rm -rf --one-file-system "$STEAM_DIR" "$STEAM_LINKS"' "$jupiter"; then
+      warn "  VERIFY FAILED: steam-jupiter still has destructive reset"
+      verify_failed=1
+    else
+      log "  OK steam-jupiter: destructive reset absent"
+    fi
+  fi
+
+  if (( verify_failed )); then
+    die "Update channel verification failed — build aborted"
+  fi
+
+  log "Update channel configured and verified"
 }

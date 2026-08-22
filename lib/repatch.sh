@@ -22,45 +22,25 @@ exec > >(tee -a "$RUN_LOG") 2>&1
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-log()  { echo "[repatch] $*"; }
-warn() { echo "[repatch] WARNING: $*" >&2; }
-
+# Use the shared common.sh logging/failure framework with repatch-specific
+# presentation and diagnostics.
+LOG_TAG="repatch"
+LOGGER_TAG="steamos-nvidia-repatch"
+LOG_COLOR=0
 CURRENT_STEP="startup"
 FAILURE_REPORTED=0
 
 # May not exist yet if failure happens very early.
 NEWROOT=""
 
-step() {
-  CURRENT_STEP="$*"
-  log "STEP: $CURRENT_STEP"
-  logger -t steamos-nvidia-repatch -- "STEP: $CURRENT_STEP" 2>/dev/null || true
+failure_journal_context() {
+  printf "partset='%s' kver='%s'" \
+    "${PARTSET:-unknown}" \
+    "${KVER:-unknown}"
 }
 
-failure_snapshot() {
-  local rc="$1"
-  local line="$2"
-  local cmd="$3"
-  local reason="${4:-}"
+failure_snapshot_extra() {
   local _slot
-
-  warn "FAILURE"
-  warn "  rc:      $rc"
-  warn "  step:    ${CURRENT_STEP:-unknown}"
-  warn "  line:    $line"
-  warn "  command: $cmd"
-  [[ -n "$reason" ]] && warn "  reason:  $reason"
-
-  local journal_cmd="${cmd//$'\n'/ }"
-  local journal_reason="${reason//$'\n'/ }"
-
-  # Keep the journal headline readable even if BASH_COMMAND is enormous.
-  journal_cmd="${journal_cmd:0:300}"
-  journal_reason="${journal_reason:0:300}"
-
-  logger -t steamos-nvidia-repatch -- \
-    "FAIL rc=$rc step='${CURRENT_STEP:-unknown}' line=$line partset='${PARTSET:-unknown}' kver='${KVER:-unknown}' command='$journal_cmd' reason='${journal_reason:-unspecified}' log='$RUN_LOG'" \
-    2>/dev/null || true
 
   echo
   echo "=== SLOT STATE ==="
@@ -75,18 +55,6 @@ failure_snapshot() {
       --get image-invalid \
       --get comment 2>&1 || true
   done
-
-  echo
-  echo "=== MOUNTS ==="
-  findmnt 2>&1 || true
-
-  echo
-  echo "=== LOOP DEVICES ==="
-  losetup -a 2>&1 || true
-
-  echo
-  echo "=== SPACE ==="
-  df -h /home 2>&1 || true
 
   if [[ -n "${NEWROOT:-}" ]] && mountpoint -q "$NEWROOT" 2>/dev/null; then
     echo
@@ -103,60 +71,21 @@ failure_snapshot() {
   fi
 }
 
-report_failure() {
-  local rc="$1"
-  local line="$2"
-  local cmd="$3"
-  local reason="${4:-}"
+# common.sh owns log/warn/step/die, ERR handling, and the low-level mount/loop
+# helpers used transitively by overlay.sh and common_system.sh.
+if [[ ! -r "$SCRIPT_DIR/common.sh" ]]; then
+  echo "[repatch] ERROR: missing helper: $SCRIPT_DIR/common.sh" >&2
+  exit 1
+fi
+source "$SCRIPT_DIR/common.sh"
 
-  # A manually invoked die() might follow a command that returned 0.
-  (( rc != 0 )) || rc=1
-
-  # Prevent ERR + die or failures inside diagnostics from producing
-  # multiple snapshots.
-  if (( FAILURE_REPORTED )); then
-    exit "$rc"
-  fi
-  FAILURE_REPORTED=1
-
-  trap - ERR
-  set +e
-
-  failure_snapshot "$rc" "$line" "$cmd" "$reason"
-  exit "$rc"
-}
-
-on_err() {
-  local rc=$?
-  local line="${BASH_LINENO[0]:-${LINENO}}"
-  local cmd="$BASH_COMMAND"
-
-  report_failure \
-    "$rc" \
-    "$line" \
-    "$cmd" \
-    "unhandled command failure"
-}
-
-die() {
-  # Capture $? immediately so `cmd || die "..."` retains cmd's exit code.
-  local rc=$?
-  local reason="$*"
-  local line="${BASH_LINENO[0]:-${LINENO}}"
-
-  (( rc != 0 )) || rc=1
-
-  report_failure \
-    "$rc" \
-    "$line" \
-    "die: $reason" \
-    "$reason"
-}
-
-trap on_err ERR
+# Ensure the full .steamos-nvidia tree exists (logs already created above;
+# this also creates recovery/ with world-writable perms).
+ensure_steamos_nvidia_dirs
 
 for helper in overlay common_system common_modules common_drivers install-hw-libs grub; do
-  [[ -r "$SCRIPT_DIR/$helper.sh" ]]     || die "missing helper: $SCRIPT_DIR/$helper.sh"
+  [[ -r "$SCRIPT_DIR/$helper.sh" ]] \
+    || die "missing helper: $SCRIPT_DIR/$helper.sh"
 done
 source "$SCRIPT_DIR/overlay.sh"
 source "$SCRIPT_DIR/common_system.sh"
@@ -274,7 +203,7 @@ WORKIMG=/home/.steamos-nvidia-work.img
 WORK="$(mktemp -d /tmp/repatch-work.XXXXXX)"
 WORK_LOOPDEV=""
 
-cleanup() {
+repatch_cleanup() {
   local _had_e=0
   [[ -o errexit ]] && _had_e=1
   set +e
@@ -313,7 +242,7 @@ cleanup() {
     set +e
   fi
 }
-trap 'set +e; cleanup; set -e' EXIT
+trap 'set +e; repatch_cleanup; set -e' EXIT
 
 step "Mounting $ROOTDEV"
 mount -o rw,compress-force=zstd:3 "$ROOTDEV" "$NEWROOT" \
@@ -400,20 +329,21 @@ source /usr/lib/steamos-nvidia/driver.conf
 : "${FIX_KEYRING:=0}"
 : "${EXTRA_CMDLINE_ADD:=}"
 
+# Canonical HID bundle location.  Older self-heal state wrote to /home.
+HID_BUNDLE_DIR="/usr/lib/steamos-nvidia/hid"
+[[ -d "$HID_BUNDLE_DIR" ]] || HID_BUNDLE_DIR="/home/.driver-packages/hid"
+
 # Determine whether the custom Logitech modules need to be rebuilt.
 HID_EXPECTED=0
-if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then
-  [[ " ${HW_SUPPORT_ITEMS} " == *" logitech-hid "* ]] && HID_EXPECTED=1
-elif [[ "${BUILD_HW_SUPPORT:-0}" -eq 1 ]]; then
-  HID_EXPECTED=1
-elif [[ -d /home/.driver-packages/hid ]]; then
-  # Compatibility with older self-heal state that did not persist
-  # BUILD_HW_SUPPORT.
+if [[ -n "${GAMING_ITEMS:-}" ]]; then
+  [[ " ${GAMING_ITEMS} " == *" logitech-hid "* ]] && HID_EXPECTED=1
+elif [[ -d "$HID_BUNDLE_DIR" ]]; then
+  # Compatibility with older self-heal state that used HW_SUPPORT_ITEMS.
   HID_EXPECTED=1
 fi
 
 if (( HID_EXPECTED )); then
-  [[ -d /home/.driver-packages/hid ]] \
+  [[ -d "$HID_BUNDLE_DIR" ]] \
     || die "logitech-hid selected but HID source bundle is missing"
 fi
 
@@ -506,7 +436,7 @@ if (( HID_EXPECTED )); then
 
   rm -rf "$MERGED/tmp/hid-kmod"
   mkdir -p "$MERGED/tmp/hid-kmod"
-  cp -a /home/.driver-packages/hid/. "$MERGED/tmp/hid-kmod/"
+  cp -a "$HID_BUNDLE_DIR/." "$MERGED/tmp/hid-kmod/"
 
   in_chroot "make -C /usr/lib/modules/$KVER/build M=/tmp/hid-kmod clean"
   in_chroot "make -C /usr/lib/modules/$KVER/build M=/tmp/hid-kmod modules"
@@ -537,7 +467,7 @@ reconcile_initramfs "$NEWROOT" "$KVER" "${INITRAMFS_MODULES:-}"
 
 step "Reconciling target system configuration"
 
-# Reconcile gamemode group membership (idempotent).
+# Reconcile gamemode group membership + user service (idempotent).
 if [[ -n "${GAMING_ITEMS:-}" ]]; then
   if [[ " $GAMING_ITEMS " == *" gamemode "* ]]; then
     log "Checking gamemode group membership"
@@ -547,6 +477,91 @@ if [[ -n "${GAMING_ITEMS:-}" ]]; then
     else
       warn "gamemode group not found in image — skipping"
     fi
+    log "Enabling gamemoded user service"
+    mkdir -p "$NEWROOT/etc/systemd/user/graphical-session.target.wants"
+    ln -sf /usr/lib/systemd/user/gamemoded.service \
+      "$NEWROOT/etc/systemd/user/graphical-session.target.wants/gamemoded.service" \
+      || warn "Failed to enable gamemoded user service (non-fatal)"
+  fi
+
+  # Re-clobber /etc/profile.d/libva.sh — OS updates restore Valve's file
+  # that forces LIBVA_DRIVER_NAME=radeonsi.
+  if [[ " $GAMING_ITEMS " == *" unset-libva-driver "* ]]; then
+    if [[ -e "$NEWROOT/etc/profile.d/libva.sh" ]]; then
+      log "Removing /etc/profile.d/libva.sh (OS update restored it)"
+      rm -f "$NEWROOT/etc/profile.d/libva.sh"
+    fi
+  fi
+
+  # Re-apply scx_lavd config — OS updates may restore stock scx_loader config.
+  if [[ " $GAMING_ITEMS " == *" scx-lavd "* ]]; then
+    if [[ -x "$NEWROOT/usr/bin/scx_lavd" ]]; then
+      log "Reconciling scx_lavd scheduler (autopilot) via scx_loader"
+      mkdir -p "$NEWROOT/etc/scx_loader"
+      cp "$SCRIPT_DIR/configs/scx_loader_config.toml" \
+        "$NEWROOT/etc/scx_loader/config.toml"
+      mkdir -p "$NEWROOT/etc/systemd/system/multi-user.target.wants"
+      ln -sf /usr/lib/systemd/system/scx.service \
+        "$NEWROOT/etc/systemd/system/multi-user.target.wants/scx.service" \
+        || warn "Failed to enable scx.service (non-fatal)"
+    else
+      warn "scx-lavd selected but /usr/bin/scx_lavd not found — skipping"
+    fi
+  fi
+
+  # Re-apply vm.swappiness — OS updates may restore stock sysctl defaults.
+  if [[ " $GAMING_ITEMS " == *" vm-tunables "* ]]; then
+    local _has_zram=0 _target_swappiness
+    if [[ -e "$NEWROOT/usr/lib/systemd/zram-generator.conf" ]] \
+      || [[ -e "$NEWROOT/etc/systemd/zram-generator.conf" ]] \
+      || [[ -e "$NEWROOT/usr/lib/systemd/zram-generator.conf.d" ]] \
+      || [[ -e "$NEWROOT/etc/systemd/zram-generator.conf.d" ]]; then
+      _has_zram=1
+    fi
+    _target_swappiness="$(cat "$NEWROOT/proc/sys/vm/swappiness" 2>/dev/null || echo 60)"
+    if (( _has_zram )) && (( _target_swappiness < 100 )); then
+      log "Re-applying vm.swappiness=180 (zram present)"
+      mkdir -p "$NEWROOT/etc/sysctl.d"
+      cp "$SCRIPT_DIR/configs/swappiness-zram.conf" \
+        "$NEWROOT/etc/sysctl.d/99-vm-swappiness.conf"
+    elif (( ! _has_zram )) && (( _target_swappiness > 10 )); then
+      log "Re-applying vm.swappiness=10 (no zram)"
+      mkdir -p "$NEWROOT/etc/sysctl.d"
+      cp "$SCRIPT_DIR/configs/swappiness-disk.conf" \
+        "$NEWROOT/etc/sysctl.d/99-vm-swappiness.conf"
+    fi
+  fi
+
+  # Re-install boot-time performance hooks — OS updates restore the rootfs.
+  if [[ " $GAMING_ITEMS " == *" cpu-performance "* ]] \
+    || [[ " $GAMING_ITEMS " == *" gpu-power-limit "* ]]; then
+    log "Reconciling steam-perf boot framework"
+    local _boot_src="$SCRIPT_DIR/configs/boot"
+    local _boot_dst="$NEWROOT/usr/lib/steam-perf"
+
+    mkdir -p "$_boot_dst/boot.d"
+    cp "$_boot_src/apply-boot" "$_boot_dst/apply-boot"
+    chmod 755 "$_boot_dst/apply-boot"
+    mkdir -p "$NEWROOT/etc/steam-perf"
+    cp "$_boot_src/config.conf" "$NEWROOT/etc/steam-perf/config.conf"
+
+    if [[ " $GAMING_ITEMS " == *" cpu-performance "* ]]; then
+      cp "$_boot_src/30-cpu" "$_boot_dst/boot.d/30-cpu"
+      chmod 755 "$_boot_dst/boot.d/30-cpu"
+    fi
+    if [[ " $GAMING_ITEMS " == *" gpu-power-limit "* ]]; then
+      cp "$_boot_src/20-nvidia-gpu" "$_boot_dst/boot.d/20-nvidia-gpu"
+      chmod 755 "$_boot_dst/boot.d/20-nvidia-gpu"
+      cp "$_boot_src/25-amd-gpu" "$_boot_dst/boot.d/25-amd-gpu"
+      chmod 755 "$_boot_dst/boot.d/25-amd-gpu"
+    fi
+
+    mkdir -p "$NEWROOT/etc/systemd/system/multi-user.target.wants"
+    cp "$_boot_src/steam-perf.service" \
+      "$NEWROOT/etc/systemd/system/steam-perf.service"
+    ln -sf ../steam-perf.service \
+      "$NEWROOT/etc/systemd/system/multi-user.target.wants/steam-perf.service" \
+      || warn "Failed to enable steam-perf.service (non-fatal)"
   fi
 fi
 
@@ -581,6 +596,30 @@ cp -a /usr/bin/steamos-update "$NEWROOT/usr/bin/steamos-update"
   && install -m 755 /usr/local/bin/nvidia-install-run "$NEWROOT/usr/local/bin/nvidia-install-run"
 
 # Rootfs was already expanded above. The invariant holds.
+
+# Ensure persistent desktop session variant is selected.
+if chroot "$NEWROOT" command -v steamos-session-select >/dev/null 2>&1; then
+  log "Selecting persistent desktop session"
+  chroot "$NEWROOT" steamos-session-select plasma-wayland-persistent 2>/dev/null \
+    || warn "steamos-session-select failed (non-fatal)"
+fi
+
+# Reconcile persistent defaults + authoritative EFI GRUB through grub.sh.
+step "Regenerating grub config for $PARTSET"
+reconcile_grub "$NEWROOT" "$EFIDEV" "$PARTSET"
+
+# Run user-provided custom script if present (fail open).
+_custom="/home/.steamos-nvidia/recovery/custom.sh"
+if [[ -x "$_custom" ]]; then
+  step "Running custom script"
+  if bash "$_custom" 2>&1; then
+    log "Custom script completed successfully"
+  else
+    warn "Custom script exited with non-zero status (non-fatal)"
+  fi
+else
+  log "No custom script at $_custom — skipping"
+fi
 
 # Reconcile persistent defaults + authoritative EFI GRUB through grub.sh.
 step "Regenerating grub config for $PARTSET"

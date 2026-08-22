@@ -220,20 +220,13 @@ patch_persistent_defaults() {
   all_params="$(_build_all_params)"
 
   # ── /etc/default/grub (single-line GRUB_CMDLINE_LINUX_DEFAULT="...") ────
+  # Only strip "quiet" — do NOT inject our params here.  grub-steamos
+  # (GRUB_CMDLINE_LINUX) is the sole persistent source; writing to both
+  # caused the entire parameter set to appear twice on /proc/cmdline
+  # because the grub generator consumes both variables.
   if [[ -f "$grub_default" ]]; then
-    log "Patching /etc/default/grub persistent defaults"
-
-    # Remove quiet from the quoted value
+    log "Stripping quiet from /etc/default/grub"
     _remove_quiet_from_grub_default "$grub_default"
-
-    local param
-    for param in $all_params; do
-      if ! _param_in_grub_default "$grub_default" "$param"; then
-        log "  Adding $param to /etc/default/grub"
-        sed -i -E "s#^(GRUB_CMDLINE_LINUX_DEFAULT=\"[^\"]*)#\1 $param#" \
-          "$grub_default"
-      fi
-    done
   fi
 
   # ── /etc/default/grub-steamos (multiline GRUB_CMDLINE_LINUX="...") ──────
@@ -373,18 +366,14 @@ finalize_grub() {
   done
 
   # ── /etc/default/grub ──
+  # Only verify quiet was stripped — our params live in grub-steamos only.
   if [[ -f "$grub_default" ]]; then
-    for param in $all_params; do
-      if ! _param_in_grub_default "$grub_default" "$param"; then
-        warn "  MISSING from /etc/default/grub: $param"
-        failed=1
-      else
-        log "  OK grub default: $param"
-      fi
-    done
-  else
-    warn "  MISSING: /etc/default/grub not found"
-    failed=1
+    if _param_in_grub_default "$grub_default" "quiet"; then
+      warn "  quiet still present in /etc/default/grub"
+      failed=1
+    else
+      log "  OK grub default: quiet removed"
+    fi
   fi
 
   # ── /etc/default/grub-steamos ──
@@ -479,7 +468,7 @@ reconcile_grub() {
   # dies) so the trap itself cannot fail while we are already handling an error.
   _reconcile_grub_cleanup() {
     set +e
-    umount_chroot_fs_cleanup "$root" 2>/dev/null
+    umount_chroot_fs "$root" 2>/dev/null
     umount "$EFIMNT" 2>/dev/null || umount -l "$EFIMNT" 2>/dev/null
   }
   trap _reconcile_grub_cleanup ERR

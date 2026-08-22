@@ -3,7 +3,7 @@
 # steamos-nvidia-installer — lib/update-strategy.sh
 # Stage 5: apply the chosen OS-update behaviour — self-healing (default),
 # hold-updates, or stock. In selfheal mode this installs the on-device
-# repatch tool + the steamos-update wrapper.
+# repatch tool plus wrappers for steamos-update and steamos-atomupd-client.
 # Sourced by the wrapper — do not run directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
@@ -42,11 +42,10 @@ EOF
     log "Installing self-healing update machinery"
     mkdir -p "$MNT/usr/lib/steamos-nvidia"
 
-    # Bundle HID source into the REAL /home partition for self-heal repatch.
-    # Only if logitech-hid was selected.
-    if [[ -n "${HW_SUPPORT_ITEMS:-}" && " $HW_SUPPORT_ITEMS " == *" logitech-hid "* ]] \
-       || [[ -z "${HW_SUPPORT_ITEMS:-}" && "${BUILD_HW_SUPPORT:-0}" -eq 1 ]]; then
-      local hid_bundle="$HOMEMNT/.driver-packages/hid"
+    # Bundle HID source into the rootfs for self-heal repatch.
+    # Only if logitech-hid was selected in system tweaks.
+    if [[ -n "${GAMING_ITEMS:-}" && " $GAMING_ITEMS " == *" logitech-hid "* ]]; then
+      local hid_bundle="$MNT/usr/lib/steamos-nvidia/hid"
       rm -rf "$hid_bundle"
       mkdir -p "$hid_bundle"
       cp -a "$DRIVER_SRC_DIR/." "$hid_bundle/"
@@ -71,35 +70,45 @@ EXTRA_CMDLINE_ADD="${EXTRA_CMDLINE_ADD:-}"
 EOF
     chmod 644 "$MNT/usr/lib/steamos-nvidia/driver.conf"
 
-    # install-hw-libs.sh is shared with the image builder and expects the
-    # project-style "$SCRIPT_DIR/lib/configs" path.  Keep one canonical config
-    # bundle and expose it through that compatibility path.
-    [[ -d "$MNT/usr/lib/steamos-nvidia/configs" ]] \
-      || die "self-heal config bundle is missing"
-    mkdir -p "$MNT/usr/lib/steamos-nvidia/lib"
-    ln -sfn ../configs "$MNT/usr/lib/steamos-nvidia/lib/configs"
-
-    # ---- on-device re-patch tool: reconciles packages/modules inside the OTHER slot
+    # ---- on-device re-patch/runtime bundle
+    # common.sh is required by repatch; keep both wrappers in the bundle so a
+    # successful repatch can propagate the update machinery into the new slot.
     for helper in \
       repatch \
+      common \
       overlay \
       common_system \
       common_modules \
       common_drivers \
       install-hw-libs \
-      grub
+      grub \
+      update-wrapper \
+      atomupd-wrapper
     do
       install -m 755 \
         "$SCRIPT_DIR/lib/$helper.sh" \
         "$MNT/usr/lib/steamos-nvidia/$helper.sh"
     done
 
-    # ---- wrapper around steamos-update: real update, then repatch the new slot
+    # ---- compatibility wrapper around steamos-update
+    # This no longer owns repatch; the lower atomupd wrapper catches both
+    # Steam/Game Mode and KDE Discover.
     if [[ ! -f "$MNT/usr/bin/steamos-update.orig" ]]; then
       mv "$MNT/usr/bin/steamos-update" "$MNT/usr/bin/steamos-update.orig"
     fi
     install -m 755 \
       "$SCRIPT_DIR/lib/update-wrapper.sh" \
       "$MNT/usr/bin/steamos-update"
+
+    # ---- authoritative wrapper around steamos-atomupd-client
+    # atomupd-daemon launches this helper for OS operations, so this is the
+    # shared interception point for Game Mode and Discover.
+    if [[ ! -f "$MNT/usr/bin/steamos-atomupd-client.orig" ]]; then
+      mv "$MNT/usr/bin/steamos-atomupd-client" \
+         "$MNT/usr/bin/steamos-atomupd-client.orig"
+    fi
+    install -m 755 \
+      "$SCRIPT_DIR/lib/atomupd-wrapper.sh" \
+      "$MNT/usr/bin/steamos-atomupd-client"
   fi
 }

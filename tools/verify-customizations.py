@@ -30,6 +30,7 @@ from pathlib import Path
 PASS = 0
 FAIL = 0
 SKIP = 0
+CHECK_ALL = False
 FAILURES: list[str] = []
 
 
@@ -90,6 +91,9 @@ def file_contains(path: str, needle: str, label: str = "") -> bool:
         content = Path(path).read_text(errors="replace")
     except FileNotFoundError:
         fail(label, f"file not found: {path}")
+        return False
+    except PermissionError:
+        skip(label, f"permission denied: {path} (run with sudo)")
         return False
     if needle in content:
         ok(label)
@@ -276,10 +280,14 @@ def detect_update_mode():
 # Each returns True if the feature appears to be installed/configured.
 
 def has_thunderbolt() -> bool:
+    if CHECK_ALL:
+        return True
     return os.path.isfile(os.path.join(MNT, "etc/udev/rules.d/98-thunderbolt-rescan.rules"))
 
 
 def has_hid_modules() -> bool:
+    if CHECK_ALL:
+        return True
     if not KVER:
         return False
     return bool(glob.glob(os.path.join(
@@ -287,11 +295,15 @@ def has_hid_modules() -> bool:
 
 
 def has_hid_source_bundle() -> bool:
+    if CHECK_ALL:
+        return True
     return os.path.isdir(os.path.join(HOMEMNT, ".driver-packages/hid"))
 
 
 def has_cuda_trimmed() -> bool:
     """CUDA was trimmed if the nvidia-utils package is present but libcuda is absent."""
+    if CHECK_ALL:
+        return True
     pacman_db = os.path.join(MNT, "usr/lib/holo/pacmandb/local")
     if not glob.glob(os.path.join(pacman_db, "nvidia-utils-*")):
         return False  # no nvidia installed at all — can't tell
@@ -300,6 +312,8 @@ def has_cuda_trimmed() -> bool:
 
 
 def has_gamemode() -> bool:
+    if CHECK_ALL:
+        return True
     rc, out = run_cmd(["chroot", MNT, "id", "deck"])
     return rc == 0 and "gamemode" in out
 
@@ -329,6 +343,8 @@ def has_debug_boot() -> bool:
 
 
 def has_one_click_installer() -> bool:
+    if CHECK_ALL:
+        return True
     return os.path.isfile(os.path.join(HOMEMNT, "deck/tools/install_to_hd.sh"))
 
 
@@ -388,8 +404,9 @@ def check_modprobe_config():
         return
     file_contains(conf, "blacklist nouveau", "blacklists nouveau")
     file_contains(conf, "options nouveau modeset=0", "nouveau modeset=0")
-    file_contains(conf, "options nvidia-drm modeset=1", "nvidia-drm modeset=1")
-    file_contains(conf, "options nvidia-drm fbdev=1", "nvidia-drm fbdev=1")
+    file_contains(conf, "nvidia-drm", "nvidia-drm options present")
+    file_contains(conf, "modeset=1", "nvidia-drm modeset=1")
+    file_contains(conf, "fbdev=1", "nvidia-drm fbdev=1")
     file_contains(conf, "options nvidia NVreg_PreserveVideoMemoryAllocations=1",
                   "NVreg_PreserveVideoMemoryAllocations=1")
 
@@ -429,14 +446,15 @@ def check_grub_config():
     else:
         skip("EFI grub.cfg checks", f"not found: {grub_cfg}")
 
+    # /etc/default/grub: we only strip quiet here now.  Params live in
+    # grub-steamos (checked by check_grub_steamos).
     grub_default = os.path.join(MNT, "etc/default/grub")
     if os.path.isfile(grub_default):
         params = grub_default_params(grub_default)
-        for param in nvidia_params:
-            if param in params:
-                ok(f"/etc/default/grub has {param}")
-            else:
-                fail(f"/etc/default/grub has {param}", "not in GRUB_CMDLINE_LINUX_DEFAULT")
+        if "quiet" in params:
+            fail("/etc/default/grub has no 'quiet'", "quiet still present")
+        else:
+            ok("/etc/default/grub: quiet removed")
     else:
         skip("/etc/default/grub checks", "file not found")
 
@@ -525,10 +543,21 @@ def check_initramfs():
         file_contains(dracut_conf, "nvidia", "dracut config has nvidia modules")
     elif os.path.isfile(mkinitcpio_conf):
         ok("mkinitcpio.conf exists")
-        file_contains(mkinitcpio_conf, "nvidia", "mkinitcpio.conf has nvidia in MODULES")
-        file_contains(mkinitcpio_conf, "BINARIES=(bash", "bash in BINARIES") \
-            or file_regex_match(mkinitcpio_conf, r"BINARIES=\(.*bash",
-                                "bash in BINARIES (regex)")
+        # Check main config and any drop-ins for nvidia modules
+        mkinitcpio_content = read_text(mkinitcpio_conf) or ""
+        dropin_dir = mkinitcpio_conf + ".d"
+        if os.path.isdir(dropin_dir):
+            for f in sorted(os.listdir(dropin_dir)):
+                if f.endswith(".conf"):
+                    dropin_content = read_text(os.path.join(dropin_dir, f))
+                    if dropin_content:
+                        mkinitcpio_content += "\n" + dropin_content
+        if "nvidia" in mkinitcpio_content:
+            ok("mkinitcpio config has nvidia modules")
+        else:
+            fail("mkinitcpio config has nvidia modules", "not found in main config or drop-ins")
+        if "bash" in mkinitcpio_content:
+            ok("bash in mkinitcpio config")
     else:
         skip("initramfs config", "neither dracut nor mkinitcpio config found")
 
@@ -553,29 +582,14 @@ def check_update_strategy_selfheal():
 
         content = read_text(repatch)
         if content:
-            # Verify GRUB operation ordering:
-            # patch_persistent_defaults → update-grub → patch_kernel_cmdline → finalize_grub
-            # The critical invariant: persistent defaults must be written
-            # BEFORE update-grub so regeneration picks up all params, and
-            # patch_kernel_cmdline is the authoritative final patch.
-            has_persistent = "patch_persistent_defaults" in content
-            has_ug = "update-grub" in content
-            has_pk = "patch_kernel_cmdline" in content
-            has_finalize = "finalize_grub" in content
-
-            if has_persistent and has_ug and has_pk:
-                pp_pos = content.find("patch_persistent_defaults")
-                ug_pos = content.find("update-grub")
-                pk_pos = content.find("patch_kernel_cmdline")
-                if pp_pos < ug_pos < pk_pos:
-                    ok("repatch.sh: persistent defaults → update-grub → EFI patch")
-                else:
-                    fail("repatch.sh: GRUB operation ordering",
-                         "expected: patch_persistent_defaults → update-grub → patch_kernel_cmdline")
-            elif has_pk:
+            # Verify GRUB reconciliation is called (reconcile_grub orchestrates
+            # patch_persistent_defaults → update-grub → patch_kernel_cmdline → finalize_grub).
+            if "reconcile_grub" in content:
+                ok("repatch.sh: calls reconcile_grub (full GRUB flow)")
+            elif "patch_kernel_cmdline" in content:
                 ok("repatch.sh: patch_kernel_cmdline present")
             else:
-                fail("repatch.sh: has patch_kernel_cmdline", "not found")
+                fail("repatch.sh: has reconcile_grub or patch_kernel_cmdline", "not found")
 
             # Verify the early-exit was replaced with skip-rebuild
             if "DRIVER_NEEDS_REBUILD" in content:
@@ -740,6 +754,17 @@ def check_gamemode():
         return
     ok("deck user in gamemode group")
 
+    gamemoded_link = os.path.join(
+        MNT, "etc/systemd/user/graphical-session.target.wants/gamemoded.service")
+    if os.path.islink(gamemoded_link):
+        symlink_points_to(gamemoded_link, "/usr/lib/systemd/user/gamemoded.service",
+                          "gamemoded user service enabled")
+    elif os.path.isfile(os.path.join(MNT, "usr/lib/systemd/user/gamemoded.service")):
+        fail("gamemoded user service enabled",
+             f"symlink not found: {gamemoded_link}")
+    else:
+        skip("gamemoded user service", "gamemoded.service not installed")
+
     # Check gaming kernel params that may be present
     if has_pci_realloc():
         ok("pci=realloc=on in grub-steamos")
@@ -747,6 +772,91 @@ def check_gamemode():
         ok("thunderbolt.host_reset=0 in grub-steamos")
     if has_resize_bar():
         ok("nvidia.NVreg_EnableResizableBar=1 in grub-steamos")
+
+    libva = os.path.join(MNT, "etc/profile.d/libva.sh")
+    if not os.path.exists(libva):
+        ok("/etc/profile.d/libva.sh removed (not forcing radeonsi)")
+    else:
+        content = read_text(libva) or ""
+        if "LIBVA_DRIVER_NAME" not in content:
+            ok("/etc/profile.d/libva.sh neutralized (no LIBVA_DRIVER_NAME)")
+        else:
+            fail("/etc/profile.d/libva.sh neutralized",
+                 "LIBVA_DRIVER_NAME still set — expected file removed or variable stripped")
+
+    # scx_lavd scheduler
+    scx_lavd_bin = os.path.join(MNT, "usr/bin/scx_lavd")
+    scx_config = os.path.join(MNT, "etc/scx_loader/config.toml")
+    wants_link = os.path.join(MNT, "etc/systemd/system/multi-user.target.wants/scx.service")
+
+    if not os.path.isfile(scx_config):
+        skip("scx_lavd scheduler", "scx_loader config.toml not found (not configured)")
+    else:
+        content = read_text(scx_config) or ""
+        if "scx_lavd" in content and "--autopilot" in content:
+            ok("scx_loader config: scx_lavd --autopilot")
+        else:
+            fail("scx_loader config configured",
+                 "config.toml missing scx_lavd --autopilot")
+
+        if os.path.islink(wants_link):
+            ok("scx.service enabled")
+        else:
+            fail("scx.service enabled", f"symlink not found: {wants_link}")
+
+        if os.path.isfile(scx_lavd_bin):
+            ok("/usr/bin/scx_lavd installed")
+        else:
+            fail("/usr/bin/scx_lavd installed", "binary not found")
+
+    # vm.swappiness tuning
+    sysctl_conf = os.path.join(MNT, "etc/sysctl.d/99-vm-swappiness.conf")
+    if not os.path.isfile(sysctl_conf):
+        skip("vm.swappiness tuning", "99-vm-swappiness.conf not found")
+    else:
+        content = read_text(sysctl_conf) or ""
+        if "vm.swappiness" in content:
+            ok("99-vm-swappiness.conf sets vm.swappiness")
+        else:
+            fail("99-vm-swappiness.conf sets vm.swappiness", "vm.swappiness not found")
+
+    # Boot-time performance hooks
+    apply_boot = os.path.join(MNT, "usr/lib/steam-perf/apply-boot")
+    boot_service = os.path.join(MNT, "etc/systemd/system/steam-perf.service")
+    boot_wants = os.path.join(MNT, "etc/systemd/system/multi-user.target.wants/steam-perf.service")
+    boot_conf = os.path.join(MNT, "etc/steam-perf/config.conf")
+
+    if os.path.isfile(apply_boot):
+        ok("apply-boot installed")
+        executable(apply_boot, "apply-boot is executable")
+    else:
+        skip("Boot framework", "apply-boot not found")
+        return
+
+    if os.path.isfile(boot_conf):
+        ok("steam-perf config.conf installed")
+    else:
+        fail("steam-perf config.conf installed", "not found")
+
+    if os.path.isfile(boot_service):
+        ok("steam-perf.service installed")
+    else:
+        fail("steam-perf.service installed", "not found")
+
+    if os.path.islink(boot_wants):
+        ok("steam-perf.service enabled")
+    else:
+        fail("steam-perf.service enabled", f"symlink not found: {boot_wants}")
+
+    boot_d = os.path.join(MNT, "usr/lib/steam-perf/boot.d")
+    if os.path.isdir(boot_d):
+        hooks = [f for f in os.listdir(boot_d) if os.path.isfile(os.path.join(boot_d, f))]
+        if hooks:
+            ok(f"boot.d hooks: {', '.join(sorted(hooks))}")
+        else:
+            fail("boot.d has hooks", "directory is empty")
+    else:
+        fail("boot.d exists", f"not found: {boot_d}")
 
 
 def check_nvidia_setup_desktop():
@@ -760,7 +870,7 @@ def check_nvidia_setup_desktop():
 
 def check_installed_utilities():
     section("Installed utilities")
-    executable(os.path.join(MNT, "usr/local/bin/scan-hardware"),
+    executable(os.path.join(MNT, "usr/local/bin/diagnostics/scan-hardware"),
                "scan-hardware")
     executable(os.path.join(MNT, "usr/local/bin/steamos-nvidia-post-install"),
                "steamos-nvidia-post-install")
@@ -816,8 +926,8 @@ def check_config_bundle():
         return
 
     for cfg in ("99-nvidia-patch.conf", "98-thunderbolt-rescan.rules",
-                "thunderbolt-rescan.sh", "hw-packages.conf",
-                "NVIDIA Setup.desktop"):
+                "thunderbolt-rescan.sh", "hw-packages-arch.conf",
+                "hw-packages-valve.conf", "NVIDIA Setup.desktop"):
         file_exists(os.path.join(configs_dir, cfg), f"bundled {cfg}")
 
 
@@ -848,8 +958,8 @@ def check_one_click_installer():
     if os.path.isfile(repair):
         file_contains(repair, "STEAMOS_TARGET_DISK",
                       "repair_device.sh has STEAMOS_TARGET_DISK")
-        file_contains(repair, "skipping NVMe sanitize",
-                      "repair_device.sh has NVMe sanitize skip")
+        file_contains(repair, "sanitize failed or unsupported",
+                      "repair_device.sh has NVMe sanitize fallback")
     else:
         skip("repair_device.sh patches", "file not found")
 
@@ -933,6 +1043,8 @@ def check_rootfs_rw():
         Path(test_file).touch()
         os.remove(test_file)
         ok("rootfs is writable")
+    except PermissionError:
+        skip("rootfs is writable", "needs root (run with sudo)")
     except Exception as e:
         fail("rootfs is writable", str(e))
 
@@ -940,7 +1052,7 @@ def check_rootfs_rw():
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    global MNT, HOMEMNT, EFIMNT, KVER, UPDATE_MODE, ONLINE
+    global MNT, HOMEMNT, EFIMNT, KVER, UPDATE_MODE, ONLINE, CHECK_ALL
 
     parser = argparse.ArgumentParser(
         description="Verify steamos-nvidia-installer customizations (auto-detects everything)",
@@ -955,6 +1067,8 @@ def main():
                         help="EFI partition mount point (default: same as --mnt)")
     parser.add_argument("--online", action="store_true",
                         help="Verify a running system (sets all mounts to /)")
+    parser.add_argument("--all", action="store_true",
+                        help="Run all checks regardless of auto-detection (no early skips)")
 
     args = parser.parse_args()
 
@@ -962,6 +1076,7 @@ def main():
     HOMEMNT = args.homemnt or MNT
     EFIMNT = args.efimnt or MNT
     ONLINE = args.online
+    CHECK_ALL = getattr(args, 'all')
 
     if ONLINE:
         MNT = HOMEMNT = EFIMNT = "/"

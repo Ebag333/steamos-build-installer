@@ -1,17 +1,167 @@
 #!/bin/bash
 #
 # steamos-nvidia-installer — lib/common.sh
-# Shared helpers: logging, die, in_chroot, and the global cleanup trap.
-# This is SOURCED by the wrapper (and nothing else) — do not run it directly.
+# Shared helpers: logging/failure reporting, loop/mount primitives, and
+# builder cleanup/payload helpers. Sourced by the build backend and repatch.
+# Do not run it directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "lib/common.sh is a library — source it from the wrapper, not run directly." >&2
   exit 1
 fi
 
-log()  { printf '\e[1;35m[nvidia-usb]\e[0m %s\n' "$*"; }
-warn() { printf '\e[1;33m[warn]\e[0m %s\n' "$*" >&2; }
-die()  { printf '\e[1;31m[fail]\e[0m %s\n' "$*" >&2; exit 1; }
+# Shared logging/failure framework.  Callers may set these before sourcing:
+#   LOG_TAG      short human-readable prefix (default: nvidia-usb)
+#   LOGGER_TAG   systemd-journal tag (default: steamos-nvidia-build)
+#   LOG_COLOR    1 for colored terminal prefixes, 0 for plain text
+#   RUN_LOG      optional persistent log path included in failure headlines
+#
+# Callers may also define these optional hooks before or after sourcing:
+#   failure_journal_context  -> prints compact caller-specific journal context
+#   failure_snapshot_extra   -> emits caller-specific diagnostic sections
+: "${LOG_TAG:=nvidia-usb}"
+: "${LOGGER_TAG:=steamos-nvidia-build}"
+: "${LOG_COLOR:=1}"
+: "${CURRENT_STEP:=startup}"
+: "${FAILURE_REPORTED:=0}"
+
+log() {
+  if [[ "${LOG_COLOR:-1}" -eq 1 ]]; then
+    printf '\e[1;35m[%s]\e[0m %s\n' "$LOG_TAG" "$*"
+  else
+    printf '[%s] %s\n' "$LOG_TAG" "$*"
+  fi
+}
+
+warn() {
+  if [[ "${LOG_COLOR:-1}" -eq 1 ]]; then
+    printf '\e[1;33m[%s] WARNING:\e[0m %s\n' "$LOG_TAG" "$*" >&2
+  else
+    printf '[%s] WARNING: %s\n' "$LOG_TAG" "$*" >&2
+  fi
+}
+
+step() {
+  CURRENT_STEP="$*"
+  log "STEP: $CURRENT_STEP"
+  logger -t "$LOGGER_TAG" -- "STEP: $CURRENT_STEP" 2>/dev/null || true
+}
+
+failure_snapshot() {
+  local rc="${1:?failure_snapshot: missing rc}"
+  local line="${2:?failure_snapshot: missing line}"
+  local cmd="${3:-}"
+  local reason="${4:-}"
+  local journal_cmd journal_reason journal_context=""
+
+  warn "FAILURE"
+  warn "  rc:      $rc"
+  warn "  step:    ${CURRENT_STEP:-unknown}"
+  warn "  line:    $line"
+  warn "  command: $cmd"
+  [[ -n "$reason" ]] && warn "  reason:  $reason"
+
+  journal_cmd="${cmd//$'\n'/ }"
+  journal_reason="${reason//$'\n'/ }"
+  journal_cmd="${journal_cmd:0:300}"
+  journal_reason="${journal_reason:0:300}"
+
+  if declare -F failure_journal_context >/dev/null 2>&1; then
+    journal_context="$(failure_journal_context 2>/dev/null || true)"
+    journal_context="${journal_context//$'\n'/ }"
+    journal_context="${journal_context:0:300}"
+  fi
+
+  logger -t "$LOGGER_TAG" -- \
+    "FAIL rc=$rc step='${CURRENT_STEP:-unknown}' line=$line${journal_context:+ $journal_context} command='$journal_cmd' reason='${journal_reason:-unspecified}' log='${RUN_LOG:-<stdout>}'" \
+    2>/dev/null || true
+
+  # Let the caller add domain-specific state (RAUC/slot state for repatch,
+  # image/build state for the builder, etc.) without coupling common.sh to it.
+  if declare -F failure_snapshot_extra >/dev/null 2>&1; then
+    failure_snapshot_extra "$rc" "$line" "$cmd" "$reason" || true
+  fi
+
+  echo
+  echo "=== MOUNTS ==="
+  findmnt 2>&1 || true
+
+  echo
+  echo "=== LOOP DEVICES ==="
+  losetup -a 2>&1 || true
+
+  echo
+  echo "=== SPACE ==="
+  df -h /home 2>&1 || df -h 2>&1 || true
+}
+
+report_failure() {
+  local rc="${1:?report_failure: missing rc}"
+  local line="${2:?report_failure: missing line}"
+  local cmd="${3:-}"
+  local reason="${4:-}"
+
+  # A manually invoked die() might follow a command that returned 0.
+  (( rc != 0 )) || rc=1
+
+  # Prevent ERR + die, or failures inside diagnostics, from producing
+  # multiple snapshots.
+  if (( FAILURE_REPORTED )); then
+    exit "$rc"
+  fi
+  FAILURE_REPORTED=1
+
+  trap - ERR
+  set +e
+
+  failure_snapshot "$rc" "$line" "$cmd" "$reason"
+  exit "$rc"
+}
+
+on_err() {
+  local rc=$?
+  local line="${BASH_LINENO[0]:-${LINENO}}"
+  local cmd="$BASH_COMMAND"
+
+  report_failure \
+    "$rc" \
+    "$line" \
+    "$cmd" \
+    "unhandled command failure"
+}
+
+die() {
+  # Capture $? immediately so `cmd || die "..."` retains cmd's exit code.
+  local rc=$?
+  local reason="$*"
+  local line="${BASH_LINENO[0]:-${LINENO}}"
+
+  (( rc != 0 )) || rc=1
+
+  report_failure \
+    "$rc" \
+    "$line" \
+    "die: $reason" \
+    "$reason"
+}
+
+# ERR inheritance is required for failures originating inside functions,
+# command substitutions, and subshells.  This is already enabled by repatch;
+# enabling it here gives the builder the same enriched failure handling.
+set -E
+trap on_err ERR
+
+# ensure_steamos_nvidia_dirs [BASE_PATH]
+#   Create the persistent /home/.steamos-nvidia tree (logs + recovery).
+#   Idempotent — safe to call repeatedly; never stomps existing dirs.
+#   BASE_PATH defaults to /home; pass $HOMEMNT during image construction.
+ensure_steamos_nvidia_dirs() {
+  local base="${1:-/home}"
+  local root="$base/.steamos-nvidia"
+
+  mkdir -p "$root/logs" "$root/recovery"
+  chmod 777 "$root/recovery"
+}
 
 # curl_retry ATTEMPTS [CURL_ARGS...]
 #   Run curl with retry on transient failures (network errors, HTTP 5xx).

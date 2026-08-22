@@ -325,7 +325,7 @@ setup_loop_mount() {
     [[ -n "$target" ]] || continue
     strict_unmount "$target" "stale mount backed by $ROOTPART" \
       || die "Cannot unmount stale mount $target"
-  done < <(findmnt -rn -o TARGET -S "$ROOTPART" 2>/dev/null)
+  done < <(findmnt -rn -o TARGET -S "$ROOTPART" 2>/dev/null || true)
 }
 
 # Mount rootfs (btrfs), efi-A, and home.

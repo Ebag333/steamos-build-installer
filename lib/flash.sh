@@ -242,18 +242,9 @@ flash_preflight() {
 
   # Target not containing /, /boot, /efi, /home, or the build workspace.
   local target_system_ok=1
-  local mp
-  for mp in / /boot /efi /home; do
-    local mp_dev
-    mp_dev="$(findmnt -no SOURCE "$mp" 2>/dev/null | sed 's/\[.*//')" || true
-    if [[ -n "$mp_dev" ]]; then
-      local mp_disk
-      mp_disk="$(lsblk -no PKNAME "$mp_dev" 2>/dev/null | head -1)" || true
-      if [[ "/dev/$mp_disk" == "$target" ]]; then
-        target_system_ok=0
-      fi
-    fi
-  done
+  if flash_is_system_disk "$target"; then
+    target_system_ok=0
+  fi
   # Check if build workspace is on the target.
   if [[ -n "${WORKDIR:-}" ]]; then
     local ws_dev
@@ -400,50 +391,41 @@ flash_preflight() {
   return 0
 }
 
-# Verify a flash by reading back from the device and comparing against the image.
-# Args: $1 = image path, $2 = target device, $3 = image bytes
-flash_postflight() {
-  local img="$1" target="$2" img_bytes="$3"
+# Verify a flash by reading back exactly the image's byte count from the device
+# and comparing the SHA256 against the source image.
+# MUST be called BEFORE any post-write modifications (e.g. GPT relocation).
+# Args: $1 = image path, $2 = target device, $3 = image bytes, $4 = precomputed image SHA256
+flash_verify_raw() {
+  local img="$1" target="$2" img_bytes="$3" img_hash="$4"
 
   echo ""
-  echo "=== Flash Post-Flight ==="
+  echo "=== Flash Read-Back Verification ==="
   echo ""
 
-  # 1. SHA256 of the source image
-  echo "Computing image checksum..."
-  local img_hash
-  img_hash="$(sha256sum "$img" | cut -d' ' -f1)" \
-    || { echo "  ✗ Failed to compute image checksum"; return 1; }
   echo "  Image SHA256:  $img_hash"
 
-  # 2. SHA256 of the written data (read back from device)
-  echo "Reading back from $target for verification (this may take a while)..."
+  echo "Reading back $img_bytes bytes from $target..."
   local device_hash
-  device_hash="$(dd if="$target" bs=16M 2>/dev/null | head -c "$img_bytes" | sha256sum | cut -d' ' -f1)" \
-    || { echo "  ✗ Failed to read back device for verification"; return 1; }
+  device_hash="$(
+    dd if="$target" \
+      bs=1M \
+      count="$img_bytes" \
+      iflag=count_bytes \
+      status=none \
+    | sha256sum \
+    | awk '{print $1}'
+  )" || {
+    echo "  ✗ Failed to read back device for verification"
+    return 1
+  }
   echo "  Device SHA256: $device_hash"
 
-  # 3. Compare
-  if [[ "$img_hash" == "$device_hash" ]]; then
-    echo "  ✓ Verification passed — read-back matches image"
-  else
+  if [[ "$img_hash" != "$device_hash" ]]; then
     echo "  ✗ VERIFICATION FAILED — read-back does NOT match image"
-    echo "  The flash may be corrupted. Try a different USB drive."
     return 1
   fi
 
-  # 4. GPT verification on target
-  if command -v sgdisk >/dev/null 2>&1; then
-    if sgdisk -v "$target" >/dev/null 2>&1; then
-      echo "  ✓ Target GPT valid"
-    else
-      echo "  ⚠ Target GPT verification failed"
-    fi
-  fi
-
-  echo ""
-  echo "Post-flight complete."
-  return 0
+  echo "  ✓ Verification passed — read-back matches image"
 }
 
 # Flash an image to a device.  Requires root.
@@ -466,7 +448,8 @@ flash_write() {
   fi
 
   # Unmount everything on the target device before writing.
-  # Auto-unmount rather than aborting — the user confirmed the target.
+  # No lazy unmounts — a lazy umount can leave the filesystem alive while
+  # processes still hold it, and dd would write over a live filesystem.
   echo ""
   local mounts
   mounts="$(lsblk -lnpo MOUNTPOINT "$target" 2>/dev/null | awk 'NF')"
@@ -487,19 +470,36 @@ flash_write() {
       [[ -n "$mp" ]] || continue
       if umount "$mp" 2>/dev/null; then
         echo "  ✓ $mp"
-      elif umount -l "$mp" 2>/dev/null; then
-        echo "  ✓ $mp (lazy)"
       else
-        echo "  ⚠ $mp — unmount failed, continuing anyway" >&2
+        echo "  ✗ $mp — could not unmount target filesystem" >&2
+        return 1
       fi
     done <<< "$mounts"
   else
     echo "No target partitions mounted."
   fi
 
+  # Final recheck: verify nothing is still mounted on the target device.
+  for child in "$target"*; do
+    [[ -b "$child" ]] || continue
+    if findmnt -rn -S "$child" >/dev/null 2>&1; then
+      echo "Target still has mounted filesystem: $child" >&2
+      return 1
+    fi
+  done
+
   # Write the image.  pv is preferred for progress, but dd can report
   # progress itself if pv is unavailable.
   echo ""
+
+  # Compute source checksum BEFORE writing so we verify against the exact
+  # source state we intended to flash.
+  echo "Computing source image checksum..."
+  local img_hash
+  img_hash="$(sha256sum "$img" | awk '{print $1}')" \
+    || { echo "  ✗ Failed to compute image checksum" >&2; return 1; }
+  echo "  Image SHA256:  $img_hash"
+
   echo "Writing image to $target (bs=$bs)..."
   local last_pct=-1
   if command -v pv >/dev/null 2>&1; then
@@ -540,6 +540,13 @@ flash_write() {
   echo "Syncing image data..."
   sync 2>/dev/null || true
 
+  # Flush the block device cache so the readback actually hits the device
+  # rather than being satisfied from kernel page cache.
+  blockdev --flushbufs "$target" 2>/dev/null || true
+
+  # Verify the raw write BEFORE any post-write modifications.
+  flash_verify_raw "$img" "$target" "$img_bytes" "$img_hash" || return 1
+
   # Raw disk images carry their backup GPT at the end of the IMAGE.  When that
   # image is written to a larger USB stick, the copied backup GPT remains at
   # the old image-size boundary instead of the physical end of the target.
@@ -553,11 +560,17 @@ flash_write() {
         return 1
       fi
 
-      # Partition boundaries did not change, but ask the kernel/udev to refresh
-      # their view after the GPT headers were rewritten.
+      # Flush the relocated GPT to the device before asking the kernel to
+      # re-read it.
+      sync 2>/dev/null || true
+      blockdev --flushbufs "$target" 2>/dev/null || true
+
+      # Ask the kernel/udev to refresh their view.  rereadpt can
+      # occasionally fail even though the GPT on disk is valid, so treat
+      # it as advisory rather than fatal.
       blockdev --rereadpt "$target" 2>/dev/null || true
       udevadm settle --timeout=10 2>/dev/null || true
-      sync 2>/dev/null || true
+
       gpt_fixup="relocated"
       echo "Backup GPT relocated successfully."
     else
@@ -570,26 +583,55 @@ flash_write() {
     fi
   fi
 
-  # Post-flight: verify the write.
-  flash_postflight "$img" "$target" "$img_bytes" || return 1
+  # Verify target GPT is valid — this is independent of whether the
+  # kernel reread succeeded.
+  if command -v sgdisk >/dev/null 2>&1; then
+    if sgdisk -v "$target" >/dev/null 2>&1; then
+      echo "  ✓ Target GPT valid"
+    else
+      echo "  ✗ Target GPT invalid after relocation"
+      return 1
+    fi
+  fi
 
   # Discover the new partitions and mount home for the user.
   echo ""
   echo "Discovering new partitions..."
   udevadm settle --timeout=15 2>/dev/null || true
-  blockdev --rereadpt "$target" 2>/dev/null || true
-  udevadm settle --timeout=10 2>/dev/null || true
+
+  # Check if the kernel sees partitions on the target.  If not, try
+  # partx -u to force a partition table re-read before giving up.
+  local part_count=0
+  for part in "${target}"*; do
+    [[ -b "$part" ]] && part_count=$(( part_count + 1 ))
+  done
+  if (( part_count == 0 )); then
+    echo "  Kernel does not see partitions; trying partx -u..."
+    partx -u "$target" 2>/dev/null || true
+    udevadm settle --timeout=10 2>/dev/null || true
+  fi
 
   local home_part=""
+  local expected_parts=0 found_parts=0
   local part
   for part in "${target}"*; do
     [[ -b "$part" ]] || continue
+    expected_parts=$(( expected_parts + 1 ))
     local pname
     pname="$(blkid -s PARTLABEL -o value "$part" 2>/dev/null || true)"
+    if [[ -n "$pname" ]]; then
+      found_parts=$(( found_parts + 1 ))
+    fi
     case "$pname" in
       home) home_part="$part" ;;
     esac
   done
+
+  if (( expected_parts > 0 && found_parts == 0 )); then
+    echo "  ✗ No partition labels found — kernel may not have re-read the table"
+    echo "    Try: partx -u $target"
+    return 1
+  fi
 
   if [[ -n "$home_part" ]]; then
     local mount_point="/run/media/${SUDO_USER:-deck}/home"

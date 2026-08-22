@@ -172,7 +172,7 @@ discover_auto_modules() {
 
   for dev in /sys/bus/pci/devices/*/modalias; do
     [[ -f "$dev" ]] || continue
-    modules+="$(chroot "$root" modprobe -S "$kver" -R "$(cat "$dev")" 2>/dev/null)"$'\n'
+    modules+="$(chroot "$root" modprobe -S "$kver" -R "$(cat "$dev")" 2>/dev/null || true)"$'\n'
   done
 
   echo "$modules" \

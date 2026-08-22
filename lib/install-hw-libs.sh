@@ -45,41 +45,69 @@ _hw_pkg_selected() {
 }
 
 # Parse one manifest line into the global HW_LINE_* variables.
-# Preferred format: package|version|description
-# Legacy package:description lines are accepted as version=latest so an older
-# hw-packages.conf can still be used during the transition.
+# Expected format: group|package|version|default|description
+# Lines starting with # are comments; blank lines are skipped.
+# Dies on malformed lines with a diagnostic listing all bad entries.
 _parse_hw_manifest_line() {
   local line="${1-}"
   local rest
 
+  HW_LINE_GROUP=""
   HW_LINE_PKG=""
   HW_LINE_VERSION=""
+  HW_LINE_DEFAULT=""
   HW_LINE_DESC=""
 
   [[ "$line" =~ ^[[:space:]]*$ ]] && return 1
   [[ "$line" =~ ^[[:space:]]*# ]] && return 1
 
-  if [[ "$line" == *"|"*"|"* ]]; then
-    HW_LINE_PKG="${line%%|*}"
-    rest="${line#*|}"
-    HW_LINE_VERSION="${rest%%|*}"
-    HW_LINE_DESC="${rest#*|}"
-  elif [[ "$line" == *:* ]]; then
-    HW_LINE_PKG="${line%%:*}"
-    HW_LINE_VERSION="latest"
-    HW_LINE_DESC="${line#*:}"
-  else
+  if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
     return 2
   fi
 
-  # Package names and versions cannot contain whitespace.  Descriptions can.
+  HW_LINE_GROUP="${line%%|*}"
+  rest="${line#*|}"
+  HW_LINE_PKG="${rest%%|*}"
+  rest="${rest#*|}"
+  HW_LINE_VERSION="${rest%%|*}"
+  rest="${rest#*|}"
+  HW_LINE_DEFAULT="${rest%%|*}"
+  HW_LINE_DESC="${rest#*|}"
+
+  # Package names, versions, and defaults cannot contain whitespace.
+  HW_LINE_GROUP="${HW_LINE_GROUP//[[:space:]]/}"
   HW_LINE_PKG="${HW_LINE_PKG//[[:space:]]/}"
   HW_LINE_VERSION="${HW_LINE_VERSION//[[:space:]]/}"
+  HW_LINE_DEFAULT="${HW_LINE_DEFAULT//[[:space:]]/}"
 
-  [[ -n "$HW_LINE_PKG" && -n "$HW_LINE_VERSION" && -n "$HW_LINE_DESC" ]] \
+  [[ -n "$HW_LINE_GROUP" && -n "$HW_LINE_PKG" && -n "$HW_LINE_VERSION" && -n "$HW_LINE_DEFAULT" && -n "$HW_LINE_DESC" ]] \
     || return 2
 
   return 0
+}
+
+# Validate a hardware manifest file.  Dies if any line does not match the
+# expected format: group|package|version|description
+# Args: $1 = conf file path
+_validate_hw_manifest() {
+  local conf="${1:?_validate_hw_manifest: missing conf path}"
+  local line bad_lines=() line_num=0
+
+  while IFS= read -r line; do
+    (( ++line_num ))
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    _parse_hw_manifest_line "$line" >/dev/null 2>&1 || bad_lines+=("  line $line_num: $line")
+  done < "$conf"
+
+  if (( ${#bad_lines[@]} > 0 )); then
+    die "Malformed lines in $(basename "$conf"):
+
+$(printf '%s\n' "${bad_lines[@]}")
+
+Expected format: group|package|version|default|description
+Example: Firmware|linux-firmware|latest|TRUE|Full firmware suite"
+  fi
 }
 
 # Convert manifest package + version policy into a pacman sync target.
@@ -150,6 +178,7 @@ _install_valve_hw_manifest() {
   local line rc pkg version desc target
 
   [[ -f "$conf" ]] || return 0
+  _validate_hw_manifest "$conf"
 
   log "Refreshing Valve package database"
   if ! in_chroot "pacman --config '$pacconf' -Sy"; then
@@ -296,6 +325,7 @@ _install_arch_hw_manifest() {
   local -a pkgs=()
 
   [[ -f "$conf" ]] || return 0
+  _validate_hw_manifest "$conf"
 
   # shellcheck disable=SC2094
   while IFS= read -r line; do
@@ -417,9 +447,18 @@ _install_arch_hw_manifest() {
 }
 
 install_hw_libs() {
-  local valve_conf="$SCRIPT_DIR/lib/configs/hw-packages-valve.conf"
-  local arch_conf="$SCRIPT_DIR/lib/configs/hw-packages-arch.conf"
-  local legacy_conf="$SCRIPT_DIR/lib/configs/hw-packages.conf"
+  # Prefer source configs during build (SCRIPT_DIR points to project root),
+  # fall back to installed configs for repatch.
+  local valve_conf arch_conf legacy_conf
+  if [[ -f "$SCRIPT_DIR/lib/configs/hw-packages-valve.conf" ]]; then
+    valve_conf="$SCRIPT_DIR/lib/configs/hw-packages-valve.conf"
+    arch_conf="$SCRIPT_DIR/lib/configs/hw-packages-arch.conf"
+    legacy_conf="$SCRIPT_DIR/lib/configs/hw-packages.conf"
+  else
+    valve_conf="/usr/lib/steamos-nvidia/configs/hw-packages-valve.conf"
+    arch_conf="/usr/lib/steamos-nvidia/configs/hw-packages-arch.conf"
+    legacy_conf="/usr/lib/steamos-nvidia/configs/hw-packages.conf"
+  fi
   local valve_pacconf="${PACCONF:?install_hw_libs: PACCONF is not set}"
   local localnvidia_ver
 

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# apply-boot — run all boot hooks in order.
+# Hooks in /usr/lib/steam-perf/boot.d/ are shipped by the installer.
+# Hooks in /etc/steam-perf/boot.d/ are machine-specific overrides.
+# Each hook is self-contained and idempotent.
+set -uo pipefail
+
+for dir in /usr/lib/steam-perf/boot.d /etc/steam-perf/boot.d; do
+    [ -d "$dir" ] || continue
+    for hook in "$dir"/*; do
+        [ -x "$hook" ] || continue
+        "$hook"
+    done
+done
