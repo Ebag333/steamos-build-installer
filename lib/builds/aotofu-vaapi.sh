@@ -58,8 +58,12 @@ AOTOFU_PC_DEPS=(
   gstreamer-codecparsers-1.0
 )
 
-# State directory for tracking builds
-AOTOFU_STATE_DIR="/usr/lib/steamos-nvidia/aotofu-vaapi"
+# State directory for tracking builds: prefer /home (latest), fall back to /usr
+if [[ -d "/home/.steamos-nvidia/bundles/aotofu-vaapi" ]]; then
+  AOTOFU_STATE_DIR="/home/.steamos-nvidia/bundles/aotofu-vaapi"
+else
+  AOTOFU_STATE_DIR="/usr/lib/steamos-nvidia/aotofu-vaapi"
+fi
 
 # Source bundle directory (inside state dir) for self-heal
 AOTOFU_BUNDLE_DIR="$AOTOFU_STATE_DIR/source"

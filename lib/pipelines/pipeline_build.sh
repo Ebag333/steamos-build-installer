@@ -182,6 +182,10 @@ phase_build_install() {
             local hid_bundle="$MNT/usr/lib/steamos-nvidia/hid"
             mkdir -p "$hid_bundle"
             cp -a "$DRIVER_SRC_DIR/." "$hid_bundle/"
+            # Also persist to /home for rebuild to use
+            local hid_home="/home/.steamos-nvidia/bundles/hid"
+            mkdir -p "$hid_home"
+            cp -a "$DRIVER_SRC_DIR/." "$hid_home/"
             log "HID source bundle created for self-heal"
           fi
           ;;
@@ -192,6 +196,10 @@ phase_build_install() {
             if [[ -d "$WORKDIR/aotofu-src" ]]; then
               mkdir -p "$aotofu_bundle"
               cp -a "$WORKDIR/aotofu-src/." "$aotofu_bundle/"
+              # Also persist to /home for rebuild to use
+              local aotofu_home="/home/.steamos-nvidia/bundles/aotofu-vaapi/source"
+              mkdir -p "$aotofu_home"
+              cp -a "$WORKDIR/aotofu-src/." "$aotofu_home/"
               log "AoTofu source bundle created for self-heal"
             fi
           else

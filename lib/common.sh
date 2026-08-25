@@ -164,6 +164,38 @@ ensure_steamos_nvidia_dirs() {
 }
 
 # ---------------------------------------------------------------------------
+# Script Directory Resolution
+# ---------------------------------------------------------------------------
+# Resolve the steamos-nvidia script directory.
+# Prefers /home/.steamos-nvidia (writable, latest scripts),
+# falls back to /usr/lib/steamos-nvidia (immutable, build-time).
+#
+# Args: $1 = (optional) explicit path to check first
+# Output: path to the script directory
+# Returns: 0 if found, 1 if neither exists
+
+resolve_nvidia_dir() {
+  local explicit="${1:-}"
+
+  if [[ -n "$explicit" && -d "$explicit/lib" ]]; then
+    echo "$explicit"
+    return 0
+  fi
+
+  if [[ -d "/home/.steamos-nvidia/lib" ]]; then
+    echo "/home/.steamos-nvidia"
+    return 0
+  fi
+
+  if [[ -d "/usr/lib/steamos-nvidia" ]]; then
+    echo "/usr/lib/steamos-nvidia"
+    return 0
+  fi
+
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Project Persistence (Self-Heal)
 # ---------------------------------------------------------------------------
 # Persist a copy of the project into /home/.steamos-nvidia/ so users can

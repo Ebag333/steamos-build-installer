@@ -10,8 +10,17 @@
 # known-good image.
 
 REAL=/usr/bin/steamos-atomupd-client.orig
-REPATCH=/usr/lib/steamos-nvidia/repatch.sh
-SELF_BUNDLE=/usr/lib/steamos-nvidia/atomupd-wrapper.sh
+
+# Resolve script directory: prefer /home (writable, latest), fall back to /usr
+_NVIDIA_DIR=""
+if [[ -d "/home/.steamos-nvidia/lib" ]]; then
+  _NVIDIA_DIR="/home/.steamos-nvidia"
+elif [[ -d "/usr/lib/steamos-nvidia" ]]; then
+  _NVIDIA_DIR="/usr/lib/steamos-nvidia"
+fi
+
+REPATCH="$_NVIDIA_DIR/repatch.sh"
+SELF_BUNDLE="$_NVIDIA_DIR/atomupd-wrapper.sh"
 
 if [[ $EUID -eq 0 ]]; then
   LOGDIR=/home/.steamos-nvidia/logs

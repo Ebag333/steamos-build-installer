@@ -20,7 +20,14 @@ ln -sfn "$(basename "$RUN_LOG")" \
 # everything on the persistent /home filesystem.
 exec > >(tee -a "$RUN_LOG") 2>&1
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Resolve script directory: prefer /home (writable, latest), fall back to /usr
+if [[ -d "/home/.steamos-nvidia/lib" ]]; then
+  SCRIPT_DIR="/home/.steamos-nvidia"
+elif [[ -d "/usr/lib/steamos-nvidia" ]]; then
+  SCRIPT_DIR="/usr/lib/steamos-nvidia"
+else
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+fi
 
 # Use the shared common.sh logging/failure framework with repatch-specific
 # presentation and diagnostics.

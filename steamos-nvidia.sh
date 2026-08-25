@@ -740,7 +740,7 @@ Full log: $logfile"
 # ---------------------------------------------------------------------------
 ui_select_action() {
   yad --list \
-    --title="SteamOS NVIDIA" \
+    --title="SteamOS Custom Image" \
     --text="Choose an action:" \
     --column="Action" \
     --column="Description" \
@@ -751,12 +751,12 @@ ui_select_action() {
     --height=340 \
     --button="Cancel":1 \
     --button="OK":0 \
-    "Generate Config" "Save a build configuration file for later use" \
-    "Build" "Build a patched SteamOS NVIDIA installer image" \
+    "Generate Config" "Create a build configuration file" \
+    "Build" "Build a custom SteamOS image" \
     "Flash" "Flash a completed installer image to USB" \
     "Flashless" "Install a built image to inactive A/B slot (no USB)" \
+    "Configure" "Apply configuration to a live system" \
     "Diagnostics" "System diagnostics and reporting" \
-    "Configure" "Run post-install configuration" \
     "Reboot" "Run the project reboot helper" \
     "Quit" "Exit"
 }

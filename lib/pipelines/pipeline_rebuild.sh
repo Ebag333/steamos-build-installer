@@ -231,9 +231,14 @@ phase_rebuild_discover() {
   : "${BUILD_HW_SUPPORT:=0}"
   : "${EXTRA_CMDLINE_ADD:=}"
 
-  # Set HID bundle location
-  HID_BUNDLE_DIR="/usr/lib/steamos-nvidia/hid"
-  [[ -d "$HID_BUNDLE_DIR" ]] || HID_BUNDLE_DIR="/home/.driver-packages/hid"
+  # Set HID bundle location: prefer /home (latest), fall back to /usr
+  if [[ -d "/home/.steamos-nvidia/bundles/hid" ]]; then
+    HID_BUNDLE_DIR="/home/.steamos-nvidia/bundles/hid"
+  elif [[ -d "/usr/lib/steamos-nvidia/hid" ]]; then
+    HID_BUNDLE_DIR="/usr/lib/steamos-nvidia/hid"
+  else
+    HID_BUNDLE_DIR="/home/.driver-packages/hid"
+  fi
 
   # Logitech HID modules are always built
   HID_EXPECTED=1
@@ -346,11 +351,17 @@ phase_rebuild_install() {
   install_hw_libs
   patch_record "NVIDIA driver + hardware packages" "ok"
 
-  # Add Thunderbolt support files
-  if [[ -d /usr/lib/steamos-nvidia/thunderbolt ]]; then
+  # Add Thunderbolt support files: prefer /home (latest), fall back to /usr
+  local thunderbolt_dir=""
+  if [[ -d "/home/.steamos-nvidia/bundles/thunderbolt" ]]; then
+    thunderbolt_dir="/home/.steamos-nvidia/bundles/thunderbolt"
+  elif [[ -d "/usr/lib/steamos-nvidia/thunderbolt" ]]; then
+    thunderbolt_dir="/usr/lib/steamos-nvidia/thunderbolt"
+  fi
+  if [[ -n "$thunderbolt_dir" ]]; then
     log "Adding thunderbolt support"
-    _install_thunderbolt_files /usr/lib/steamos-nvidia/thunderbolt "$MERGED"
-    _install_thunderbolt_files /usr/lib/steamos-nvidia/thunderbolt "$NEWROOT"
+    _install_thunderbolt_files "$thunderbolt_dir" "$MERGED"
+    _install_thunderbolt_files "$thunderbolt_dir" "$NEWROOT"
   fi
   patch_record "Thunderbolt support" "ok"
 
@@ -473,9 +484,22 @@ phase_rebuild_configure() {
 
 # Phase: Reconcile and verify
 phase_rebuild_reconcile() {
-  # Propagate self-healing machinery
+  # Propagate self-healing scripts from /home (latest) or /usr (fallback).
+  # State (driver.conf, build.conf) stays in /usr/lib/steamos-nvidia/.
+  local nvidia_dir
+  nvidia_dir="$(resolve_nvidia_dir)" || die "Cannot find steamos-nvidia directory"
+
   mkdir -p "$NEWROOT/usr/lib/steamos-nvidia"
-  cp -a /usr/lib/steamos-nvidia/. "$NEWROOT/usr/lib/steamos-nvidia/"
+
+  # Copy scripts from the resolved directory
+  local f
+  for f in "$nvidia_dir"/*.sh; do
+    [[ -f "$f" ]] && cp -f "$f" "$NEWROOT/usr/lib/steamos-nvidia/"
+  done
+  # Copy library subdirectories (lib/, pipelines/, diagnostics/)
+  for d in lib pipelines diagnostics; do
+    [[ -d "$nvidia_dir/$d" ]] && cp -a "$nvidia_dir/$d" "$NEWROOT/usr/lib/steamos-nvidia/"
+  done
 
   # Persist project files to /home for later re-run
   ensure_project_persisted
