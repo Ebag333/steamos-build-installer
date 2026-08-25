@@ -95,7 +95,7 @@ flash_device_size() {
 flash_preflight() {
   local img="$1" target="$2"
   local checks_passed=0 checks_failed=0
-  set +e  # diagnostic function — don't die on individual command failures
+  set +e # diagnostic function — don't die on individual command failures
 
   IMG_BYTES="$(stat -c '%s' "$img")"
   TARGET_BYTES="$(blockdev --getsize64 "$target")"
@@ -129,7 +129,7 @@ flash_preflight() {
         img_loop_detail+="    $loop (RO=$loop_ro):"$'\n'
         while IFS= read -r line; do
           img_loop_detail+="      $line"$'\n'
-        done <<< "$loop_mounts"
+        done <<<"$loop_mounts"
       fi
 
       # Check for mounted child partitions.
@@ -145,7 +145,7 @@ flash_preflight() {
           img_loop_detail+="    $child (RO=$child_ro):"$'\n'
           while IFS= read -r line; do
             img_loop_detail+="      $line"$'\n'
-          done <<< "$child_mnt"
+          done <<<"$child_mnt"
         fi
       done
 
@@ -166,7 +166,7 @@ flash_preflight() {
         # RO, no mounts — informational only.
         img_loop_status="ro-ok"
       fi
-    done <<< "$img_loops"
+    done <<<"$img_loops"
   fi
 
   # GPT validation.
@@ -174,7 +174,7 @@ flash_preflight() {
   if command -v sgdisk >/dev/null 2>&1; then
     img_gpt_detail="$(sgdisk -v "$img" 2>&1)" || sgdisk_rc=$?
     # sgdisk -v returns 0 on success; the output text varies by version.
-    if (( sgdisk_rc == 0 )); then
+    if ((sgdisk_rc == 0)); then
       img_gpt_ok=1
     fi
   fi
@@ -266,9 +266,9 @@ flash_preflight() {
   echo "  Path:        $img"
   echo "  Size:        $img_human ($IMG_BYTES bytes)"
 
-  if (( img_gpt_ok )); then
+  if ((img_gpt_ok)); then
     echo "  GPT:         ✓ valid"
-    checks_passed=$(( checks_passed + 1 ))
+    checks_passed=$((checks_passed + 1))
   else
     echo "  GPT:         ✗ INVALID"
     if [[ -n "$img_gpt_detail" ]]; then
@@ -277,35 +277,35 @@ flash_preflight() {
         echo "    $line"
       done
     fi
-    checks_failed=$(( checks_failed + 1 ))
+    checks_failed=$((checks_failed + 1))
   fi
 
-  if (( img_parts_ok )); then
+  if ((img_parts_ok)); then
     echo "  Partitions:  ✓ $img_parts_found"
-    checks_passed=$(( checks_passed + 1 ))
+    checks_passed=$((checks_passed + 1))
   else
     echo "  Partitions:  ✗ expected esp, efi-A, rootfs-A, var-A, home"
     echo "    Found:     $img_parts_found"
-    checks_failed=$(( checks_failed + 1 ))
+    checks_failed=$((checks_failed + 1))
   fi
 
-  if (( img_loop_ok )); then
+  if ((img_loop_ok)); then
     case "$img_loop_status" in
-      none)      echo "  Loop users:  ✓ none" ;;
-      ro-ok)     echo "  Loop users:  ✓ RO only (no mounts)" ;;
-      detached)  echo "  Loop users:  ✓ detached stale loop" ;;
+      none) echo "  Loop users:  ✓ none" ;;
+      ro-ok) echo "  Loop users:  ✓ RO only (no mounts)" ;;
+      detached) echo "  Loop users:  ✓ detached stale loop" ;;
     esac
-    checks_passed=$(( checks_passed + 1 ))
+    checks_passed=$((checks_passed + 1))
   else
     case "$img_loop_status" in
-      mounted)        echo "  Loop users:  ✗ mounted children — unmount before flashing" ;;
-      detach-failed)  echo "  Loop users:  ✗ could not detach loop — reboot may be required" ;;
-      *)              echo "  Loop users:  ✗ $img_loops" ;;
+      mounted) echo "  Loop users:  ✗ mounted children — unmount before flashing" ;;
+      detach-failed) echo "  Loop users:  ✗ could not detach loop — reboot may be required" ;;
+      *) echo "  Loop users:  ✗ $img_loops" ;;
     esac
     if [[ -n "$img_loop_detail" ]]; then
       printf '%s' "$img_loop_detail"
     fi
-    checks_failed=$(( checks_failed + 1 ))
+    checks_failed=$((checks_failed + 1))
   fi
 
   echo "  Quiescent:   ✓ synced"
@@ -317,33 +317,33 @@ flash_preflight() {
   echo "  Size:        $target_human ($TARGET_BYTES bytes)"
   echo "  Removable:   ${dev_rm:-<unknown>}"
 
-  if (( target_mounts_ok )); then
+  if ((target_mounts_ok)); then
     echo "  Mounted:     ✓ no"
   else
     local mount_count
     mount_count="$(findmnt -rn -S "$target" 2>/dev/null | wc -l)"
     for child in "$target"*; do
       [[ -b "$child" ]] || continue
-      mount_count=$(( mount_count + $(findmnt -rn -S "$child" 2>/dev/null | wc -l) ))
+      mount_count=$((mount_count + $(findmnt -rn -S "$child" 2>/dev/null | wc -l)))
     done
     echo "  Mounted:     $mount_count partition(s) — will auto-unmount"
   fi
 
-  if (( target_holders_ok )); then
+  if ((target_holders_ok)); then
     echo "  Swap:        ✓ no"
     echo "  Holders:     ✓ none"
-    checks_passed=$(( checks_passed + 1 ))
+    checks_passed=$((checks_passed + 1))
   else
     echo "  Holders:     ✗ target is in use (swap/LVM/dm-crypt/RAID)"
-    checks_failed=$(( checks_failed + 1 ))
+    checks_failed=$((checks_failed + 1))
   fi
 
-  if (( target_system_ok )); then
+  if ((target_system_ok)); then
     echo "  System disk: ✓ no"
-    checks_passed=$(( checks_passed + 1 ))
+    checks_passed=$((checks_passed + 1))
   else
     echo "  System disk: ✗ target contains /, /boot, /efi, /home, or build workspace"
-    checks_failed=$(( checks_failed + 1 ))
+    checks_failed=$((checks_failed + 1))
   fi
 
   # ── Capacity ──────────────────────────────────────────────────────────
@@ -353,27 +353,27 @@ flash_preflight() {
   echo "  Image:       $img_human"
   echo "  Target:      $target_human"
 
-  if (( IMG_BYTES > TARGET_BYTES )); then
+  if ((IMG_BYTES > TARGET_BYTES)); then
     echo "  Result:      ✗ IMAGE DOES NOT FIT"
-    checks_failed=$(( checks_failed + 1 ))
+    checks_failed=$((checks_failed + 1))
   else
-    local headroom=$(( TARGET_BYTES - IMG_BYTES ))
+    local headroom=$((TARGET_BYTES - IMG_BYTES))
     local headroom_human
     headroom_human="$(numfmt --to=iec "$headroom" 2>/dev/null || echo "$headroom bytes")"
     echo "  Headroom:    $headroom_human"
-    checks_passed=$(( checks_passed + 1 ))
+    checks_passed=$((checks_passed + 1))
   fi
 
   # ── Expected post-flash layout ────────────────────────────────────────
 
-  if command -v sgdisk >/dev/null 2>&1 && (( img_gpt_ok )); then
+  if command -v sgdisk >/dev/null 2>&1 && ((img_gpt_ok)); then
     echo ""
     echo "Expected post-flash layout:"
     sgdisk -p "$img" 2>/dev/null | awk 'NR>3 && /^[[:space:]]*[0-9]/ {
       printf "  %-10s %s\n", $7, $6
     }'
-    if (( TARGET_BYTES > IMG_BYTES )); then
-      echo "  (unallocated: $(( (TARGET_BYTES - IMG_BYTES) / 1048576 )) MiB beyond image)"
+    if ((TARGET_BYTES > IMG_BYTES)); then
+      echo "  (unallocated: $(((TARGET_BYTES - IMG_BYTES) / 1048576)) MiB beyond image)"
     fi
   fi
 
@@ -382,7 +382,7 @@ flash_preflight() {
   echo ""
   echo "Checks: $checks_passed passed, $checks_failed failed"
 
-  if (( checks_failed > 0 )); then
+  if ((checks_failed > 0)); then
     echo ""
     echo "Flash aborted."
     return 1
@@ -412,8 +412,8 @@ flash_verify_raw() {
       count="$img_bytes" \
       iflag=count_bytes \
       status=none \
-    | sha256sum \
-    | awk '{print $1}'
+      | sha256sum \
+      | awk '{print $1}'
   )" || {
     echo "  ✗ Failed to read back device for verification"
     return 1
@@ -434,16 +434,25 @@ flash_verify_raw() {
 flash_write() {
   local img="$1" target="$2" bs="4M"
 
-  [[ -f "$img" ]] || { echo "Image not found: $img" >&2; return 1; }
-  [[ -b "$target" ]] || { echo "Not a block device: $target" >&2; return 1; }
-  [[ $EUID -eq 0 ]] || { echo "Flash requires root (sudo)." >&2; return 1; }
+  [[ -f "$img" ]] || {
+    echo "Image not found: $img" >&2
+    return 1
+  }
+  [[ -b "$target" ]] || {
+    echo "Not a block device: $target" >&2
+    return 1
+  }
+  [[ $EUID -eq 0 ]] || {
+    echo "Flash requires root (sudo)." >&2
+    return 1
+  }
 
   # Collect sizes (preflight already ran, but we need these for the write).
   local img_bytes target_bytes
   img_bytes="$(stat -c '%s' "$img")"
   target_bytes="$(blockdev --getsize64 "$target")"
-  if (( img_bytes > target_bytes )); then
-    echo "Image ($(( img_bytes / 1000000000 )) GB) is larger than target device ($(( target_bytes / 1000000000 )) GB)." >&2
+  if ((img_bytes > target_bytes)); then
+    echo "Image ($((img_bytes / 1000000000)) GB) is larger than target device ($((target_bytes / 1000000000)) GB)." >&2
     return 1
   fi
 
@@ -474,7 +483,7 @@ flash_write() {
         echo "  ✗ $mp — could not unmount target filesystem" >&2
         return 1
       fi
-    done <<< "$mounts"
+    done <<<"$mounts"
   else
     echo "No target partitions mounted."
   fi
@@ -497,7 +506,10 @@ flash_write() {
   echo "Computing source image checksum..."
   local img_hash
   img_hash="$(sha256sum "$img" | awk '{print $1}')" \
-    || { echo "  ✗ Failed to compute image checksum" >&2; return 1; }
+    || {
+      echo "  ✗ Failed to compute image checksum" >&2
+      return 1
+    }
   echo "  Image SHA256:  $img_hash"
 
   echo "Writing image to $target (bs=$bs)..."
@@ -516,25 +528,28 @@ flash_write() {
 
     while IFS= read -r pct; do
       [[ "$pct" =~ ^[0-9]+$ ]] || continue
-      (( pct == last_pct )) && continue
+      ((pct == last_pct)) && continue
       last_pct=$pct
       printf '%s\n' "@@PROGRESS:$pct@@"
-    done < "$flash_fifo"
+    done <"$flash_fifo"
 
-    wait "$dd_pid" || { rm -f "$flash_fifo"; die "Flash write failed"; }
+    wait "$dd_pid" || {
+      rm -f "$flash_fifo"
+      die "Flash write failed"
+    }
     rm -f "$flash_fifo"
   else
     dd if="$img" of="$target" bs="$bs" status=progress conv=fsync oflag=sync 2>&1 \
       | while IFS= read -r line; do
-          if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+bytes ]]; then
-            local written="${BASH_REMATCH[1]}"
-            local pct=$(( written * 100 / img_bytes ))
-            (( pct == last_pct )) && continue
-            (( pct > 100 )) && pct=100
-            last_pct=$pct
-            printf '%s\n' "@@PROGRESS:$pct@@"
-          fi
-        done
+        if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+bytes ]]; then
+          local written="${BASH_REMATCH[1]}"
+          local pct=$((written * 100 / img_bytes))
+          ((pct == last_pct)) && continue
+          ((pct > 100)) && pct=100
+          last_pct=$pct
+          printf '%s\n' "@@PROGRESS:$pct@@"
+        fi
+      done
   fi
 
   echo "Syncing image data..."
@@ -552,7 +567,7 @@ flash_write() {
   # the old image-size boundary instead of the physical end of the target.
   # Relocate it after the write so the flashed device has a canonical GPT.
   local gpt_fixup="skipped"
-  if (( target_bytes > img_bytes )); then
+  if ((target_bytes > img_bytes)); then
     if command -v sgdisk >/dev/null 2>&1; then
       echo "Target is larger than the image; relocating backup GPT to end of disk..."
       if ! sgdisk --move-second-header "$target"; then
@@ -603,9 +618,9 @@ flash_write() {
   # partx -u to force a partition table re-read before giving up.
   local part_count=0
   for part in "${target}"*; do
-    [[ -b "$part" ]] && part_count=$(( part_count + 1 ))
+    [[ -b "$part" ]] && part_count=$((part_count + 1))
   done
-  if (( part_count == 0 )); then
+  if ((part_count == 0)); then
     echo "  Kernel does not see partitions; trying partx -u..."
     partx -u "$target" 2>/dev/null || true
     udevadm settle --timeout=10 2>/dev/null || true
@@ -616,18 +631,18 @@ flash_write() {
   local part
   for part in "${target}"*; do
     [[ -b "$part" ]] || continue
-    expected_parts=$(( expected_parts + 1 ))
+    expected_parts=$((expected_parts + 1))
     local pname
     pname="$(blkid -s PARTLABEL -o value "$part" 2>/dev/null || true)"
     if [[ -n "$pname" ]]; then
-      found_parts=$(( found_parts + 1 ))
+      found_parts=$((found_parts + 1))
     fi
     case "$pname" in
       home) home_part="$part" ;;
     esac
   done
 
-  if (( expected_parts > 0 && found_parts == 0 )); then
+  if ((expected_parts > 0 && found_parts == 0)); then
     echo "  ✗ No partition labels found — kernel may not have re-read the table"
     echo "    Try: partx -u $target"
     return 1

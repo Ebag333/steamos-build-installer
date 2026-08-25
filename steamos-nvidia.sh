@@ -29,7 +29,7 @@ source "$SCRIPT_DIR/lib/pci-discovery.sh"
 # Load build defaults.  If defaults.conf is missing, all flags start blank.
 DEFAULTS_CONF="$SCRIPT_DIR/lib/configs/defaults.conf"
 if [[ -f "$DEFAULTS_CONF" ]]; then
-  # shellcheck disable=SC1090
+  # shellcheck source=lib/configs/defaults.conf
   source "$DEFAULTS_CONF"
 fi
 
@@ -51,7 +51,7 @@ Usage:
   steamos-nvidia.sh
       Launch the YAD GUI.
 
-  steamos-nvidia.sh --action build --image FILE [build options]
+  steamos-nvidia.sh --action build --image FILE --config FILE [options]
   steamos-nvidia.sh --action flash --image FILE --device /dev/sdX
   steamos-nvidia.sh --action configure
   steamos-nvidia.sh --action reboot
@@ -61,32 +61,17 @@ Setup:
   --setup                  Install host dependencies required by this tool
 
 Named arguments:
-  --action ACTION
-  --image FILE
-  --device DEVICE
-  --config FILE
-
-Build:
-  --workingdir DIR
-  --workdir DIR             Compatibility alias
-  --workdir-location MODE   auto | ram | disk
-  --rootfs-size SIZE
-  --session MODE            desktop | game
-  --hold-updates
-  --no-hold-updates
-  --no-installer
-  --trim-cuda
-  --thunderbolt
-  --hw-support
-  --hw-support-items ITEMS  Space-separated: logitech-hid linux-firmware libfprint fprintd bolt
-  --initramfs MODULES   Space-separated module list for initramfs (empty = stock)
-  --gaming-items ITEMS  Space-separated: trim-cuda gamemode
-  --debug-boot          Add rd.debug rd.log=all to kernel cmdline for boot debugging
-  --skip-sigcheck
-  --fix-keyring
+  --action ACTION          build | flash | configure | reboot
+  --image FILE             Base SteamOS repair image
+  --device DEVICE          Target flash device (flash only)
+  --config FILE            Build config file (all build options go here)
+  --output-dir DIR         Where to write output image
 
 Flash:
-  --allow-system-disk       Permit a target detected as the current system disk
+  --allow-system-disk      Permit a target detected as the current system disk
+
+All build options (rootfs size, session, update mode, packages, tweaks, etc.)
+are set via --config. See build.conf for the full list.
 
 No positional parameters are accepted.
 EOF
@@ -137,43 +122,93 @@ missing_commands() {
   ((${#missing[@]})) && printf '%s\n' "${missing[*]}"
 }
 
-# shellcheck disable=SC2178,SC2128
 require_action_dependencies() {
-  local action="$1" missing=""
+  local action="$1"
+  local missing_cmds=""
 
   case "$action" in
     gui)
-      missing="$(missing_commands yad || true)"
+      missing_cmds="$(missing_commands yad || true)"
       ;;
     build)
-      missing="$(missing_commands \
+      missing_cmds="$(missing_commands \
         losetup blkid btrfs bzip2 gzip xz pv rsync curl depmod sed awk tar \
         zstd pacman python3 readelf sgdisk sfdisk partx unshare lspci modinfo || true)"
       ;;
     flash)
-      missing="$(missing_commands \
+      missing_cmds="$(missing_commands \
         lsblk blockdev findmnt mountpoint sgdisk sfdisk pv udevadm || true)"
       ;;
     configure)
       # post-install configuration is GUI-driven.
-      missing="$(missing_commands yad || true)"
+      missing_cmds="$(missing_commands yad || true)"
       ;;
-    reboot|list-images|list-devices|is-system-disk|preflight)
-      ;;
+    reboot | list-images | list-devices | is-system-disk | preflight) ;;
   esac
 
-  [[ -z "$missing" ]] || show_setup_required "$missing"
+  [[ -z "$missing_cmds" ]] || show_setup_required "$missing_cmds"
+}
+
+# ensure_user_password
+#   Check whether the current user has a password set.  If not, prompt them
+#   to create one interactively via passwd.  Returns 1 if the account is
+#   locked or password setup fails.
+ensure_user_password() {
+  local user="${SUDO_USER:-${USER:-deck}}"
+  local status
+
+  status="$(passwd -S "$user" 2>/dev/null | awk '{print $2}')"
+
+  case "$status" in
+    P)
+      return 0
+      ;;
+
+    NP)
+      echo
+      echo "SteamOS normally ships with no password configured for '$user'."
+      echo
+      echo "This installer requires administrator access, and a password is"
+      echo "also recommended when using SteamOS as a general-purpose desktop."
+      echo
+      echo "Please create a password for '$user' now."
+      echo
+      passwd "$user" || {
+        echo "ERROR: Password setup failed." >&2
+        return 1
+      }
+      echo
+      echo "Password configured successfully."
+      echo
+      ;;
+
+    L)
+      echo "ERROR: The '$user' account is password-locked." >&2
+      echo "Cannot continue with sudo setup." >&2
+      return 1
+      ;;
+
+    *)
+      echo "ERROR: Unable to determine password status for '$user'." >&2
+      return 1
+      ;;
+  esac
 }
 
 run_setup() {
   local self="${BASH_SOURCE[0]}"
 
   if [[ $EUID -ne 0 ]]; then
-    if command -v sudo >/dev/null 2>&1; then
+    # Passwordless sudo — already cached or configured.
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
       exec sudo bash "$self" --setup
     fi
-    echo "Setup requires root privileges and sudo is not available." >&2
-    exit 1
+
+    # Ensure the user has a password so sudo can work.
+    ensure_user_password || exit 1
+
+    # Now sudo should accept the password they just set.
+    exec sudo bash "$self" --setup
   fi
 
   command -v pacman >/dev/null 2>&1 || {
@@ -232,41 +267,65 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --action)            ACTION="${2:?--action requires a value}"; shift 2 ;;
-    --image)             IMG="${2:?--image requires a value}"; shift 2 ;;
-    --device)            TARGET_DEV="${2:?--device requires a value}"; shift 2 ;;
-    --config)            CONFIG_FILE="${2:?--config requires a value}"; shift 2 ;;
+    --action)
+      ACTION="${2:?--action requires a value}"
+      shift 2
+      ;;
+    --image)
+      IMG="${2:?--image requires a value}"
+      shift 2
+      ;;
+    --device)
+      TARGET_DEV="${2:?--device requires a value}"
+      shift 2
+      ;;
+    --config)
+      CONFIG_FILE="${2:?--config requires a value}"
+      shift 2
+      ;;
+    --output-dir)
+      OUTPUT_DIR="${2:?--output-dir requires a value}"
+      shift 2
+      ;;
 
-    --workingdir|--workdir)
-                         WORKDIR="${2:?$1 requires a value}"; shift 2 ;;
-    --workdir-location)  WORKDIR_LOCATION="${2:?--workdir-location requires a value}"; shift 2 ;;
-    --rootfs-size)       ROOTFS_SIZE="${2:?--rootfs-size requires a value}"; shift 2 ;;
-    --session)           DEFAULT_SESSION="${2:?--session requires a value}"; shift 2 ;;
-    --hold-updates)      UPDATE_MODE="hold"; shift ;;
-    --no-hold-updates)   UPDATE_MODE="stock"; shift ;;
-    --no-installer)      ADD_INSTALLER=0; shift ;;
-    --trim-cuda)         TRIM_CUDA=1; shift ;;
-    --thunderbolt)       THUNDERBOLT=1; shift ;;
-    --hw-support)        BUILD_HW_SUPPORT=1; shift ;;
-    --hw-support-items)  HW_SUPPORT_ITEMS="${2:?--hw-support-items requires a list}"; BUILD_HW_SUPPORT=1; shift 2 ;;
-    --initramfs)         INITRAMFS_MODULES="${2:?--initramfs requires a module list}"; shift 2 ;;
-    --gaming-items)      GAMING_ITEMS="${2:?--gaming-items requires a list}"; shift 2 ;;
-    --debug-boot)        DEBUG_BOOT=1; shift ;;
-    --skip-sigcheck)     SKIP_SIG=1; shift ;;
-    --fix-keyring)       FIX_KEYRING=1; shift ;;
+    --allow-system-disk)
+      ALLOW_SYSTEM_DISK=1
+      shift
+      ;;
+    --setup)
+      SETUP_MODE=1
+      CLI_MODE=1
+      shift
+      ;;
 
-    --allow-system-disk) ALLOW_SYSTEM_DISK=1; shift ;;
-    --setup)             SETUP_MODE=1; CLI_MODE=1; shift ;;
-
-    -h|--help) usage; exit 0 ;;
-    --gui) CLI_MODE=0; shift ;;
-    --) shift; [[ $# -eq 0 ]] || { echo "Positional parameters are not supported." >&2; exit 2; } ;;
-    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --gui)
+      CLI_MODE=0
+      shift
+      ;;
+    --)
+      shift
+      [[ $# -eq 0 ]] || {
+        echo "Positional parameters are not supported." >&2
+        exit 2
+      }
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
   esac
 done
 
 if [[ "$SETUP_MODE" -eq 1 ]]; then
-  [[ -z "$ACTION" ]] || { echo "--setup cannot be combined with --action." >&2; exit 2; }
+  [[ -z "$ACTION" ]] || {
+    echo "--setup cannot be combined with --action." >&2
+    exit 2
+  }
   run_setup
   exit 0
 fi
@@ -277,40 +336,16 @@ fi
 build_backend_args() {
   BACKEND_ARGS=(--action "$ACTION")
 
-  [[ -n "$IMG" ]]              && BACKEND_ARGS+=(--image "$IMG")
-  [[ -n "$TARGET_DEV" ]]       && BACKEND_ARGS+=(--device "$TARGET_DEV")
-  [[ -n "$CONFIG_FILE" ]]      && BACKEND_ARGS+=(--config "$CONFIG_FILE")
-  [[ -n "$WORKDIR" ]]          && BACKEND_ARGS+=(--workingdir "$WORKDIR")
-  [[ -n "$WORKDIR_LOCATION" ]] && BACKEND_ARGS+=(--workdir-location "$WORKDIR_LOCATION")
-  [[ -n "$ROOTFS_SIZE" ]]      && BACKEND_ARGS+=(--rootfs-size "$ROOTFS_SIZE")
-  [[ -n "$DEFAULT_SESSION" ]]  && BACKEND_ARGS+=(--session "$DEFAULT_SESSION")
-
-  case "$UPDATE_MODE" in
-    hold)  BACKEND_ARGS+=(--hold-updates) ;;
-    stock) BACKEND_ARGS+=(--no-hold-updates) ;;
-  esac
-
-  [[ "$ADD_INSTALLER" == "0" ]]    && BACKEND_ARGS+=(--no-installer)
-  [[ "$TRIM_CUDA" -eq 1 ]]         && BACKEND_ARGS+=(--trim-cuda)
-  [[ "$BUILD_HW_SUPPORT" -eq 1 ]]  && {
-    if [[ -n "$HW_SUPPORT_ITEMS" ]]; then
-      BACKEND_ARGS+=(--hw-support-items "$HW_SUPPORT_ITEMS")
-    else
-      BACKEND_ARGS+=(--hw-support)
-    fi
-  }
-  [[ "$THUNDERBOLT" -eq 1 ]]       && BACKEND_ARGS+=(--thunderbolt)
-  [[ "$SKIP_SIG" -eq 1 ]]          && BACKEND_ARGS+=(--skip-sigcheck)
-  [[ "$FIX_KEYRING" -eq 1 ]]       && BACKEND_ARGS+=(--fix-keyring)
-  [[ -n "$INITRAMFS_MODULES" ]]    && BACKEND_ARGS+=(--initramfs "$INITRAMFS_MODULES")
-  [[ -n "$GAMING_ITEMS" ]]        && BACKEND_ARGS+=(--gaming-items "$GAMING_ITEMS")
-  [[ "$DEBUG_BOOT" -eq 1 ]]        && BACKEND_ARGS+=(--debug-boot)
+  [[ -n "$IMG" ]] && BACKEND_ARGS+=(--image "$IMG")
+  [[ -n "$TARGET_DEV" ]] && BACKEND_ARGS+=(--device "$TARGET_DEV")
+  [[ -n "$CONFIG_FILE" ]] && BACKEND_ARGS+=(--config "$CONFIG_FILE")
+  [[ -n "$OUTPUT_DIR" ]] && BACKEND_ARGS+=(--output-dir "$OUTPUT_DIR")
   [[ "$ALLOW_SYSTEM_DISK" -eq 1 ]] && BACKEND_ARGS+=(--allow-system-disk)
 }
 
 backend_needs_root() {
   case "$1" in
-    build|flash|flashless|reboot) return 0 ;;
+    build | flash | flashless | reboot) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -456,11 +491,22 @@ run_backend_gui() {
             --button="OK":0 \
             --center \
             --width=400 \
-            2>/dev/null)" || { rm -rf "$tmpdir"; return 1; }
+            2>/dev/null)" || {
+            rm -rf "$tmpdir"
+            return 1
+          }
           printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
-            || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+            || {
+              ui_error "Authentication failed."
+              rm -rf "$tmpdir"
+              return 1
+            }
           sudo -n true 2>/dev/null \
-            || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+            || {
+              ui_error "Authentication failed."
+              rm -rf "$tmpdir"
+              return 1
+            }
         else
           echo "[gui] sudo credentials cached, skipping password prompt (build)" >&2
         fi
@@ -498,11 +544,22 @@ run_backend_gui() {
           --button="OK":0 \
           --center \
           --width=400 \
-          2>/dev/null)" || { rm -rf "$tmpdir"; return 1; }
+          2>/dev/null)" || {
+          rm -rf "$tmpdir"
+          return 1
+        }
         printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
-          || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+          || {
+            ui_error "Authentication failed."
+            rm -rf "$tmpdir"
+            return 1
+          }
         sudo -n true 2>/dev/null \
-          || { ui_error "Authentication failed."; rm -rf "$tmpdir"; return 1; }
+          || {
+            ui_error "Authentication failed."
+            rm -rf "$tmpdir"
+            return 1
+          }
       else
         echo "[gui] sudo credentials cached, skipping password prompt (non-build)" >&2
       fi
@@ -528,7 +585,7 @@ run_backend_gui() {
     set +e
     "${launcher[@]}" >"$logfile" 2>&1
     _rc=$?
-    echo "$_rc" > "$rcfile"
+    echo "$_rc" >"$rcfile"
     sync "$rcfile" 2>/dev/null
     echo "[gui] runner finished with exit $_rc" >&2
   ) &
@@ -555,18 +612,18 @@ run_backend_gui() {
   disown "$feed_pid" 2>/dev/null || true
 
   yad --progress \
-        --title="$title" \
-        --text="<b>$title</b>" \
-        --auto-close \
-        --no-buttons \
-        --enable-log="Build / operation log" \
-        --log-on-top \
-        --scroll \
-        --center \
-        --width=900 \
-        --height=600 \
-        < "$progress_pipe" \
-        2>/dev/null || yad_rc=$?
+    --title="$title" \
+    --text="<b>$title</b>" \
+    --auto-close \
+    --no-buttons \
+    --enable-log="Build / operation log" \
+    --log-on-top \
+    --scroll \
+    --center \
+    --width=900 \
+    --height=600 \
+    <"$progress_pipe" \
+    2>/dev/null || yad_rc=$?
   echo "[gui] yad primary exited with code $yad_rc" >&2
 
   wait "$feed_pid" 2>/dev/null || true
@@ -583,36 +640,36 @@ run_backend_gui() {
     disown $! 2>/dev/null || true
 
     yad --progress \
-          --title="$title" \
-          --text="<b>$title</b>" \
-          --auto-close \
-          --no-buttons \
-          --center \
-          --width=700 \
-          --height=400 \
-          < "$progress_pipe" \
-          2>/dev/null \
-    || {
-      echo "[gui] simple yad also failed. Trying zenity..." >&2
-      rm -f "$progress_pipe"
-      progress_pipe="$tmpdir/progress-zenity"
-      mkfifo "$progress_pipe"
-      _feed_progress "$logfile" "$rcfile" >"$progress_pipe" &
-      disown $! 2>/dev/null || true
-      zenity --progress \
-            --title="$title" \
-            --text="$title" \
-            --auto-close \
-            --no-cancel \
-            --width=500 \
-            < "$progress_pipe" \
-            2>/dev/null \
+      --title="$title" \
+      --text="<b>$title</b>" \
+      --auto-close \
+      --no-buttons \
+      --center \
+      --width=700 \
+      --height=400 \
+      <"$progress_pipe" \
+      2>/dev/null \
       || {
-        echo "[gui] zenity also failed. Waiting in console..." >&2
-        echo "[gui] Monitor: tail -f $logfile" >&2
-        while [[ ! -f "$rcfile" ]]; do sleep 1; done
+        echo "[gui] simple yad also failed. Trying zenity..." >&2
+        rm -f "$progress_pipe"
+        progress_pipe="$tmpdir/progress-zenity"
+        mkfifo "$progress_pipe"
+        _feed_progress "$logfile" "$rcfile" >"$progress_pipe" &
+        disown $! 2>/dev/null || true
+        zenity --progress \
+          --title="$title" \
+          --text="$title" \
+          --auto-close \
+          --no-cancel \
+          --width=500 \
+          <"$progress_pipe" \
+          2>/dev/null \
+          || {
+            echo "[gui] zenity also failed. Waiting in console..." >&2
+            echo "[gui] Monitor: tail -f $logfile" >&2
+            while [[ ! -f "$rcfile" ]]; do sleep 1; done
+          }
       }
-    }
     rm -f "$progress_pipe"
   fi
 
@@ -694,8 +751,8 @@ ui_select_action() {
     --height=340 \
     --button="Cancel":1 \
     --button="OK":0 \
-    "Build" "Build a patched SteamOS NVIDIA installer image" \
     "Generate Config" "Save a build configuration file for later use" \
+    "Build" "Build a patched SteamOS NVIDIA installer image" \
     "Flash" "Flash a completed installer image to USB" \
     "Flashless" "Install a built image to inactive A/B slot (no USB)" \
     "Diagnostics" "System diagnostics and reporting" \
@@ -732,7 +789,7 @@ ui_select_initramfs_modules() {
   local seen_modules=""
   while IFS=$'\t' read -r pci class category device bound_driver module mod_desc; do
     [[ "$pci" == "PCI" ]] && continue  # skip header
-    [[ "$module" == "-" ]] && continue  # no matching module
+    [[ "$module" == "-" ]] && continue # no matching module
 
     # Deduplicate modules (same module may match multiple devices).
     if [[ " $seen_modules " == *" $module "* ]]; then
@@ -746,14 +803,20 @@ ui_select_initramfs_modules() {
     local cat_label="$category"
 
     case "$class" in
-      0x01*)   check="TRUE"; cat_label="boot-path" ;;  # storage controllers
-      0x0c03*) check="TRUE"; cat_label="boot-path" ;;  # USB/USB4 host controllers
-      *)       cat_label="$category" ;;
+      0x01*)
+        check="TRUE"
+        cat_label="boot-path"
+        ;; # storage controllers
+      0x0c03*)
+        check="TRUE"
+        cat_label="boot-path"
+        ;; # USB/USB4 host controllers
+      *) cat_label="$category" ;;
     esac
 
     # Specific overrides for known boot-critical modules.
     case "$module" in
-      thunderbolt|typec|xhci_hcd|xhci_pci|nvme|ahci|btrfs|usbhid|hid_generic)
+      thunderbolt | typec | xhci_hcd | xhci_pci | nvme | ahci | btrfs | usbhid | hid_generic)
         check="TRUE"
         cat_label="boot-path"
         ;;
@@ -763,7 +826,7 @@ ui_select_initramfs_modules() {
     esac
 
     rows+=("$check" "$module" "$cat_label" "$device" "$bound_driver" "$mod_desc")
-  done <<< "$hw_data"
+  done <<<"$hw_data"
 
   if [[ ${#rows[@]} -eq 0 ]]; then
     echo ""
@@ -815,39 +878,47 @@ ui_select_hw_support() {
   if [[ -f "$valve_conf" ]]; then
     line_num=0
     while IFS= read -r line; do
-      (( ++line_num ))
+      ((++line_num))
       [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
       if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
         bad_lines+=("  $(basename "$valve_conf"):$line_num: $line")
         continue
       fi
-      group="${line%%|*}"; rest="${line#*|}"
-      pkg="${rest%%|*}"; rest="${rest#*|}"
-      version="${rest%%|*}"; rest="${rest#*|}"
-      default="${rest%%|*}"; desc="${rest#*|}"
+      group="${line%%|*}"
+      rest="${line#*|}"
+      pkg="${rest%%|*}"
+      rest="${rest#*|}"
+      version="${rest%%|*}"
+      rest="${rest#*|}"
+      default="${rest%%|*}"
+      desc="${rest#*|}"
       rows+=("$default" "$group" "$pkg" "$version" "valve" "$desc")
-    done < "$valve_conf"
+    done <"$valve_conf"
   fi
 
   # Read Arch manifest.
   if [[ -f "$arch_conf" ]]; then
     line_num=0
     while IFS= read -r line; do
-      (( ++line_num ))
+      ((++line_num))
       [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
       if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
         bad_lines+=("  $(basename "$arch_conf"):$line_num: $line")
         continue
       fi
-      group="${line%%|*}"; rest="${line#*|}"
-      pkg="${rest%%|*}"; rest="${rest#*|}"
-      version="${rest%%|*}"; rest="${rest#*|}"
-      default="${rest%%|*}"; desc="${rest#*|}"
+      group="${line%%|*}"
+      rest="${line#*|}"
+      pkg="${rest%%|*}"
+      rest="${rest#*|}"
+      version="${rest%%|*}"
+      rest="${rest#*|}"
+      default="${rest%%|*}"
+      desc="${rest#*|}"
       rows+=("$default" "$group" "$pkg" "$version" "arch" "$desc")
-    done < "$arch_conf"
+    done <"$arch_conf"
   fi
 
-  if (( ${#bad_lines[@]} > 0 )); then
+  if ((${#bad_lines[@]} > 0)); then
     ui_error "Malformed lines in hardware config:
 
 $(printf '%s\n' "${bad_lines[@]}")
@@ -858,7 +929,11 @@ Example: Firmware|linux-firmware|latest|TRUE|Full firmware suite"
     return
   fi
 
-  (( ${#rows[@]} > 0 )) || { ui_error "No hardware packages found in config files."; echo ""; return; }
+  ((${#rows[@]} > 0)) || {
+    ui_error "No hardware packages found in config files."
+    echo ""
+    return
+  }
 
   local selected
   selected="$(yad --list --checklist \
@@ -889,61 +964,39 @@ Packages are sourced from Valve's repository or official Arch repositories.</spa
   echo "$selected"
 }
 
-# Pipx package selection dialog.
-# Reads from pipx-packages.conf and shows a checklist.
-# Prints space-separated package names to stdout; empty if cancelled.
-ui_select_pipx_packages() {
-  local conf="$SCRIPT_DIR/lib/configs/pipx-packages.conf"
-  local -a rows=()
-  local line rest group pkg spec default venv desc
-
-  if [[ -f "$conf" ]]; then
-    while IFS= read -r line; do
-      [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
-      [[ "$line" == *"|"*"|"*"|"*"|"*"|"* ]] || continue
-      group="${line%%|*}"; rest="${line#*|}"
-      pkg="${rest%%|*}"; rest="${rest#*|}"
-      spec="${rest%%|*}"; rest="${rest#*|}"
-      default="${rest%%|*}"; rest="${rest#*|}"
-      venv="${rest%%|*}"; desc="${rest#*|}"
-      rows+=("$default" "$group" "$pkg" "$spec" "$venv" "$desc")
-    done < "$conf"
+# System tweaks selection dialog.
+# Reads items from configs/customizations.conf.
+# Prints space-separated item list to stdout; empty if cancelled.
+ui_select_system_tweaks() {
+  local conf="$SCRIPT_DIR/lib/configs/customizations.conf"
+  if [[ ! -r "$conf" ]]; then
+    warn "Customizations config not found: $conf"
+    echo ""
+    return
   fi
 
-  (( ${#rows[@]} > 0 )) || { echo ""; return; }
+  # Build yad arguments from config file
+  local -a yad_args=()
+  local module item default desc
 
-  local selected
-  selected="$(yad --list --checklist \
-    --title="Pipx Packages" \
-    --text="<b>Select pipx packages to install.</b>
+  while IFS='|' read -r module item default desc; do
+    # Skip comments and empty lines
+    [[ "$module" =~ ^#.*$ || -z "$module" ]] && continue
 
-<span fgcolor='gray'>Packages are installed via pipx in isolated Python environments.
-Packages sharing a venv name are installed together.</span>" \
-    --column="Install" \
-    --column="Group" \
-    --column="Package" \
-    --column="Spec" \
-    --column="Venv" \
-    --column="Description" \
-    --separator=" " \
-    --print-column=3 \
-    --center \
-    --width=1000 \
-    --height=400 \
-    --button="Cancel":1 \
-    --button="OK":0 \
-    "${rows[@]}" \
-    2>/dev/null)" || selected=""
+    # Skip "always" items (they're not optional)
+    [[ "$default" == "always" ]] && continue
 
-  selected="${selected%%|*}"
-  selected="${selected% }"
-  echo "$selected"
-}
+    # Add to yad dialog with group prefix
+    yad_args+=("$default" "$module: $item" "$desc")
+  done <"$conf"
 
-# System tweaks selection dialog.
-# Prints space-separated item list to stdout; empty if cancelled.
-# Items: trim-cuda gamemode pci-realloc tb-host-reset resize-bar thunderbolt
-ui_select_system_tweaks() {
+  # If no optional items, return empty
+  if [[ ${#yad_args[@]} -eq 0 ]]; then
+    echo ""
+    return
+  fi
+
+  # Show dialog
   local selected
   selected="$(yad --list --checklist \
     --title="System Optimizations" \
@@ -954,25 +1007,65 @@ ui_select_system_tweaks() {
     --separator=" " \
     --print-column=2 \
     --center \
-    --width=800 \
+    --width=900 \
     --height=600 \
     --button="Cancel":1 \
     --button="OK":0 \
-    FALSE trim-cuda "Remove CUDA/OpenCL/NVVM/OptiX libraries (~350 MB) — not needed for gaming, required for AI models" \
-    TRUE  gamemode  "Add deck user to gamemode group — allows CPU performance mode switching" \
-    TRUE  pci-realloc "pci=realloc=on — fix firmware PCI bridge resource allocation" \
-    TRUE  tb-host-reset "thunderbolt.host_reset=0 — improve Thunderbolt/eGPU hotplug stability" \
-    TRUE  resize-bar "nvidia.NVreg_EnableResizableBar=1 — enable resizable BAR for NVIDIA GPU" \
-    TRUE  fix-keyring "Force initialize Arch + holo pacman keyrings" \
-    FALSE skip-sigcheck "Disable pacman signature checks in build chroot" \
-    FALSE debug-boot "Add rd.debug rd.log=all to kernel cmdline for boot debugging" \
-    TRUE  thunderbolt "Thunderbolt dock support: PCI rescan udev rule + bolt service enable" \
-    TRUE  logitech-hid "Logitech receiver/HID++ kernel modules (hid-logitech-dj, hid-logitech-hidpp)" \
-    TRUE  unset-libva-driver "Remove /etc/profile.d/libva.sh — stops forcing LIBVA_DRIVER_NAME=radeonsi so browser auto-detects VA-API driver" \
-    TRUE  scx-lavd "Enable scx_lavd scheduler (autopilot) — best frametime consistency, requires scx-scheds package" \
-    TRUE  vm-tunables "Tune vm.swappiness for zram (180) or disk swap (10) — SteamOS ships zram at default 60" \
-    TRUE  cpu-performance "Set CPU governor + EPP to performance on every boot" \
-    TRUE  gpu-power-limit "Raise discrete GPU power limit to vendor ceiling on every boot" \
+    "${yad_args[@]}" \
+    2>/dev/null)" || selected=""
+
+  # Strip group prefix from selected items (remove "Module: " prefix)
+  selected="${selected%%|*}"
+  selected="${selected% }"
+  selected="$(echo "$selected" | sed 's/[A-Za-z]*: //g')"
+  echo "$selected"
+}
+
+# Package and driver builds selection dialog.
+# Reads items from configs/hw-packages-build.conf.
+# Prints space-separated driver list to stdout; empty if cancelled.
+ui_select_package_builds() {
+  local conf="$SCRIPT_DIR/lib/configs/hw-packages-build.conf"
+  if [[ ! -r "$conf" ]]; then
+    warn "Drivers config not found: $conf"
+    echo ""
+    return
+  fi
+
+  # Build yad arguments from config file
+  local -a yad_args=()
+  local type name version default desc
+
+  while IFS='|' read -r type name version default desc; do
+    # Skip comments and empty lines
+    [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
+
+    # Add to yad dialog (show name, not type)
+    yad_args+=("$default" "$name" "$desc")
+  done <"$conf"
+
+  # If no drivers, return empty
+  if [[ ${#yad_args[@]} -eq 0 ]]; then
+    echo ""
+    return
+  fi
+
+  # Show dialog
+  local selected
+  selected="$(yad --list --checklist \
+    --title="Custom Drivers" \
+    --text="<b>Select custom drivers to build and install.</b>" \
+    --column="Enable" \
+    --column="Driver" \
+    --column="Description" \
+    --separator=" " \
+    --print-column=2 \
+    --center \
+    --width=600 \
+    --height=400 \
+    --button="Cancel":1 \
+    --button="OK":0 \
+    "${yad_args[@]}" \
     2>/dev/null)" || selected=""
 
   selected="${selected%%|*}"
@@ -997,10 +1090,10 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     --item-separator="!" \
     --align=left \
     --center \
+    --scroll \
     --width=1000 \
     --height=600 \
     --field="Base image!Clean SteamOS repair image (.img or compressed):FL" \
-    --field="OOBE:CB" \
     --field="Branch:CB" \
     --field="Rootfs size!Size in MiB, or use K/M/G suffixes" \
     --field="Default session:CB" \
@@ -1010,15 +1103,14 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK" \
     --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK" \
     --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK" \
+    --field="Package & driver builds!Build and install custom drivers (Logitech HID, AoTofu VA-API, etc.):CHK" \
     --field="Add one-click installer!Adds desktop icon to install SteamOS to internal drive:CHK" \
-    --field="Pipx packages!Install Python applications via pipx from pipx-packages.conf:CHK" \
     --button="Cancel":1 \
     --button="OK":0 \
     "" \
-    "^steamdeck!steamdeck-oobe" \
     "^stable!beta!preview!rc!bc!pc!main" \
     "10240" \
-    "^stock!game!desktop" \
+    "^game!desktop" \
     "^selfheal!hold!stock" \
     "^auto!ram!disk" \
     "automatic" \
@@ -1029,35 +1121,19 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     "TRUE" \
     2>/dev/null)" || return 1
 
-  local base_image target_variant update_branch rootfs session update workspace workdir
-  local hw_support initramfs_support system_tweaks add_installer pipx_support
+  local base_image update_branch rootfs session update workspace workdir
+  local hw_support initramfs_support system_tweaks package_builds add_installer
 
   IFS="$sep" read -r \
-    base_image target_variant update_branch rootfs session update workspace workdir \
-    hw_support initramfs_support system_tweaks add_installer pipx_support \
+    base_image update_branch rootfs session update workspace workdir \
+    hw_support initramfs_support system_tweaks package_builds add_installer \
     <<<"$form"
 
   rootfs="${rootfs:-10240}"
-  session="${session:-stock}"
+  session="${session:-game}"
   update="${update:-selfheal}"
   workspace="${workspace:-auto}"
-  target_variant="${target_variant:-steamdeck}"
   update_branch="${update_branch:-stable}"
-
-  if [[ "$target_variant" == "steamdeck-oobe" ]]; then
-    yad --question \
-      --title="OOBE Reset Warning" \
-      --text="<b>Warning: OOBE will destroy the Steam library, settings, and configuration.</b>
-
-This includes all downloaded games unless they are in a non-default location. It is recommended to use this option only if you also want to reset the Steam client in addition to the base operating system.
-
-All other files on /home/ are preserved (downloads, documents, desktop, Flatpak apps, etc)." \
-      --button="Cancel":1 \
-      --button="Accept":0 \
-      --width=500 \
-      --center \
-      2>/dev/null || return 1
-  fi
 
   if [[ "$update_branch" != "stable" ]]; then
     local branch_text="<b>The Stable branch is recommended for most users.</b> Beta and preview are more prone to unexpected issues."
@@ -1078,61 +1154,82 @@ All other files on /home/ are preserved (downloads, documents, desktop, Flatpak 
     workdir=""
   fi
 
-  local -a args=(
-    --action build
-    --image "$base_image"
-    --rootfs-size "$rootfs"
-    --workdir-location "$workspace"
-  )
+  # Write build config to a temporary file
+  local conf_file
+  conf_file="$(mktemp /tmp/steamos-nvidia-build-XXXXXX.conf)"
 
-  [[ "$session" != "stock" ]] && args+=(--session "$session")
-  [[ -n "$workdir" ]] && args+=(--workingdir "$workdir")
+  cat >"$conf_file" <<EOF
+# Generated by steamos-nvidia GUI at $(date -Iseconds)
+IMG="$base_image"
+ROOTFS_SIZE="$rootfs"
+UPDATE_BRANCH="$update_branch"
+DEFAULT_SESSION="$session"
+UPDATE_MODE="$update"
+WORKDIR_LOCATION="$workspace"
+EOF
 
-  case "$update" in
-    hold)  args+=(--hold-updates) ;;
-    stock) args+=(--no-hold-updates) ;;
-  esac
+  [[ -n "$workdir" ]] && echo "WORKDIR=\"$workdir\"" >>"$conf_file"
+
+  local hw_items="" gaming_items="" drivers="" initramfs_mods=""
 
   if [[ "${hw_support^^}" == "TRUE" ]]; then
-    local hw_items
     hw_items="$(ui_select_hw_support)"
-    if [[ -z "$hw_items" ]]; then return 1; fi
+    if [[ -z "$hw_items" ]]; then
+      rm -f "$conf_file"
+      return 1
+    fi
     hw_items="$(echo "$hw_items" | tr '\n' ' ' | xargs)"
-    args+=(--hw-support-items "$hw_items")
-  fi
-  [[ "${add_installer^^}" != "TRUE" ]] && args+=(--no-installer)
-
-  # Pipx packages — show selection dialog if checkbox is checked.
-  if [[ "${pipx_support^^}" == "TRUE" ]]; then
-    local pipx_items
-    pipx_items="$(ui_select_pipx_packages)"
-    if [[ -z "$pipx_items" ]]; then return 1; fi
-    pipx_items="$(echo "$pipx_items" | tr '\n' ' ' | xargs)"
-    args+=(--pipx-items "$pipx_items")
   fi
 
   if [[ "${system_tweaks^^}" == "TRUE" ]]; then
-    local gaming_items
     gaming_items="$(ui_select_system_tweaks)"
-    if [[ -z "$gaming_items" ]]; then return 1; fi
+    if [[ -z "$gaming_items" ]]; then
+      rm -f "$conf_file"
+      return 1
+    fi
     gaming_items="$(echo "$gaming_items" | tr '\n' ' ' | xargs)"
-    args+=(--gaming-items "$gaming_items")
-    [[ " $gaming_items" == *" trim-cuda "* ]] && args+=(--trim-cuda)
-    [[ " $gaming_items" == *" skip-sigcheck "* ]] && args+=(--skip-sigcheck)
-    [[ " $gaming_items" == *" fix-keyring "* ]]    && args+=(--fix-keyring)
-    [[ " $gaming_items" == *" debug-boot "* ]]     && args+=(--debug-boot)
-    [[ " $gaming_items" == *" thunderbolt "* ]]    && args+=(--thunderbolt)
+  fi
+
+  # Package & driver builds — show selection dialog if checkbox is checked.
+  if [[ "${package_builds^^}" == "TRUE" ]]; then
+    drivers="$(ui_select_package_builds)"
+    if [[ -z "$drivers" ]]; then
+      rm -f "$conf_file"
+      return 1
+    fi
+    drivers="$(echo "$drivers" | tr '\n' ' ' | xargs)"
   fi
 
   if [[ "${initramfs_support^^}" == "TRUE" ]]; then
-    local initramfs_mods
     initramfs_mods="$(ui_select_initramfs_modules)"
-    if [[ -z "$initramfs_mods" ]]; then return 1; fi
-    args+=(--initramfs "$initramfs_mods")
+    if [[ -z "$initramfs_mods" ]]; then
+      rm -f "$conf_file"
+      return 1
+    fi
   fi
 
-  args+=(--oobe-variant "$target_variant")
-  args+=(--branch "$update_branch")
+  # Always write all selection keys (empty if not selected)
+  echo "HW_SUPPORT_ITEMS=\"$hw_items\"" >>"$conf_file"
+  echo "GAMING_ITEMS=\"$gaming_items\"" >>"$conf_file"
+  echo "CUSTOM_DRIVERS=\"$drivers\"" >>"$conf_file"
+  echo "INITRAMFS_MODULES=\"$initramfs_mods\"" >>"$conf_file"
+
+  [[ "${add_installer^^}" != "TRUE" ]] && echo "ADD_INSTALLER=0" >>"$conf_file"
+
+  # Derive TARGET_VARIANT from neutralize-oobe checkbox state.
+  # If neutralize-oobe is selected, suppress OOBE (steamdeck); otherwise keep it (steamdeck-oobe).
+  local target_variant="steamdeck-oobe"
+  if [[ -n "${gaming_items:-}" && " $gaming_items " == *" neutralize-oobe "* ]]; then
+    target_variant="steamdeck"
+  fi
+
+  echo "TARGET_VARIANT=\"$target_variant\"" >>"$conf_file"
+  echo "UPDATE_BRANCH=\"$update_branch\"" >>"$conf_file"
+
+  local -a args=(
+    --action build
+    --config "$conf_file"
+  )
 
   printf '%s\n' "${args[@]}"
 }
@@ -1140,43 +1237,108 @@ All other files on /home/ are preserved (downloads, documents, desktop, Flatpak 
 ui_build() {
   require_action_dependencies build || return 0
 
-  local -a args
-  mapfile -t args < <(ui_collect_build_args) || return 0
-  (( ${#args[@]} > 0 )) || return 0
+  local conf_file="" source_img="" output_dir=""
 
-  # Extract source image for the confirm dialog.
-  local source_img=""
-  local i
-  for (( i=0; i<${#args[@]}; i++ )); do
-    if [[ "${args[$i]}" == "--image" ]]; then
-      source_img="${args[$((i+1))]}"
+  # Selection loop — show a list menu; clicking a row opens the right dialog.
+  # The list always reflects current selections so the user can re-pick any item.
+  while true; do
+    local choice rc=0
+    choice="$(yad --list \
+      --title="Build SteamOS NVIDIA Image" \
+      --text="<b>Select build inputs, then press Build.</b>" \
+      --column="Input" \
+      --column="Selection" \
+      --print-column=1 \
+      --separator="" \
+      --center \
+      --width=900 \
+      --height=320 \
+      --button="Cancel":1 \
+      --button="Build":2 \
+      "Build configuration" "${conf_file:-<i>not selected</i>}" \
+      "Source image" "${source_img:-<i>not selected</i>}" \
+      "Output directory" "${output_dir:-<i>not selected</i>}" \
+      2>/dev/null)" || rc=$?
+
+    # Exit code 2 = Build button, 0 = row double-clicked, 1 = Cancel
+    if ((rc == 1)); then
+      return 0
+    elif ((rc == 2)); then
+      # Build pressed — validate all inputs
+      local missing=""
+      [[ -f "$conf_file" ]] || missing+="  - Build configuration\n"
+      [[ -f "$source_img" ]] || missing+="  - Source image\n"
+      [[ -d "$output_dir" ]] || missing+="  - Output directory\n"
+      if [[ -n "$missing" ]]; then
+        ui_error "<b>Please select all inputs before building:</b>\n\n$missing"
+        continue
+      fi
       break
     fi
+
+    # Row was selected — open the appropriate dialog
+    local _tmp=""
+    case "$choice" in
+      "Build configuration")
+        _tmp="$(yad --file \
+          --title="Select Build Configuration" \
+          --text="Select a build configuration file:" \
+          --file-filter="Config files (*.conf) | *.conf" \
+          --center \
+          --width=700 \
+          --height=500 \
+          2>/dev/null)" || true
+        [[ -n "$_tmp" ]] && conf_file="$_tmp"
+        ;;
+      "Source image")
+        _tmp="$(yad --file \
+          --title="Select Source Image" \
+          --text="Select the clean SteamOS repair image:" \
+          --file-filter="Images (*.img *.img.bz2 *.img.gz *.img.xz *.img.zst) | *.img *.img.bz2 *.img.gz *.img.xz *.img.zst" \
+          --center \
+          --width=700 \
+          --height=500 \
+          2>/dev/null)" || true
+        [[ -n "$_tmp" ]] && source_img="$_tmp"
+        ;;
+      "Output directory")
+        _tmp="$(yad --file --directory \
+          --title="Select Output Directory" \
+          --text="Select where to save the finished image:" \
+          --center \
+          --width=700 \
+          --height=500 \
+          2>/dev/null)" || true
+        [[ -n "$_tmp" ]] && output_dir="$_tmp"
+        ;;
+    esac
   done
 
-  local feature_summary=""
-  [[ " ${args[*]} " == *" --hw-support-items "* ]]  && feature_summary+="Hardware support\n"
-  [[ " ${args[*]} " == *" --initramfs "* ]]          && feature_summary+="Initramfs customization\n"
-  [[ " ${args[*]} " == *" --gaming-items "* ]]       && feature_summary+="System tweaks\n"
-  [[ " ${args[*]} " == *" --pipx-items "* ]]         && feature_summary+="Pipx packages\n"
-  [[ " ${args[*]} " != *" --no-installer "* ]]       && feature_summary+="One-click installer\n"
-  [[ -n "$feature_summary" ]] || feature_summary="None\n"
+  # Confirmation summary — same box-drawing style as generate-config
+  local summary=""
+  summary+="═══════════════════════════════════════════════════════════\n"
+  summary+="                      BUILD SUMMARY\n"
+  summary+="═══════════════════════════════════════════════════════════\n\n"
+  summary+="┌─ Inputs ───────────────────────────────────────────────┐\n"
+  summary+="│  Config:  $conf_file\n"
+  summary+="│  Source:  $source_img\n"
+  summary+="│  Output:  $output_dir\n"
+  summary+="└────────────────────────────────────────────────────────┘\n"
 
-  yad --question \
+  yad --text-info \
     --title="Confirm Build" \
-    --text="<b>Build NVIDIA-patched SteamOS image?</b>
-
-<b>Source:</b>
-$source_img
-
-<b>Features:</b>
-$(printf '%b' "$feature_summary")" \
+    --text="<b>Review build inputs before starting.</b>" \
+    --filename=<(printf '%b' "$summary") \
     --button="Cancel":1 \
     --button="Build":0 \
     --center \
-    --width=680 2>/dev/null || return 0
+    --width=700 \
+    --height=300 \
+    --fontname="monospace" \
+    2>/dev/null || return 0
 
-  if run_backend_gui "Building SteamOS NVIDIA image..." "${args[@]}"; then
+  # Build
+  if run_backend_gui "Building SteamOS NVIDIA image..." --action build --config "$conf_file" --image "$source_img" --output-dir "$output_dir"; then
     local output
     output="$(grep -oP '(?<=DONE — ).*' "$GUI_LAST_LOG" 2>/dev/null | tail -1 || true)"
     ui_info "<b>Build complete.</b>
@@ -1190,43 +1352,217 @@ $GUI_LAST_LOG"
 }
 
 ui_generate_conf() {
-  local -a args
-  mapfile -t args < <(ui_collect_build_args) || return 0
+  local sep=$'\x1f'
+  local form
 
-  (( ${#args[@]} > 0 )) || { ui_error "No configuration collected."; return 0; }
+  # Show settings form (without image selection)
+  form="$(yad --form \
+    --title="Generate Build Configuration" \
+    --text="<b>Build settings</b>
 
-  # Parse the args into a conf file.
-  local conf_content="# steamos-nvidia build config — generated $(date -Iseconds)\n"
-  local i key val
-  for (( i=0; i<${#args[@]}; i++ )); do
-    case "${args[$i]}" in
-      --image)            key=""; val="${args[$((i+1))]}" ; conf_content+="IMG=\"$val\"\n" ; (( i++ )) ; continue ;;
-      --rootfs-size)      key="ROOTFS_SIZE" ;;
-      --session)          key="DEFAULT_SESSION" ;;
-      --workdir-location) key="WORKDIR_LOCATION" ;;
-      --workingdir)       key="WORKDIR" ;;
-      --hold-updates)     conf_content+="UPDATE_MODE=\"hold\"\n" ; continue ;;
-      --no-hold-updates)  conf_content+="UPDATE_MODE=\"stock\"\n" ; continue ;;
-      --hw-support-items) key="HW_SUPPORT_ITEMS" ;;
-      --no-installer)     conf_content+="ADD_INSTALLER=0\n" ; continue ;;
-      --gaming-items)     key="GAMING_ITEMS" ;;
-      --trim-cuda)        conf_content+="TRIM_CUDA=1\n" ; continue ;;
-      --skip-sigcheck)    conf_content+="SKIP_SIG=1\n" ; continue ;;
-      --fix-keyring)      conf_content+="FIX_KEYRING=1\n" ; continue ;;
-      --debug-boot)       conf_content+="DEBUG_BOOT=1\n" ; continue ;;
-      --thunderbolt)      conf_content+="THUNDERBOLT=1\n" ; continue ;;
-      --initramfs)        key="INITRAMFS_MODULES" ;;
-      --oobe-variant)     key="TARGET_VARIANT" ;;
-      --branch)           key="UPDATE_BRANCH" ;;
-      --action)           (( i++ )) ; continue ;;
-      *) continue ;;
-    esac
-    val="${args[$((i+1))]}"
-    conf_content+="$key=\"$val\"\n"
-    (( i++ ))
-  done
+Configure the build options below. The image will be selected when you build." \
+    --columns=1 \
+    --separator="$sep" \
+    --item-separator="!" \
+    --align=left \
+    --center \
+    --scroll \
+    --width=900 \
+    --height=500 \
+    --field="Branch:CB" \
+    --field="Rootfs size!Size in MiB, or use K/M/G suffixes" \
+    --field="Default session:CB" \
+    --field="Update mode:CB" \
+    --field="Workspace location:CB" \
+    --field="Working directory!Use automatic unless you want an explicit build directory" \
+    --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK" \
+    --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK" \
+    --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK" \
+    --field="Package & driver builds!Build and install custom drivers (Logitech HID, AoTofu VA-API, etc.):CHK" \
+    --field="Add one-click installer!Adds desktop icon to install SteamOS to internal drive:CHK" \
+    --button="Cancel":1 \
+    --button="OK":0 \
+    "^stable!beta!preview!rc!bc!pc!main" \
+    "10240" \
+    "^game!desktop" \
+    "^selfheal!hold!stock" \
+    "^auto!ram!disk" \
+    "automatic" \
+    "TRUE" \
+    "FALSE" \
+    "TRUE" \
+    "TRUE" \
+    "TRUE" \
+    2>/dev/null)" || return 0
 
-  # Ask where to save.
+  local update_branch rootfs session update workspace workdir
+  local hw_support initramfs_support system_tweaks package_builds add_installer
+
+  IFS="$sep" read -r \
+    update_branch rootfs session update workspace workdir \
+    hw_support initramfs_support system_tweaks package_builds add_installer \
+    <<<"$form"
+
+  rootfs="${rootfs:-10240}"
+  session="${session:-game}"
+  update="${update:-selfheal}"
+  workspace="${workspace:-auto}"
+  update_branch="${update_branch:-stable}"
+
+  # Show sub-dialogs for optional items
+  local hw_items="" gaming_items="" drivers="" initramfs_mods=""
+
+  if [[ "${hw_support^^}" == "TRUE" ]]; then
+    hw_items="$(ui_select_hw_support)"
+    hw_items="$(echo "$hw_items" | tr '\n' ' ' | xargs)"
+  fi
+
+  if [[ "${system_tweaks^^}" == "TRUE" ]]; then
+    gaming_items="$(ui_select_system_tweaks)"
+    gaming_items="$(echo "$gaming_items" | tr '\n' ' ' | xargs)"
+  fi
+
+  if [[ "${package_builds^^}" == "TRUE" ]]; then
+    drivers="$(ui_select_package_builds)"
+    drivers="$(echo "$drivers" | tr '\n' ' ' | xargs)"
+  fi
+
+  if [[ "${initramfs_support^^}" == "TRUE" ]]; then
+    initramfs_mods="$(ui_select_initramfs_modules)"
+    initramfs_mods="$(echo "$initramfs_mods" | tr '\n' ' ' | xargs)"
+  fi
+
+  # Derive TARGET_VARIANT from neutralize-oobe checkbox state.
+  # If neutralize-oobe is selected, suppress OOBE (steamdeck); otherwise keep it (steamdeck-oobe).
+  local target_variant="steamdeck-oobe"
+  if [[ -n "${gaming_items:-}" && " $gaming_items " == *" neutralize-oobe "* ]]; then
+    target_variant="steamdeck"
+  fi
+
+  # Helper function to format items with 4 per line
+  # Args: $1 = items string (space or newline separated), $2 = prefix (optional)
+  _format_items() {
+    local items="$1"
+    local prefix="${2:-│  }"
+
+    # Normalize: replace newlines with spaces and collapse multiple spaces
+    items="$(echo "$items" | tr '\n' ' ' | tr -s ' ')"
+
+    local -a arr
+    read -ra arr <<<"$items"
+    local count=${#arr[@]}
+    local result=""
+    local line=""
+
+    if ((count <= 5)); then
+      # Single line for 5 or fewer items
+      result+="${prefix}${items}\n"
+    else
+      # Multiple lines, 4 items per line
+      local i=0
+      for item in "${arr[@]}"; do
+        line+="$item "
+        ((i++))
+        if ((i % 4 == 0)) || ((i == count)); then
+          result+="${prefix}${line}\n"
+          line=""
+        fi
+      done
+    fi
+
+    # Return the result (printf '%b' interprets escape sequences)
+    printf '%b' "$result"
+  }
+
+  # Build confirmation summary
+  local summary=""
+  summary+="═══════════════════════════════════════════════════════════\n"
+  summary+="                    BUILD CONFIGURATION\n"
+  summary+="═══════════════════════════════════════════════════════════\n\n"
+
+  summary+="┌─ General Settings ─────────────────────────────────────┐\n"
+  summary+="│  Update Branch:   $update_branch\n"
+  summary+="│  Rootfs Size:     ${rootfs} MB\n"
+  summary+="│  Default Session: ${session:-game}\n"
+  summary+="│  Update Mode:     $update\n"
+  summary+="│  Workspace:       $workspace\n"
+  [[ -n "$workdir" && "$workdir" != "automatic" ]] && summary+="│  Working Dir:     $workdir\n"
+  summary+="└────────────────────────────────────────────────────────┘\n\n"
+
+  summary+="┌─ Enabled Features ─────────────────────────────────────┐\n"
+  [[ "${add_installer^^}" == "TRUE" ]] && summary+="│  ✓ One-click installer\n"
+  [[ -n "$hw_items" ]] && summary+="│  ✓ Hardware support\n"
+  [[ -n "$gaming_items" ]] && summary+="│  ✓ System tweaks\n"
+  [[ -n "$drivers" ]] && summary+="│  ✓ Package & driver builds\n"
+  [[ -n "$initramfs_mods" ]] && summary+="│  ✓ Initramfs modules\n"
+  summary+="└────────────────────────────────────────────────────────┘\n\n"
+
+  summary+="┌─ Hardware Support ─────────────────────────────────────┐\n"
+  if [[ -n "$hw_items" ]]; then
+    summary+="$(_format_items "$hw_items")\n"
+  else
+    summary+="│  (none selected)\n"
+  fi
+  summary+="└────────────────────────────────────────────────────────┘\n\n"
+
+  summary+="┌─ System Tweaks ────────────────────────────────────────┐\n"
+  if [[ -n "$gaming_items" ]]; then
+    summary+="$(_format_items "$gaming_items")\n"
+  else
+    summary+="│  (none selected)\n"
+  fi
+  summary+="└────────────────────────────────────────────────────────┘\n\n"
+
+  summary+="┌─ Custom Drivers and Build Packages ────────────────────┐\n"
+  if [[ -n "$drivers" ]]; then
+    summary+="$(_format_items "$drivers")\n"
+  else
+    summary+="│  (none selected)\n"
+  fi
+  summary+="└────────────────────────────────────────────────────────┘\n\n"
+
+  summary+="┌─ Initramfs Modules ────────────────────────────────────┐\n"
+  if [[ -n "$initramfs_mods" ]]; then
+    summary+="$(_format_items "$initramfs_mods")\n"
+  else
+    summary+="│  (none selected)\n"
+  fi
+  summary+="└────────────────────────────────────────────────────────┘\n"
+
+  # Show confirmation dialog with scrollable text view
+  yad --text-info \
+    --title="Confirm Configuration" \
+    --text="<b>Review your build configuration before saving.</b>" \
+    --filename=<(printf '%b' "$summary") \
+    --button="Cancel":1 \
+    --button="Save":0 \
+    --center \
+    --width=700 \
+    --height=500 \
+    --fontname="monospace" \
+    2>/dev/null || return 0
+
+  # Build config content
+  local conf_content
+  conf_content="# steamos-nvidia build config — generated $(date -Iseconds)\n"
+  conf_content+="# Image path will be set when building\n\n"
+  conf_content+="ROOTFS_SIZE=\"$rootfs\"\n"
+  conf_content+="TARGET_VARIANT=\"$target_variant\"\n"
+  conf_content+="UPDATE_BRANCH=\"$update_branch\"\n"
+  conf_content+="DEFAULT_SESSION=\"${session:-game}\"\n"
+  conf_content+="UPDATE_MODE=\"${update:-selfheal}\"\n"
+  conf_content+="WORKDIR_LOCATION=\"$workspace\"\n"
+
+  [[ -n "$workdir" && "$workdir" != "automatic" ]] && conf_content+="WORKDIR=\"$workdir\"\n"
+  [[ "${add_installer^^}" != "TRUE" ]] && conf_content+="ADD_INSTALLER=0\n"
+
+  # Always write all selection keys (empty if not selected)
+  conf_content+="HW_SUPPORT_ITEMS=\"${hw_items:-}\"\n"
+  conf_content+="GAMING_ITEMS=\"${gaming_items:-}\"\n"
+  conf_content+="CUSTOM_DRIVERS=\"${drivers:-}\"\n"
+  conf_content+="INITRAMFS_MODULES=\"${initramfs_mods:-}\"\n"
+
+  # Show file save dialog
   local outfile
   outfile="$(yad --file --save \
     --title="Save Build Configuration" \
@@ -1236,14 +1572,34 @@ ui_generate_conf() {
     --width=600 \
     2>/dev/null)" || return 0
 
-  printf '%b' "$conf_content" > "$outfile"
+  # Check if file exists and prompt for overwrite
+  if [[ -f "$outfile" ]]; then
+    yad --question \
+      --title="Overwrite File?" \
+      --text="<b>File already exists:</b>
+
+$outfile
+
+Do you want to overwrite it?" \
+      --button="Cancel":1 \
+      --button="Overwrite":0 \
+      --center \
+      --width=400 \
+      2>/dev/null || return 0
+  fi
+
+  printf '%b' "$conf_content" >"$outfile"
   chmod 644 "$outfile"
 
   ui_info "<b>Configuration saved.</b>
 
+<b>Path:</b>
 $outfile
 
-Use <tt>--config $outfile</tt> to re-ingest this configuration, or load it from the Build menu."
+Press OK to return to the home screen and build an image or apply to a live OS.
+
+<b>Command line usage:</b>
+<tt>./steamos-nvidia.sh --action build --config $outfile</tt>"
 }
 
 ui_flash_pick_image() {
@@ -1342,13 +1698,25 @@ ui_flash() {
 
   echo "[ui_flash] entered" >&2
   local image device
-  image="$(ui_flash_pick_image)" || { echo "[ui_flash] pick_image cancelled/failed (rc=$?)" >&2; return 0; }
-  [[ -n "$image" ]] || { echo "[ui_flash] no image selected" >&2; return 0; }
+  image="$(ui_flash_pick_image)" || {
+    echo "[ui_flash] pick_image cancelled/failed (rc=$?)" >&2
+    return 0
+  }
+  [[ -n "$image" ]] || {
+    echo "[ui_flash] no image selected" >&2
+    return 0
+  }
   image="${image%%|*}"
   echo "[ui_flash] image=$image" >&2
 
-  device="$(ui_flash_pick_device)" || { echo "[ui_flash] pick_device cancelled/failed (rc=$?)" >&2; return 0; }
-  [[ -n "$device" ]] || { echo "[ui_flash] no device selected" >&2; return 0; }
+  device="$(ui_flash_pick_device)" || {
+    echo "[ui_flash] pick_device cancelled/failed (rc=$?)" >&2
+    return 0
+  }
+  [[ -n "$device" ]] || {
+    echo "[ui_flash] no device selected" >&2
+    return 0
+  }
   device="${device%%|*}"
   echo "[ui_flash] device=$device" >&2
 
@@ -1446,7 +1814,10 @@ Is this the correct target?" \
       --button="Cancel":1 \
       --button="Yes, flash this device":0 \
       --center \
-      --width=520 2>/dev/null || { echo "[ui_flash] device confirm cancelled" >&2; return 0; }
+      --width=520 2>/dev/null || {
+      echo "[ui_flash] device confirm cancelled" >&2
+      return 0
+    }
   fi
 
   yad --form \
@@ -1465,7 +1836,10 @@ $device — $model ($tran, $size)
     --center \
     --width=800 \
     --height=400 \
-    2>/dev/null || { echo "[ui_flash] confirm cancelled (rc=$?)" >&2; return 0; }
+    2>/dev/null || {
+    echo "[ui_flash] confirm cancelled (rc=$?)" >&2
+    return 0
+  }
 
   echo "[ui_flash] confirmed, starting flash..." >&2
 
@@ -1491,7 +1865,7 @@ $device — $model ($tran, $size)
       --width=800 \
       --height=500 \
       --button="OK":0 \
-      <<< "$flash_log_content" \
+      <<<"$flash_log_content" \
       2>/dev/null || true
   fi
 }
@@ -1537,84 +1911,116 @@ If it fails to boot, SteamOS will automatically fall back." \
 }
 
 ui_diagnostics() {
-  local sep=$'\x1f'
-  local form
+  while true; do
+    local choice rc
+    set +e
+    choice="$(yad --list \
+      --title="Diagnostics" \
+      --text="Select a diagnostic to run:" \
+      --column="Diagnostic" \
+      --column="Description" \
+      --print-column=1 \
+      --separator="" \
+      --center \
+      --width=700 \
+      --height=380 \
+      --button="Back":1 \
+      --button="Run":0 \
+      "Boot Logs" "journalctl, dmesg, and collected boot log archives" \
+      "Hardware Info" "PCI device scan with driver status" \
+      "Driver State" "NVIDIA driver version, loaded modules, DKMS status" \
+      "Package Manifest" "All installed packages (pacman -Q)" \
+      "Verify Customizations" "Run verify-customizations.py against the running system" \
+      "A/B Slot Status" "RAUC A/B slot health, booted slot, and update state" \
+      2>/dev/null)"
+    rc=$?
+    set -e
 
-  form="$(yad --form \
-    --title="Diagnostics" \
-    --text="<b>System Diagnostics</b>
+    [[ $rc -eq 0 ]] || return 0
 
-Select diagnostic options to run against the current system." \
-    --columns=2 \
-    --separator="$sep" \
-    --item-separator="!" \
-    --align=left \
-    --center \
-    --width=800 \
-    --height=400 \
-    --field="Collect boot logs:CHK" \
-    --field="Collect hardware info:CHK" \
-    --field="Collect driver state:CHK" \
-    --field="Collect package manifest:CHK" \
-    --button="Cancel":1 \
-    --button="Run":0 \
-    "TRUE" \
-    "TRUE" \
-    "TRUE" \
-    "TRUE" \
-    2>/dev/null)" || return 0
+    choice="${choice%%|*}"
+    choice="${choice//$'\n'/}"
 
-  local boot_logs hw_info driver_state pkg_manifest
+    local -a output=()
 
-  IFS="$sep" read -r \
-    boot_logs hw_info driver_state pkg_manifest \
-    <<<"$form"
+    case "$choice" in
+      "Boot Logs")
+        output+=("=== Boot Logs (journalctl -b) ===")
+        output+=("$(journalctl -b --no-pager 2>&1 | tail -200 || echo '  (journalctl unavailable)')")
+        output+=("")
+        output+=("=== Kernel Messages (dmesg) ===")
+        output+=("$(dmesg --level=err,warn 2>&1 | tail -100 || echo '  (dmesg unavailable)')")
+        output+=("")
+        if [[ -d /boot-logs ]]; then
+          output+=("=== Collected Boot Log Archives ===")
+          output+=("$(ls -lhtr /boot-logs/*.tar.gz 2>/dev/null || echo '  (none found)')")
+        elif [[ -d /home/deck/logs/boot ]]; then
+          output+=("=== Collected Boot Log Archives ===")
+          output+=("$(ls -lhtr /home/deck/logs/boot/*.tar.gz 2>/dev/null || echo '  (none found)')")
+        fi
+        ;;
+      "Hardware Info")
+        output+=("=== Hardware Info ===")
+        output+=("$(bash "$SCRIPT_DIR/lib/scan-hardware.sh" 2>&1)")
+        ;;
+      "Driver State")
+        output+=("=== NVIDIA Driver Version ===")
+        output+=("$(nvidia-smi --query-gpu=driver_version,name --format=csv,noheader 2>&1 || echo '  nvidia-smi not available')")
+        output+=("")
+        output+=("=== Loaded NVIDIA Modules ===")
+        output+=("$(lsmod | grep -i nvidia 2>&1 || echo '  (no nvidia modules loaded)')")
+        output+=("")
+        output+=("=== DKMS Status ===")
+        output+=("$(dkms status 2>&1 || echo '  dkms not available')")
+        output+=("")
+        output+=("=== modprobe config ===")
+        output+=("$(cat /etc/modprobe.d/*.conf 2>/dev/null || echo '  (no modprobe configs)')")
+        ;;
+      "Package Manifest")
+        output+=("=== Installed Packages ===")
+        output+=("$(pacman -Q 2>&1 || echo '  (pacman unavailable)')")
+        ;;
+      "Verify Customizations")
+        local verify_script="$SCRIPT_DIR/tools/verify-customizations.py"
+        if [[ -f "$verify_script" ]]; then
+          output+=("=== Verify Customizations ===")
+          output+=("$(python3 "$verify_script" --online --all 2>&1 || echo '  (verify script failed)')")
+        else
+          output+=("=== Verify Customizations ===")
+          output+=("ERROR: $verify_script not found")
+        fi
+        ;;
+      "A/B Slot Status")
+        output+=("=== RAUC A/B Slot Status ===")
+        output+=("$(rauc status --detailed 2>&1 || echo '  rauc not available or not running')")
+        output+=("")
+        output+=("=== steamos-bootconf ===")
+        if command -v steamos-bootconf >/dev/null 2>&1; then
+          output+=("  this-image: $(steamos-bootconf this-image 2>&1 || echo '(failed)')")
+          output+=("  list-images:")
+          output+=("$(steamos-bootconf list-images 2>&1 | sed 's/^/    /' || echo '  (failed)')")
+        else
+          output+=("  steamos-bootconf not found")
+        fi
+        ;;
+      "")
+        continue
+        ;;
+    esac
 
-  local -a output=()
-
-  if [[ "${hw_info^^}" == "TRUE" ]]; then
-    local hw_output
-    hw_output="$(bash "$SCRIPT_DIR/lib/scan-hardware.sh" 2>&1)" || true
-    output+=("=== Hardware Info ===")
-    output+=("$hw_output")
-    output+=("")
-  fi
-
-  if [[ "${boot_logs^^}" == "TRUE" ]]; then
-    output+=("=== Boot Logs ===")
-    output+=("(not yet implemented)")
-    output+=("")
-  fi
-
-  if [[ "${driver_state^^}" == "TRUE" ]]; then
-    output+=("=== Driver State ===")
-    output+=("(not yet implemented)")
-    output+=("")
-  fi
-
-  if [[ "${pkg_manifest^^}" == "TRUE" ]]; then
-    output+=("=== Package Manifest ===")
-    output+=("(not yet implemented)")
-    output+=("")
-  fi
-
-  if (( ${#output[@]} == 0 )); then
-    ui_error "No diagnostic options selected."
-    return 0
-  fi
-
-  printf '%s\n' "${output[@]}" \
-    | sed 's/\x1b\[[0-9;]*m//g' \
-    | yad --text-info \
-    --title="Diagnostic Results" \
-    --text="<b>Diagnostic output</b>" \
-    --fontname="monospace" \
-    --wrap \
-    --center \
-    --width=1000 \
-    --height=600 \
-    --button="OK":0 \
-    2>/dev/null || true
+    printf '%s\n' "${output[@]}" \
+      | sed 's/\x1b\[[0-9;]*m//g' \
+      | yad --text-info \
+        --title="Diagnostic Results — $choice" \
+        --text="<b>$choice</b>" \
+        --fontname="monospace" \
+        --wrap \
+        --center \
+        --width=1000 \
+        --height=600 \
+        --button="Back":0 \
+        2>/dev/null || true
+  done
 }
 
 ui_main() {
@@ -1668,7 +2074,7 @@ ui_main() {
           --width=480 2>/dev/null || continue
         run_backend_gui "Preparing reboot..." --action reboot || true
         ;;
-      Quit|"")
+      Quit | "")
         exit 0
         ;;
     esac
@@ -1700,12 +2106,21 @@ case "$ACTION" in
     run_backend_cli
     ;;
   flash)
-    [[ -n "$IMG" ]] || { echo "Flash requires --image FILE." >&2; exit 2; }
-    [[ -n "$TARGET_DEV" ]] || { echo "Flash requires --device DEVICE." >&2; exit 2; }
+    [[ -n "$IMG" ]] || {
+      echo "Flash requires --image FILE." >&2
+      exit 2
+    }
+    [[ -n "$TARGET_DEV" ]] || {
+      echo "Flash requires --device DEVICE." >&2
+      exit 2
+    }
 
     echo "WARNING: flashing permanently destroys all data on $TARGET_DEV." >&2
     read -r -p "Type YES to continue: " answer
-    [[ "$answer" == "YES" ]] || { echo "Canceled."; exit 1; }
+    [[ "$answer" == "YES" ]] || {
+      echo "Canceled."
+      exit 1
+    }
 
     build_backend_args
     BACKEND_ARGS+=(--confirm)

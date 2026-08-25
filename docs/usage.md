@@ -34,10 +34,9 @@ Selecting **Build** opens a form with these fields:
 | Field | Default | Description |
 |---|---|---|
 | Base image | *(required)* | Path to a clean SteamOS repair `.img` (or `.img.bz2`/`.gz`/`.xz`/`.zst`) |
-| OOBE | `steamdeck` | `steamdeck` (keep user data) or `steamdeck-oobe` (factory reset) |
 | Branch | `stable` | Update channel: `stable`, `beta`, `preview`, or others |
 | Rootfs size | `10240` | Root partition size in MiB (or use K/M/G suffixes) |
-| Default session | `stock` | `stock`, `game`, or `desktop` |
+| Default session | `game` | `game` or `desktop` |
 | Update mode | `selfheal` | `selfheal`, `hold`, or `stock` — see [Update Modes](customization_update_modes.md) |
 | Workspace location | `auto` | `auto`, `ram`, or `disk` |
 | Working directory | `automatic` | Explicit build directory, or leave automatic |
@@ -98,29 +97,7 @@ Install host dependencies (Arch/SteamOS only):
 | `--image FILE` | Source or completed image path |
 | `--device DEVICE` | Target block device for flashing (e.g. `/dev/sda`) |
 | `--config FILE` | Load settings from a config file (see [Build Config](customization_build_config.md)) |
-
-### Build options
-
-| Flag | Description |
-|---|---|
-| `--workingdir DIR` | Build cache location (~3 GB, speeds up reruns) |
-| `--workdir-location MODE` | `auto`, `ram`, or `disk` |
-| `--rootfs-size SIZE` | Root partition size in MiB |
-| `--session MODE` | `desktop` or `game` (omit for stock) |
-| `--hold-updates` | Hard-hold OS updates (see [Update Modes](customization_update_modes.md)) |
-| `--no-hold-updates` | Stock update behaviour (driver removed on update) |
-| `--no-installer` | Skip the one-click desktop installer |
-| `--trim-cuda` | Drop CUDA/OpenCL/OptiX libraries (~350 MB smaller) |
-| `--thunderbolt` | Enable Thunderbolt dock support |
-| `--hw-support` | Enable hardware support packages |
-| `--hw-support-items ITEMS` | Space-separated package list (e.g. `linux-firmware libfprint fprintd bolt`) |
-| `--initramfs MODULES` | Space-separated kernel module list for initramfs |
-| `--gaming-items ITEMS` | Space-separated system tweaks (see [System Tweaks](customization_system_tweaks.md)) |
-| `--debug-boot` | Add `rd.debug rd.log=all` to kernel cmdline |
-| `--skip-sigcheck` | Disable pacman signature checks in build chroot |
-| `--fix-keyring` | Force-initialize pacman keyrings |
-| `--oobe-variant VARIANT` | `steamdeck` or `steamdeck-oobe` |
-| `--branch BRANCH` | Update channel: `stable`, `beta`, `preview`, etc. |
+| `--output-dir DIR` | Where to write the output image |
 
 ### Flash options
 
@@ -128,19 +105,17 @@ Install host dependencies (Arch/SteamOS only):
 |---|---|
 | `--allow-system-disk` | Permit flashing to the disk the host is running from |
 
+All build options (rootfs size, session, update mode, packages, tweaks, etc.)
+are set via `--config`. See [Build Config](customization_build_config.md) for
+the full list.
+
 ### Examples
 
 ```bash
-# Build with defaults
+# Build with config file
 ./steamos-nvidia.sh --action build \
-    --image /path/to/steamdeck-repair.img
-
-# Build with custom config, trim CUDA, 10 GiB root
-./steamos-nvidia.sh --action build \
-    --image /path/to/steamdeck-repair.img.bz2 \
-    --config my-build.conf \
-    --trim-cuda \
-    --rootfs-size 10240
+    --image /path/to/steamdeck-repair.img \
+    --config my-build.conf
 
 # Flash to USB
 ./steamos-nvidia.sh --action flash \

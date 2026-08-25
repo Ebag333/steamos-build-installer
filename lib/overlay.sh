@@ -9,6 +9,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+# Globals set by overlay_mount() / overlay_mount_with_image()
+UPPER=""
+OVLWORK=""
+MERGED=""
+
 # Create and mount an overlay chroot.
 # Args: $1 = lowerdir (base rootfs)
 #       $2 = workdir (parent for upper/ovlwork)
@@ -60,7 +65,8 @@ overlay_mount() {
 
   # Mount virtual filesystems for chroot operations.
   mount -t proc proc "$MERGED/proc"
-  mount --rbind /sys "$MERGED/sys"; mount --make-rslave "$MERGED/sys"
+  mount --rbind /sys "$MERGED/sys"
+  mount --make-rslave "$MERGED/sys"
 
   # /dev: non-recursive bind to avoid cloning /dev/shm/nvidia-build mounts.
   mount --bind /dev "$MERGED/dev"
@@ -83,7 +89,8 @@ overlay_mount() {
   mount --make-private "$MERGED/tmp"
 
   # Set up chroot essentials.
-  rm -f "$MERGED/etc/resolv.conf"; cp -L /etc/resolv.conf "$MERGED/etc/resolv.conf"
+  rm -f "$MERGED/etc/resolv.conf"
+  cp -L /etc/resolv.conf "$MERGED/etc/resolv.conf"
   ln -sf /proc/self/mounts "$MERGED/etc/mtab"
 
   # Diagnostic: log the chroot /dev mount tree.
@@ -92,7 +99,7 @@ overlay_mount() {
 
   # Sanity check: verify no build mounts leaked into chroot /dev.
   if findmnt -R "$MERGED/dev" -n -o TARGET 2>/dev/null \
-       | grep -Fq "$MERGED/dev/shm/nvidia-build/"; then
+    | grep -Fq "$MERGED/dev/shm/nvidia-build/"; then
     warn "Build workspace mount tree leaked into chroot /dev:"
     findmnt -R "$MERGED/dev" -o TARGET,SOURCE,FSTYPE,PROPAGATION >&2 2>/dev/null || true
     die "Build workspace mounts leaked into chroot /dev"
@@ -100,7 +107,6 @@ overlay_mount() {
 
   log "Overlay mounted and ready"
 }
-
 
 # Build the driver in a throwaway overlay on top of the image rootfs, so the
 # toolchain/headers never enter the image. The upper layer ($UPPER) is cached
@@ -118,7 +124,7 @@ setup_overlay_chroot() {
   local cache_key
 
   if [[ -n "${FINGERPRINT_FILE:-}" && -f "$FINGERPRINT_FILE" ]]; then
-    IFS= read -r source_fp < "$FINGERPRINT_FILE" || source_fp="unknown"
+    IFS= read -r source_fp <"$FINGERPRINT_FILE" || source_fp="unknown"
   elif [[ -n "${_src_fp:-}" ]]; then
     source_fp="$_src_fp"
   fi
@@ -133,7 +139,6 @@ setup_overlay_chroot() {
     "$source_fp" "$root_uuid" "$KVER" \
     "${KPKG_NAME:-unknown}" "${KPKG_VERREL:-unknown}"
 
-  # shellcheck disable=SC2153
   overlay_mount_with_image "$MNT" "$WORKDIR" "$MERGED" "8G" "$cache_key"
 
   if [[ $SKIP_SIG -eq 0 ]]; then
@@ -173,7 +178,7 @@ overlay_check_cache() {
   marker="$cache_root/.steamos-nvidia-overlay-cache-key"
 
   if [[ -f "$marker" ]]; then
-    IFS= read -r current_key < "$marker" || current_key=""
+    IFS= read -r current_key <"$marker" || current_key=""
   fi
 
   # Always start with a fresh upper layer.  The upper acts as a transaction
@@ -188,7 +193,7 @@ overlay_check_cache() {
   rm -rf "${UPPER:?}" "${OVLWORK:?}"
   mkdir -p "$UPPER" "$OVLWORK"
 
-  printf '%s\n' "$expected_key" > "$marker"
+  printf '%s\n' "$expected_key" >"$marker"
 }
 
 # Create/mount an ext4 overlay workspace image and then mount OverlayFS.
@@ -238,12 +243,12 @@ overlay_mount_with_image() {
         findmnt -rn -o TARGET,SOURCE 2>/dev/null \
           | awk -v l="$_stale" '$2 ~ "^"l {print $1}' \
           | tac | while read -r _m; do
-              [[ -n "$_m" ]] || continue
-              umount -R "$_m" \
-                || die "Could not cleanly unmount stale overlay workspace: $_m"
-            done
+          [[ -n "$_m" ]] || continue
+          umount -R "$_m" \
+            || die "Could not cleanly unmount stale overlay workspace: $_m"
+        done
         losetup -d "$_stale" 2>/dev/null || true
-      done <<< "$_existing_loops"
+      done <<<"$_existing_loops"
       udevadm settle --timeout=5 2>/dev/null || true
       _existing_loops="$(losetup -j "$OVL_IMG" 2>/dev/null | cut -d: -f1)"
       if [[ -n "$_existing_loops" ]]; then
@@ -324,10 +329,10 @@ setup_pacman_conf() {
   local sandbox_opt=""
   local pacman_major
   pacman_major="$(
-    chroot "$MERGED" pacman --version 2>/dev/null |
-      sed -n 's/.*Pacman v\([0-9][0-9]*\).*/\1/p' | head -1
+    chroot "$MERGED" pacman --version 2>/dev/null \
+      | sed -n 's/.*Pacman v\([0-9][0-9]*\).*/\1/p' | head -1
   )"
-  if [[ "$pacman_major" =~ ^[0-9]+$ ]] && (( pacman_major >= 7 )); then
+  if [[ "$pacman_major" =~ ^[0-9]+$ ]] && ((pacman_major >= 7)); then
     sandbox_opt="DisableSandbox"
   fi
 
@@ -339,14 +344,14 @@ setup_pacman_conf() {
       printf '\n'
       # Append repo sections from the image's config (skip [options]).
       sed -n '/^\[/,$p' "$MERGED/etc/pacman.conf" 2>/dev/null | sed '/^\[options\]/,/^$/d'
-    } > "$conf_path"
+    } >"$conf_path"
   else
     # Copy the image's config and append our overrides
     cp "$MERGED/etc/pacman.conf" "$conf_path"
     {
       printf '\n[options]\nCacheDir = /tmp/pkgcache\n'
       [[ -n "$sandbox_opt" ]] && printf '%s\n' "$sandbox_opt"
-    } >> "$conf_path"
+    } >>"$conf_path"
   fi
 
   # shellcheck disable=SC2034
@@ -424,8 +429,8 @@ mount_effective_etc() {
 
   log "  Mounting effective /etc overlay"
   if ! mount -t overlay overlay \
-      -o "lowerdir=$lower,upperdir=$upper,workdir=$work" \
-      "$root/etc"; then
+    -o "lowerdir=$lower,upperdir=$upper,workdir=$work" \
+    "$root/etc"; then
     strict_unmount "$lower" "lower /etc bind after failed effective overlay mount" || true
     strict_unmount "$varmnt" "var after failed effective /etc overlay mount" || true
     die "Failed to mount effective /etc overlay"
@@ -454,7 +459,7 @@ unmount_effective_etc() {
     || die "Failed to unmount var for effective /etc"
 
   rmdir "$WORKDIR/effective-etc-lower" \
-        "$WORKDIR/effective-etc-var" 2>/dev/null || true
+    "$WORKDIR/effective-etc-var" 2>/dev/null || true
 
   _EFFECTIVE_ETC_MOUNTED=0
   log "  Effective /etc overlay unmounted cleanly"
@@ -565,14 +570,14 @@ setup_clear_stale_state() {
   fi
 
   for _tmp_mount in \
-      "$WORKDIR/etc-new-root" \
-      "$WORKDIR/etc-var-mnt" \
-      "$WORKDIR/rootfs-ro-source" \
-      "$WORKDIR/rootfs-native-rw" \
-      "$WORKDIR/rootfs-resize" \
-      "$WORKDIR/rootfs-grow" \
-      "$WORKDIR/rootfs-post-rebuild-diag" \
-      "$WORKDIR/ovl-clean-mnt"; do
+    "$WORKDIR/etc-new-root" \
+    "$WORKDIR/etc-var-mnt" \
+    "$WORKDIR/rootfs-ro-source" \
+    "$WORKDIR/rootfs-native-rw" \
+    "$WORKDIR/rootfs-resize" \
+    "$WORKDIR/rootfs-grow" \
+    "$WORKDIR/rootfs-post-rebuild-diag" \
+    "$WORKDIR/ovl-clean-mnt"; do
     if mountpoint -q "$_tmp_mount" 2>/dev/null; then
       warn "Cleaning stale rootfs helper mount: $_tmp_mount"
       ensure_unmounted "$_tmp_mount" "stale rootfs helper mount"
@@ -652,7 +657,6 @@ setup_clear_stale_state() {
   # ============================================================
   # 5. Remove host-side scratch residue only after proving it is unmounted.
   # ============================================================
-  # shellcheck disable=SC2153
   for m in "$MERGED" "$UPPER" "$OVLWORK"; do
     [[ -n "$m" && -e "$m" ]] || continue
 
@@ -679,6 +683,13 @@ overlay_init_keyring() {
     in_chroot "pacman-key --populate $extra_keyrings" || die "pacman-key --populate failed"
   else
     in_chroot "pacman-key --populate" || die "pacman-key --populate failed"
+  fi
+
+  # Diagnostic: log keyring state after bootstrap
+  if [[ "${FIX_KEYRING:-0}" -eq 1 ]]; then
+    log "Keyring bootstrap diagnostics:"
+    in_chroot "pacman -Q archlinux-keyring 2>/dev/null || echo 'archlinux-keyring: NOT INSTALLED'" || true
+    in_chroot "pacman-key --list-keys 2>/dev/null | head -20" || true
   fi
 }
 
@@ -716,7 +727,7 @@ overlay_cleanup() {
   # 1. Kill known chroot daemons before touching mount topology.
   # ------------------------------------------------------------
   if [[ -n "${MERGED:-}" &&
-        -d "$MERGED/etc/pacman.d/gnupg" ]]; then
+    -d "$MERGED/etc/pacman.d/gnupg" ]]; then
     gpgconf \
       --homedir "$MERGED/etc/pacman.d/gnupg" \
       --kill gpg-agent \
@@ -736,8 +747,7 @@ overlay_cleanup() {
       "$MERGED/dev" \
       "$MERGED/sys" \
       "$MERGED/proc" \
-      "$MERGED/tmp"
-    do
+      "$MERGED/tmp"; do
       [[ -e "$m" ]] || continue
 
       if mountpoint -q "$m" 2>/dev/null; then
@@ -748,7 +758,7 @@ overlay_cleanup() {
     done
   fi
 
-  if (( rc != 0 )); then
+  if ((rc != 0)); then
     warn "overlay_cleanup: chroot child mounts remain; refusing to tear down OverlayFS"
     [[ "$_had_e" -eq 1 ]] && set -e
     return 1
@@ -757,8 +767,8 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   # 3. Remove MERGED itself.
   # ------------------------------------------------------------
-  if [[ -n "${MERGED:-}" ]] &&
-     mountpoint -q "$MERGED" 2>/dev/null; then
+  if [[ -n "${MERGED:-}" ]] \
+    && mountpoint -q "$MERGED" 2>/dev/null; then
     echo "=== PRE-MERGED-UNMOUNT ==="
     findmnt -R "$MERGED" 2>/dev/null || true
     fuser -vm "$MERGED" 2>/dev/null || true
@@ -782,7 +792,7 @@ overlay_cleanup() {
         && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after MERGED unmount"
     fi
 
-    if (( umount_merged_rc != 0 )); then
+    if ((umount_merged_rc != 0)); then
       warn "overlay_cleanup: refusing to unmount overlay workspace while MERGED exists"
       [[ "$_had_e" -eq 1 ]] && set -e
       return 1
@@ -790,8 +800,8 @@ overlay_cleanup() {
   fi
 
   # Explicit invariant.
-  if [[ -n "${MERGED:-}" ]] &&
-     mountpoint -q "$MERGED" 2>/dev/null; then
+  if [[ -n "${MERGED:-}" ]] \
+    && mountpoint -q "$MERGED" 2>/dev/null; then
     warn "overlay_cleanup: MERGED is unexpectedly still mounted"
     [[ "$_had_e" -eq 1 ]] && set -e
     return 1
@@ -800,8 +810,8 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   # 4. Now — and only now — unmount the ext4 overlay workspace.
   # ------------------------------------------------------------
-  if [[ -n "${OVL_MNT:-}" ]] &&
-     mountpoint -q "$OVL_MNT" 2>/dev/null; then
+  if [[ -n "${OVL_MNT:-}" ]] \
+    && mountpoint -q "$OVL_MNT" 2>/dev/null; then
     echo "=== PRE-OVL_MNT-UNMOUNT ==="
     findmnt -R "$OVL_MNT" 2>/dev/null || true
     fuser -vm "$OVL_MNT" 2>/dev/null || true
@@ -825,7 +835,7 @@ overlay_cleanup() {
         && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after OVL_MNT unmount"
     fi
 
-    if (( umount_ovl_rc != 0 )); then
+    if ((umount_ovl_rc != 0)); then
       warn "overlay_cleanup: overlay workspace could not be cleanly unmounted"
       [[ "$_had_e" -eq 1 ]] && set -e
       return 1
@@ -841,9 +851,9 @@ overlay_cleanup() {
 
   # Include the loop we explicitly allocated even if losetup's backing-file
   # presentation is unusual.
-  if [[ -n "${OVL_LOOPDEV:-}" ]] &&
-     losetup "$OVL_LOOPDEV" >/dev/null 2>&1 &&
-     ! grep -qxF "$OVL_LOOPDEV" <<<"$loops"; then
+  if [[ -n "${OVL_LOOPDEV:-}" ]] \
+    && losetup "$OVL_LOOPDEV" >/dev/null 2>&1 \
+    && ! grep -qxF "$OVL_LOOPDEV" <<<"$loops"; then
     loops="${loops:+$loops$'\n'}$OVL_LOOPDEV"
   fi
 
@@ -885,11 +895,10 @@ overlay_cleanup() {
     fi
   fi
 
-  if (( rc == 0 )); then
+  if ((rc == 0)); then
     OVL_LOOPDEV=""
   fi
 
   [[ "$_had_e" -eq 1 ]] && set -e
   return "$rc"
 }
-

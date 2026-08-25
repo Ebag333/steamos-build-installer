@@ -1,0 +1,62 @@
+# Maintainer: steamos-nvidia-installer
+pkgname=steamos-nvidia-aotofu-vaapi
+pkgver=0.0.1
+pkgrel=1
+pkgdesc="AoTofu NVIDIA VA-API driver for SteamOS"
+arch=('x86_64')
+url="https://github.com/AoTofu/nvidia-vaapi-driver"
+license=('MIT')
+depends=(
+    'libva'
+    'libdrm'
+    'libglvnd'
+    'gst-plugins-bad-libs'
+)
+makedepends=(
+    'meson'
+    'ninja'
+    'pkgconf'
+    'ffnvcodec-headers'
+    'git'
+)
+source=()
+sha256sums=()
+
+pkgver() {
+    cd "$srcdir/nvidia-vaapi-driver" 2>/dev/null || echo "0.0.1"
+    git describe --long --tags 2>/dev/null | sed 's/\([^-]*-g\)/r\1/;s/-/./g' || echo "0.0.1"
+}
+
+prepare() {
+    cd "$srcdir/nvidia-vaapi-driver"
+    # Apply any patches
+    if [[ -d "$srcdir/patches" ]]; then
+        for patch in "$srcdir"/*.patch; do
+            [[ -f "$patch" ]] && patch -p1 < "$patch"
+        done
+    fi
+}
+
+build() {
+    cd "$srcdir/nvidia-vaapi-driver"
+    meson setup build \
+        --prefix=/usr \
+        --libdir=/usr/lib \
+        --buildtype=release \
+        --wrap-mode=nofallback
+    ninja -C build
+}
+
+check() {
+    cd "$srcdir/nvidia-vaapi-driver"
+    # Run verification commands
+    for cmd in "${VERIFY_COMMANDS[@]}"; do
+        eval "$cmd" || warning "Verification failed: $cmd"
+    done
+}
+
+package() {
+    cd "$srcdir/nvidia-vaapi-driver"
+    DESTDIR="$pkgdir" ninja -C build install
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

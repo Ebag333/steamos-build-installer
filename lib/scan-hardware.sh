@@ -74,7 +74,7 @@ while IFS= read -r line; do
     0x0c03) class="USB" ;;
     0x0880) class="SYS" ;;
     0x0604) class="PCI" ;;
-    *)      class="OTHER" ;;
+    *) class="OTHER" ;;
   esac
 
   # Get driver
@@ -86,7 +86,7 @@ while IFS= read -r line; do
     case "$priority" in
       CRITICAL) status="${GREEN}✓ critical${NC}" ;;
       IMPORTANT) status="${GREEN}✓ important${NC}" ;;
-      *)        status="${GREEN}✓${NC}" ;;
+      *) status="${GREEN}✓${NC}" ;;
     esac
     printf "%-12s %-8s %-11s %-45s %-18s %b\n" "$dev" "$class" "${vendor_device:--}" "${desc:0:45}" "$driver" "$status"
   else

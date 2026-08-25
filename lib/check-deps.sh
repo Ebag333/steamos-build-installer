@@ -18,7 +18,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-MODE="interactive"  # interactive | install | check-only
+MODE="interactive" # interactive | install | check-only
 [[ "${1:-}" == "--install" ]] && MODE="install"
 [[ "${1:-}" == "--check-only" ]] && MODE="check-only"
 
@@ -98,7 +98,7 @@ echo ""
 echo -e "${CYAN}Optional tools:${NC}"
 
 for cmd in $(echo "${!OPTIONAL[@]}" | tr ' ' '\n' | sort); do
-  IFS=':' read -r pkg desc <<< "${OPTIONAL[$cmd]}"
+  IFS=':' read -r pkg desc <<<"${OPTIONAL[$cmd]}"
   if command -v "$cmd" >/dev/null 2>&1; then
     echo -e "  ${GREEN}✓${NC} $cmd ($desc)"
   else

@@ -21,8 +21,8 @@ fi
 # Args: $1 = block device
 # Prints the flags line; callers check for "(RDONLY)".
 query_btrfs_root_item() {
-  btrfs inspect-internal dump-tree -t root "${1:?}" 2>/dev/null |
-    awk '
+  btrfs inspect-internal dump-tree -t root "${1:?}" 2>/dev/null \
+    | awk '
       /key \(FS_TREE ROOT_ITEM 0\)/ { found=1 }
       found && /flags / { print; exit }
     '
@@ -86,8 +86,8 @@ collect_subvolume_uuids() {
 # Print the raw Btrfs device size for a mounted filesystem.
 # Args: $1 = mountpoint
 get_btrfs_device_size() {
-  btrfs filesystem show --raw "$1" 2>/dev/null |
-    awk '
+  btrfs filesystem show --raw "$1" 2>/dev/null \
+    | awk '
       $1 == "devid" {
         for (i = 1; i <= NF; i++) {
           if ($i == "size") { print $(i + 1); exit }
@@ -191,8 +191,8 @@ snapshot_runtime_etc() {
   log "Snapshotting effective runtime /etc"
 
   if ! mount -t overlay overlay \
-      -o "lowerdir=$src_root/etc,upperdir=$upper,workdir=$work" \
-      "$ETC_MERGED"; then
+    -o "lowerdir=$src_root/etc,upperdir=$upper,workdir=$work" \
+    "$ETC_MERGED"; then
     strict_unmount "$ETC_VAR_MNT" "var after failed /etc overlay mount" || true
     die "Failed to mount original /etc overlay"
   fi
@@ -271,8 +271,8 @@ restore_runtime_etc() {
   mkdir -p "$upper" "$work"
 
   if ! mount -t overlay overlay \
-      -o "lowerdir=$rootmnt/etc,upperdir=$upper,workdir=$work" \
-      "$merged"; then
+    -o "lowerdir=$rootmnt/etc,upperdir=$upper,workdir=$work" \
+    "$merged"; then
     strict_unmount "$varmnt" "var after failed rebuilt /etc overlay mount" || true
     strict_unmount "$rootmnt" "rebuilt rootfs after failed /etc overlay mount" || true
     die "Failed to mount fresh /etc overlay"
@@ -374,11 +374,11 @@ prepare_writable_rootfs_rebuild() {
     --shrink
   )
 
-  [[ -n "$root_label" ]] &&
-    mkfs_args+=(-L "$root_label")
+  [[ -n "$root_label" ]] \
+    && mkfs_args+=(-L "$root_label")
 
-  [[ -n "$root_dev_uuid" ]] &&
-    mkfs_args+=(--device-uuid "$root_dev_uuid")
+  [[ -n "$root_dev_uuid" ]] \
+    && mkfs_args+=(--device-uuid "$root_dev_uuid")
 
   log "Creating writable replacement filesystem"
   log "  mkfs.btrfs args: ${mkfs_args[*]} $root_tmp"
@@ -411,7 +411,7 @@ prepare_writable_rootfs_rebuild() {
 
   new_bytes="$(stat -c '%s' "$root_tmp")"
   log "Rebuilt rootfs image size: $new_bytes bytes (partition: $root_bytes bytes)"
-  if (( new_bytes > root_bytes )); then
+  if ((new_bytes > root_bytes)); then
     die "Rebuilt rootfs image grew beyond partition size"
   fi
 
@@ -427,7 +427,7 @@ prepare_writable_rootfs_rebuild() {
   btrfs device scan "$ROOTPART" >/dev/null 2>&1 || true
 
   # --shrink trimmed the image to minimum size; expand back to fill the partition.
-  if (( new_bytes < root_bytes )); then
+  if ((new_bytes < root_bytes)); then
     log "Expanding rebuilt rootfs to fill partition (${new_bytes} → ${root_bytes} bytes)"
     local resize_mnt="$WORKDIR/rootfs-resize"
     mkdir -p "$resize_mnt"
@@ -565,8 +565,8 @@ prepare_writable_rootfs_native() {
   log "Native rootfs received UUID before conversion: $received_before"
 
   default_before="$(
-    btrfs subvolume get-default "$mnt" 2>/dev/null |
-      awk '$1 == "ID" { print $2; exit }' || true
+    btrfs subvolume get-default "$mnt" 2>/dev/null \
+      | awk '$1 == "ID" { print $2; exit }' || true
   )"
   log "Native rootfs default subvolume ID before conversion: ${default_before:-<unknown>}"
 
@@ -652,8 +652,8 @@ prepare_writable_rootfs_native() {
   fi
 
   default_after="$(
-    btrfs subvolume get-default "$mnt" 2>/dev/null |
-      awk '$1 == "ID" { print $2; exit }' || true
+    btrfs subvolume get-default "$mnt" 2>/dev/null \
+      | awk '$1 == "ID" { print $2; exit }' || true
   )"
   log "Native rootfs default subvolume ID after conversion: ${default_after:-<unknown>}"
   if [[ -n "$default_before" && -n "$default_after" && "$default_before" != "$default_after" ]]; then
@@ -791,24 +791,24 @@ prepare_image_rootfs_size() {
   [[ -n "$root_start" && -n "$root_size_sectors" ]] \
     || die "Could not read rootfs-A geometry from sgdisk (start=$root_start size=$root_size_sectors)"
 
-  local current_mib=$(( root_size_sectors * logical_sector / 1048576 ))
+  local current_mib=$((root_size_sectors * logical_sector / 1048576))
 
   # ── 2. Validate requested size ────────────────────────────────────────
 
-  if (( requested_mib < current_mib )); then
+  if ((requested_mib < current_mib)); then
     die "Source rootfs-A is ${current_mib} MiB but ROOTFS_SIZE is ${requested_mib} MiB. Shrinking is not supported. Set ROOTFS_SIZE to at least ${current_mib}M."
   fi
 
-  if (( requested_mib == current_mib )); then
+  if ((requested_mib == current_mib)); then
     log "Rootfs-A already ${current_mib} MiB; no partition changes needed"
     return 0
   fi
 
-  local delta_mib=$(( requested_mib - current_mib ))
-  local sectors_per_mib=$(( 1048576 / logical_sector ))
-  local delta_sectors=$(( delta_mib * sectors_per_mib ))
-  local target_root_sectors=$(( root_size_sectors + delta_sectors ))
-  local root_end=$(( root_start + root_size_sectors - 1 ))
+  local delta_mib=$((requested_mib - current_mib))
+  local sectors_per_mib=$((1048576 / logical_sector))
+  local delta_sectors=$((delta_mib * sectors_per_mib))
+  local target_root_sectors=$((root_size_sectors + delta_sectors))
+  local root_end=$((root_start + root_size_sectors - 1))
 
   # ── 3. Identify trailing partitions ───────────────────────────────────
 
@@ -822,13 +822,13 @@ prepare_image_rootfs_size() {
     sgdisk_partition_info "$pnum" "$LOOPDEV"
     local p_start="$SGDINFO_START"
     [[ -n "$p_start" ]] || continue
-    if (( p_start > root_end )); then
+    if ((p_start > root_end)); then
       trailing+=("$pnum:$p_start")
     fi
   done
 
   # Sort by start sector descending (move last partition first).
-  if (( ${#trailing[@]} > 0 )); then
+  if ((${#trailing[@]} > 0)); then
     mapfile -t trailing < <(
       printf '%s\n' "${trailing[@]}" | sort -t: -k2,2nr
     )
@@ -836,20 +836,20 @@ prepare_image_rootfs_size() {
 
   # ── 4. Plan report ────────────────────────────────────────────────────
 
-  local new_image_bytes=$(( image_bytes + delta_mib * 1048576 ))
-  local new_image_mib=$(( new_image_bytes / 1048576 ))
+  local new_image_bytes=$((image_bytes + delta_mib * 1048576))
+  local new_image_mib=$((new_image_bytes / 1048576))
   # shellcheck disable=SC2034
   PROJECTED_IMAGE_BYTES="$new_image_bytes"
   # shellcheck disable=SC2034
-  ROOTFS_GROWTH_BYTES=$(( delta_mib * 1048576 ))
+  ROOTFS_GROWTH_BYTES=$((delta_mib * 1048576))
 
   log "=== Recovery image rootfs growth plan ==="
-  log "Source image:            $(( image_bytes / 1048576 )) MiB"
+  log "Source image:            $((image_bytes / 1048576)) MiB"
   log "Source rootfs-A:         ${current_mib} MiB"
   log "Requested ROOTFS_SIZE:   ${requested_mib} MiB"
   log "Growth required:         ${delta_mib} MiB"
   log ""
-  if (( ${#trailing[@]} > 0 )); then
+  if ((${#trailing[@]} > 0)); then
     log "Partitions to relocate:"
     local entry
     for entry in "${trailing[@]}"; do
@@ -878,7 +878,7 @@ prepare_image_rootfs_size() {
   log "Backing up GPT"
   sgdisk --backup="$WORKDIR/gpt-before-rootfs-grow.bin" "$LOOPDEV" \
     || die "Failed to backup GPT"
-  sgdisk -p "$LOOPDEV" > "$WORKDIR/partitions-before-rootfs-grow.txt" 2>/dev/null || true
+  sgdisk -p "$LOOPDEV" >"$WORKDIR/partitions-before-rootfs-grow.txt" 2>/dev/null || true
 
   # ── 7. Hash and capture trailing partition identity ────────────────────
 
@@ -898,9 +898,9 @@ prepare_image_rootfs_size() {
     # shellcheck disable=SC2034
     part_start_old[$pnum]="${entry#*:}"
     part_size_bytes[$pnum]="$(blockdev --getsize64 "$pdev")"
-    (( part_size_bytes[$pnum] % logical_sector == 0 )) \
+    ((part_size_bytes[$pnum] % logical_sector == 0)) \
       || die "Partition $pnum size (${part_size_bytes[$pnum]} bytes) is not sector-aligned"
-    part_size_sectors[$pnum]="$(( part_size_bytes[$pnum] / logical_sector ))"
+    part_size_sectors[$pnum]="$((part_size_bytes[$pnum] / logical_sector))"
 
     log "Hashing partition $pnum before move..."
     part_hashes_before[$pnum]="$(sha256sum "$pdev" | cut -d' ' -f1)" \
@@ -932,7 +932,7 @@ prepare_image_rootfs_size() {
   for entry in "${trailing[@]}"; do
     local pnum="${entry%%:*}"
     local old_start="${entry#*:}"
-    local new_start=$(( old_start + delta_sectors ))
+    local new_start=$((old_start + delta_sectors))
     local psize_sectors="${part_size_sectors[$pnum]}"
     local pdev="${LOOPDEV}p${pnum}"
     local p_lbl="${part_labels[$pnum]:-part$pnum}"
@@ -1005,7 +1005,7 @@ prepare_image_rootfs_size() {
     || die "GPT verification failed after growing rootfs-A"
 
   # See whether the kernel mapping already followed the sfdisk operation.
-  local expected_root_bytes=$(( target_root_sectors * logical_sector ))
+  local expected_root_bytes=$((target_root_sectors * logical_sector))
   local kernel_root_bytes
   kernel_root_bytes="$(blockdev --getsize64 "$ROOTPART" 2>/dev/null || echo 0)"
 
@@ -1059,8 +1059,8 @@ prepare_image_rootfs_size() {
     || die "Could not read final Btrfs UUID from $ROOTPART"
 
   local final_root_bytes final_root_mib
-  final_root_bytes=$(( final_root_sectors * logical_sector ))
-  final_root_mib=$(( final_root_bytes / 1048576 ))
+  final_root_bytes=$((final_root_sectors * logical_sector))
+  final_root_mib=$((final_root_bytes / 1048576))
 
   [[ "$final_disk_guid" == "$disk_guid" ]] \
     || die "Disk GUID changed: $disk_guid → $final_disk_guid"
@@ -1083,7 +1083,7 @@ prepare_image_rootfs_size() {
   log "  PARTUUID:   ${final_root_partuuid} (unchanged)"
   log "  type GUID:  ${final_root_type_guid} (unchanged)"
   log "  FS UUID:    ${final_root_fs_uuid} (unchanged)"
-  log "  Image:      $(( image_bytes / 1048576 )) → ${new_image_mib} MiB"
+  log "  Image:      $((image_bytes / 1048576)) → ${new_image_mib} MiB"
   sgdisk -v "$LOOPDEV" >/dev/null 2>&1 \
     || die "Final GPT verification failed"
   log "  GPT:        primary ✓  backup ✓"
@@ -1149,16 +1149,16 @@ prepare_writable_rootfs() {
   local method="${1:-${ROOTFS_WRITABLE_METHOD:-native}}"
 
   # Grow the rootfs-A partition to ROOTFS_SIZE if requested.
-  if [[ -n "${ROOTFS_SIZE:-}" ]] && (( ROOTFS_SIZE > 0 )); then
+  if [[ -n "${ROOTFS_SIZE:-}" ]] && ((ROOTFS_SIZE > 0)); then
     prepare_image_rootfs_size "$ROOTFS_SIZE"
   fi
 
   case "$method" in
-    native|ideal|inplace|in-place)
+    native | ideal | inplace | in-place)
       log "Writable rootfs implementation: native/in-place"
       prepare_writable_rootfs_native
       ;;
-    rebuild|legacy|mkfs)
+    rebuild | legacy | mkfs)
       log "Writable rootfs implementation: legacy rebuild"
       prepare_writable_rootfs_rebuild
       ;;

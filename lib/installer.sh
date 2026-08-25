@@ -28,7 +28,7 @@ inject_log_collector() {
   mkdir -p "$HOMEMNT/deck/logs/boot"
 
   # The collector script — lives in the image rootfs.
-  cat > "$MNT/usr/local/bin/collect-boot-logs" <<'SCRIPT'
+  cat >"$MNT/usr/local/bin/collect-boot-logs" <<'SCRIPT'
 #!/bin/bash
 # collect-boot-logs — gather initramfs + early boot diagnostics onto the USB.
 # Runs as a oneshot systemd service after local-fs.target.
@@ -169,7 +169,7 @@ SCRIPT
 
   # Systemd service — runs after home partition is available.
   mkdir -p "$MNT/etc/systemd/system"
-  cat > "$MNT/etc/systemd/system/collect-boot-logs.service" <<'SERVICE'
+  cat >"$MNT/etc/systemd/system/collect-boot-logs.service" <<'SERVICE'
 [Unit]
 Description=Collect boot logs to USB
 DefaultDependencies=no
@@ -229,7 +229,7 @@ install_one_click_installer() {
       # partition.  The clone carries ro=true from the USB image, so clear it first.
       # Inject right after the second imageroot call (the one for rootfs-B).
       _resize_tmp="$(mktemp /tmp/nvidia-resize-block.XXXXXX)"
-      cat > "$_resize_tmp" <<'RESIZE'
+      cat >"$_resize_tmp" <<'RESIZE'
 
   # --- expand rootfs partitions to fill their (possibly larger) partitions ---
   if [[ -n "${STEAMOS_ROOTFS_SIZE:-}" ]]; then
@@ -252,14 +252,14 @@ RESIZE
           print; while ((getline line < blk) > 0) print line; close(blk); next
         }
         { print }
-      ' "$TOOLS/repair_device.sh" > "$TOOLS/repair_device.sh.tmp" \
+      ' "$TOOLS/repair_device.sh" >"$TOOLS/repair_device.sh.tmp" \
         && mv "$TOOLS/repair_device.sh.tmp" "$TOOLS/repair_device.sh"
       rm -f "$_resize_tmp"
       grep -q 'Expanding btrfs on' "$TOOLS/repair_device.sh" || die "btrfs resize injection failed"
     fi
 
     log "Installing disk-picker wrapper + desktop icons"
-    cat > "$TOOLS/install_to_hd.sh" <<'WRAPPER'
+    cat >"$TOOLS/install_to_hd.sh" <<'WRAPPER'
 #!/bin/bash
 # One-click SteamOS (NVIDIA-patched) installer/upgrader. Picks an internal
 # disk, then runs Valve's repair_device.sh which clones the running USB
@@ -320,8 +320,7 @@ if [[ "$MODE" == system ]]; then
   fi
 fi
 
-# shellcheck disable=SC2059  # template contains the %s placeholders
-CONFIRM_TEXT="$(printf "$CONFIRM_TEXT_TPL" "$TARGET" "$TARGET")"
+CONFIRM_TEXT="${CONFIRM_TEXT_TPL//%s/$TARGET}"
 zenity --question --no-wrap --title "Final confirmation" --ok-label "$CONFIRM_LABEL" --cancel-label "Cancel" \
   --text "$CONFIRM_TEXT" || exit 0
 
@@ -342,7 +341,7 @@ WRAPPER
       grep -q 'STEAMOS_ROOTFS_SIZE' "$TOOLS/install_to_hd.sh" || die "ROOTFS_SIZE injection into install_to_hd.sh failed"
     fi
 
-    cat > "$DESKTOP/Install SteamOS NVIDIA.desktop" <<'ICON'
+    cat >"$DESKTOP/Install SteamOS NVIDIA.desktop" <<'ICON'
 [Desktop Entry]
 Name=Install SteamOS (NVIDIA) to Hard Drive
 GenericName=Install SteamOS (NVIDIA) to Hard Drive
@@ -356,7 +355,7 @@ StartupNotify=true
 ICON
     chmod 755 "$DESKTOP/Install SteamOS NVIDIA.desktop"
 
-    cat > "$DESKTOP/Upgrade SteamOS NVIDIA.desktop" <<'ICON'
+    cat >"$DESKTOP/Upgrade SteamOS NVIDIA.desktop" <<'ICON'
 [Desktop Entry]
 Name=Upgrade SteamOS (NVIDIA) — keeps games & data
 GenericName=Upgrade SteamOS (NVIDIA) — keeps games & data
@@ -379,7 +378,7 @@ ICON
     # Privilege-escalation wrapper: only allows running repair_device.sh
     # (and nothing else) as root, with the required environment variables.
     log "Installing privilege-escalation helper"
-    cat > "$MNT/usr/local/bin/nvidia-install-run" <<'HELPER'
+    cat >"$MNT/usr/local/bin/nvidia-install-run" <<'HELPER'
 #!/bin/bash
 # Restricted sudo helper for the one-click installer.
 # Only allows running repair_device.sh as root with the required env vars.
@@ -401,7 +400,7 @@ HELPER
     # NOPASSWD sudoers: only the wrapper, not blanket ALL.
     log "Adding NOPASSWD sudoers drop-in for deck (wrapper only)"
     echo 'deck ALL=(ALL) NOPASSWD: /usr/local/bin/nvidia-install-run' \
-      > "$MNT/etc/sudoers.d/zz-deck-nopasswd"
+      >"$MNT/etc/sudoers.d/zz-deck-nopasswd"
     chmod 440 "$MNT/etc/sudoers.d/zz-deck-nopasswd"
   fi
 }

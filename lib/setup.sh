@@ -16,13 +16,12 @@ fi
 # parsing fails.
 setup_resolve_workdir() {
   if [[ -n "${_WORKDIR_EXPLICIT:-}" ]]; then
-    return 0  # user specified --workdir, don't override
+    return 0 # user specified --workdir, don't override
   fi
 
   # If the user forced a location via config, honour it.
   if [[ "${WORKDIR_LOCATION:-auto}" == "ram" ]]; then
     WORKDIR="/dev/shm/nvidia-build"
-    OUT_FINAL="$WORKDIR/$(basename "$OUT_FINAL")"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR"
     log "Build workspace: RAM (forced by config)"
@@ -67,35 +66,35 @@ if len(d) >= 596 and d[512:520] == b"EFI PART":
 '
   if [[ -f "$IMG" ]]; then
     case "$IMG" in
-      *.bz2)  gpt_out="$(bzip2 -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
-      *.gz)   gpt_out="$(gzip -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
-      *.xz)   gpt_out="$(xz -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
-      *.zst)  gpt_out="$(zstd -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
-      *)      gpt_out="$(head -c 1M "$IMG" | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
+      *.bz2) gpt_out="$(bzip2 -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
+      *.gz) gpt_out="$(gzip -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
+      *.xz) gpt_out="$(xz -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
+      *.zst) gpt_out="$(zstd -dc "$IMG" 2>/dev/null | head -c 1M | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
+      *) gpt_out="$(head -c 1M "$IMG" | python3 -c "$gpt_parser" 2>/dev/null || true)" ;;
     esac
     img_bytes="$(printf '%s\n' "$gpt_out" | head -1)"
     rootfs_a_bytes="$(printf '%s\n' "$gpt_out" | tail -1)"
-    [[ "$rootfs_a_bytes" == "$img_bytes" ]] && rootfs_a_bytes=0  # only one line = no rootfs-A found
+    [[ "$rootfs_a_bytes" == "$img_bytes" ]] && rootfs_a_bytes=0 # only one line = no rootfs-A found
   fi
 
   # Fall back to compressed size × 3 if GPT parsing failed.
   if [[ -z "$img_bytes" || "$img_bytes" == "0" ]]; then
     local compressed_mb
-    compressed_mb=$(( $(stat -c '%s' "$IMG") / 1048576 ))
-    need_mb=$(( compressed_mb * 3 ))
-    (( need_mb < 12288 )) && need_mb=12288
+    compressed_mb=$(($(stat -c '%s' "$IMG") / 1048576))
+    need_mb=$((compressed_mb * 3))
+    ((need_mb < 12288)) && need_mb=12288
     log "Could not read GPT header — estimating ${need_mb} MB from compressed size"
   else
-    local img_mb=$(( img_bytes / 1048576 ))
-    need_mb=$(( img_mb + 15360 ))
+    local img_mb=$((img_bytes / 1048576))
+    need_mb=$((img_mb + 15360))
 
     # If ROOTFS_SIZE is set and we found rootfs-A, project the growth.
-    if [[ -n "${ROOTFS_SIZE:-}" ]] && (( ROOTFS_SIZE > 0 && rootfs_a_bytes > 0 )); then
-      local rootfs_a_mib=$(( rootfs_a_bytes / 1048576 ))
-      local growth_mib=$(( ROOTFS_SIZE - rootfs_a_mib ))
-      if (( growth_mib > 0 )); then
-        local growth_mb=$(( growth_mib ))
-        need_mb=$(( need_mb + growth_mb ))
+    if [[ -n "${ROOTFS_SIZE:-}" ]] && ((ROOTFS_SIZE > 0 && rootfs_a_bytes > 0)); then
+      local rootfs_a_mib=$((rootfs_a_bytes / 1048576))
+      local growth_mib=$((ROOTFS_SIZE - rootfs_a_mib))
+      if ((growth_mib > 0)); then
+        local growth_mb=$((growth_mib))
+        need_mb=$((need_mb + growth_mb))
         log "Decompressed image: ${img_mb} MB, rootfs-A: ${rootfs_a_mib} MiB → ${ROOTFS_SIZE} MiB (+${growth_mb} MB), need ~${need_mb} MB"
       else
         log "Decompressed image: ${img_mb} MB, rootfs-A already ${rootfs_a_mib} MiB, need ~${need_mb} MB"
@@ -106,19 +105,18 @@ if len(d) >= 596 and d[512:520] == b"EFI PART":
   fi
 
   if [[ "${WORKDIR_LOCATION:-auto}" == "disk" ]]; then
-    (( disk_avail >= need_mb )) || die "Disk only has ${disk_avail} MB free, need ~${need_mb} MB."
+    ((disk_avail >= need_mb)) || die "Disk only has ${disk_avail} MB free, need ~${need_mb} MB."
     log "Build workspace: disk (forced by config, ${disk_avail} MB free)"
     return 0
   fi
 
   # Auto: prefer RAM if it has enough headroom, otherwise disk.
-  if (( ram_avail >= need_mb )); then
+  if ((ram_avail >= need_mb)); then
     WORKDIR="/dev/shm/nvidia-build"
-    OUT_FINAL="$WORKDIR/$(basename "$OUT_FINAL")"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR"
     log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free, need ~${need_mb})"
-  elif (( disk_avail >= need_mb )); then
+  elif ((disk_avail >= need_mb)); then
     log "Build workspace: disk (${disk_avail} MB free, RAM only ${ram_avail} MB)"
   else
     die "Not enough space: RAM=${ram_avail} MB, disk=${disk_avail} MB. Need ~${need_mb} MB."
@@ -143,7 +141,7 @@ setup_udev_guard() {
 
   local loop_name="${LOOPDEV#/dev/}"
 
-  cat > "$UDEV_RULE" <<EOF
+  cat >"$UDEV_RULE" <<EOF
 # steamos-nvidia build-loop quarantine.
 #
 # SteamOS recovery images contain the same GPT PARTUUIDs as the running
@@ -169,7 +167,7 @@ setup_copy_image() {
   # size+mtime (hashing 8 GB is slow and unnecessary when the file IS the
   # output).
   case "$IMG" in
-    *.bz2|*.gz|*.xz|*.zst)
+    *.bz2 | *.gz | *.xz | *.zst)
       _src_fp="$(stat -c '%s:%Y' "$IMG"):$(sha256sum "$IMG" | cut -d' ' -f1)"
       ;;
     *)
@@ -194,7 +192,7 @@ setup_copy_image() {
   # Space check: decompressed image is ~8 GB, packages ~0.5 GB.
   # The overlay workspace is a sparse file (doesn't consume upfront).
   _avail_mb="$(df -m --output=avail "$(dirname "$OUT")" | tail -1 | tr -d ' ')"
-  if (( _avail_mb < 9216 )); then
+  if ((_avail_mb < 9216)); then
     die "Not enough disk space: ${_avail_mb} MB free, need ~9 GB. Use --workdir /dev/shm to build in RAM."
   fi
 
@@ -202,11 +200,11 @@ setup_copy_image() {
 
   # Start decompression in background so we can track progress.
   case "$IMG" in
-    *.bz2)  bzip2 -dkc "$IMG" > "$OUT" & ;;
-    *.gz)   gzip -dkc "$IMG" > "$OUT" & ;;
-    *.xz)   xz -dkc "$IMG" > "$OUT" & ;;
-    *.zst)  zstd -dkc "$IMG" -o "$OUT" & ;;
-    *)      cp --reflink=auto "$IMG" "$OUT" & ;;
+    *.bz2) bzip2 -dkc "$IMG" >"$OUT" & ;;
+    *.gz) gzip -dkc "$IMG" >"$OUT" & ;;
+    *.xz) xz -dkc "$IMG" >"$OUT" & ;;
+    *.zst) zstd -dkc "$IMG" -o "$OUT" & ;;
+    *) cp --reflink=auto "$IMG" "$OUT" & ;;
   esac
   local decomp_pid=$!
 
@@ -218,9 +216,9 @@ setup_copy_image() {
   while kill -0 "$decomp_pid" 2>/dev/null; do
     local written
     written="$(stat -c '%s' "$OUT" 2>/dev/null || echo 0)"
-    local gb=$(( written / 1073741824 ))
-    local pct=$(( 1 + gb ))
-    if (( pct > last_pct && pct <= 19 )); then
+    local gb=$((written / 1073741824))
+    local pct=$((1 + gb))
+    if ((pct > last_pct && pct <= 19)); then
       last_pct=$pct
       printf '%s\n' "@@PROGRESS:$pct@@"
     fi
@@ -230,7 +228,7 @@ setup_copy_image() {
   wait "$decomp_pid" || die "Decompression failed"
 
   # Save the fingerprint for next run.
-  echo "$_src_fp" > "$FINGERPRINT_FILE"
+  echo "$_src_fp" >"$FINGERPRINT_FILE"
 }
 
 # Attach the output as a loop device and locate the SteamOS partitions.
@@ -250,9 +248,9 @@ setup_loop_mount() {
     [[ -b "$part" ]] || continue
 
     log "udev quarantine state for $part:"
-    udevadm info -q property -n "$part" 2>/dev/null |
-      grep -E 'ID_PART_ENTRY_(UUID|NAME)|UDISKS_IGNORE|SYSTEMD_READY' |
-      while IFS= read -r line; do
+    udevadm info -q property -n "$part" 2>/dev/null \
+      | grep -E 'ID_PART_ENTRY_(UUID|NAME)|UDISKS_IGNORE|SYSTEMD_READY' \
+      | while IFS= read -r line; do
         log "  $line"
       done || true
   done
@@ -276,33 +274,36 @@ setup_loop_mount() {
   for part in "$LOOPDEV"p*; do
     [[ -b "$part" ]] || continue
 
-    if udevadm info -q symlink -n "$part" 2>/dev/null |
-        tr ' ' '\n' |
-        grep -q '^disk/by-partsets/'; then
+    if udevadm info -q symlink -n "$part" 2>/dev/null \
+      | tr ' ' '\n' \
+      | grep -q '^disk/by-partsets/'; then
       warn "DANGEROUS: $part owns a SteamOS partset DEVLINK"
       udevadm info -q symlink -n "$part" >&2 || true
       collision=1
     fi
   done
 
-  (( collision == 0 )) \
+  ((collision == 0)) \
     || die "Build loop claimed a live SteamOS /dev/disk/by-partsets link; refusing to continue"
 
   log "Scanning partitions on $LOOPDEV"
 
   ROOTPART="" EFIPART="" HOMEPART="" VARPART=""
   for part in "$LOOPDEV"p*; do
-    [[ -b "$part" ]] || { warn "No partition devices found on $LOOPDEV — image may be corrupt"; break; }
+    [[ -b "$part" ]] || {
+      warn "No partition devices found on $LOOPDEV — image may be corrupt"
+      break
+    }
     _pname="$(blkid -p -s PART_ENTRY_NAME -o value "$part" 2>/dev/null)" || true
     log "  $part: ${_pname:-<unknown>}"
     case "$_pname" in
       rootfs-A) ROOTPART="$part" ;;
-      efi-A)    EFIPART="$part" ;;
-      home)     HOMEPART="$part" ;;
+      efi-A) EFIPART="$part" ;;
+      home) HOMEPART="$part" ;;
       # SteamOS exposes this at boot as /dev/disk/by-partsets/self/var.
       # Repair images normally call the A-slot partition var-A; accept var
       # too so the code works with images that use an unsuffixed label.
-      var-A|var) VARPART="$part" ;;
+      var-A | var) VARPART="$part" ;;
     esac
   done
   log "rootfs=$ROOTPART efi=$EFIPART home=$HOMEPART var=${VARPART:-<not found>}"

@@ -6,9 +6,9 @@
 set -uo pipefail
 
 for dir in /usr/lib/steam-perf/boot.d /etc/steam-perf/boot.d; do
-    [ -d "$dir" ] || continue
-    for hook in "$dir"/*; do
-        [ -x "$hook" ] || continue
-        "$hook"
-    done
+  [ -d "$dir" ] || continue
+  for hook in "$dir"/*; do
+    [ -x "$hook" ] || continue
+    "$hook"
+  done
 done

@@ -51,14 +51,16 @@ Choose from the **Update mode** dropdown in the build form.
 ### CLI
 
 ```bash
-# selfheal (default — no flag needed)
-./steamos-nvidia.sh --action build --image ...
+# In your build.conf:
+
+# selfheal (default)
+UPDATE_MODE="selfheal"
 
 # hold
-./steamos-nvidia.sh --action build --image ... --hold-updates
+UPDATE_MODE="hold"
 
 # stock
-./steamos-nvidia.sh --action build --image ... --no-hold-updates
+UPDATE_MODE="stock"
 ```
 
 ### Config file

@@ -87,7 +87,7 @@ read_slot_build_id() {
 
   # Reading the raw staged rootfs requires root. Non-root callers still get
   # normal Valve-client behaviour; they simply cannot trigger self-heal.
-  (( EUID == 0 )) || return 1
+  ((EUID == 0)) || return 1
 
   mnt="$(mktemp -d /tmp/steamos-nvidia-slot.XXXXXX)" || return 1
   if mount -o ro "$dev" "$mnt" 2>/dev/null; then
@@ -118,7 +118,7 @@ dump_boot_state() {
     done
 
     rauc status 2>&1 || true
-  } >> "$LOG"
+  } >>"$LOG"
 }
 
 edit_slot_conf() {
@@ -157,16 +157,16 @@ rollback_target() {
   alog "Cancelling staged update in slot $slot."
 
   if ! edit_slot_conf "$slot" \
-      -e 's/^boot-requested-at:.*/boot-requested-at: 0/' \
-      -e 's/^boot-attempts:.*/boot-attempts: 0/' \
-      -e 's/^image-invalid:.*/image-invalid: 1/'; then
+    -e 's/^boot-requested-at:.*/boot-requested-at: 0/' \
+    -e 's/^boot-attempts:.*/boot-attempts: 0/' \
+    -e 's/^image-invalid:.*/image-invalid: 1/'; then
     alog "ERROR: failed to invalidate updated slot $slot"
     ok=0
   fi
 
   if ! verify_slot_boot_value "$slot" image-invalid 1 \
-      || ! verify_slot_boot_value "$slot" boot-attempts 0 \
-      || ! verify_slot_boot_value "$slot" boot-requested-at 0; then
+    || ! verify_slot_boot_value "$slot" boot-attempts 0 \
+    || ! verify_slot_boot_value "$slot" boot-requested-at 0; then
     alog "ERROR: target slot $slot did not reach rollback state"
     ok=0
   fi
@@ -178,7 +178,7 @@ rollback_target() {
   fi
 
   dump_boot_state
-  (( ok == 1 ))
+  ((ok == 1))
 }
 
 install_self_into_target() {
@@ -222,7 +222,7 @@ install_self_into_target() {
       return 1
     }
     mv "$mnt/usr/bin/steamos-atomupd-client" \
-       "$mnt/usr/bin/steamos-atomupd-client.orig" || {
+      "$mnt/usr/bin/steamos-atomupd-client.orig" || {
       alog "ERROR: could not preserve Valve atomupd client in slot $slot"
       umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
       rmdir "$mnt" 2>/dev/null || true
@@ -312,10 +312,10 @@ fi
 alog "Post-state: self=$this_after other=$other_after build=${build_after:-unknown} boot-requested-at=${request_after:-unknown}"
 
 stage_reason=""
-if (( build_before_ok && build_after_ok )) && [[ "$build_after" != "$build_before" ]]; then
+if ((build_before_ok && build_after_ok)) && [[ "$build_after" != "$build_before" ]]; then
   stage_reason="other-slot BUILD_ID changed: $build_before -> $build_after"
-elif (( request_before_ok && request_after_ok )) \
-     && [[ "$request_after" != "0" && "$request_after" != "$request_before" ]]; then
+elif ((request_before_ok && request_after_ok)) \
+  && [[ "$request_after" != "0" && "$request_after" != "$request_before" ]]; then
   # Fallback for a same-BUILD_ID reinstall: a newly requested boot of OTHER is
   # still a real staged-image transition and must be reconciled.
   stage_reason="other-slot boot-requested-at changed: $request_before -> $request_after"
@@ -356,16 +356,23 @@ if [[ "$request_locked" == "0" && "$invalid_locked" == "1" ]]; then
 fi
 
 alog "Update staged. Starting NVIDIA repatch of partset 'other'."
-"$REPATCH" other >> "$LOG" 2>&1
+"$REPATCH" other >>"$LOG" 2>&1
 repatch_rc=$?
 
 alog "Repatch returned rc=$repatch_rc"
 dump_boot_state
 
-if [[ $repatch_rc -ne 0 ]]; then
-  alog "ERROR: NVIDIA repatch failed."
+if [[ $repatch_rc -eq 10 ]]; then
+  # repatch completed but one or more optional patches failed.
+  # The OS update itself is fine — do NOT roll back the staged slot.
+  alog "WARNING: SteamOS update installed, but some optional patches failed."
+  alog "WARNING: The updated OS slot has been left bootable."
+  alog "WARNING: Review the repatch log: $LOG"
+elif [[ $repatch_rc -ne 0 ]]; then
+  alog "ERROR: Repatch failed critically (rc=$repatch_rc)."
+  alog "ERROR: The staged SteamOS update will be cancelled."
+  alog "ERROR: Review the repatch log: $LOG"
   rollback_target "$other_after" || alog "ERROR: rollback verification failed"
-  alog "Details: $LOG"
   exit 1
 fi
 
@@ -380,7 +387,7 @@ fi
 
 alog "NVIDIA repatch succeeded; marking updated slot bootable."
 if ! edit_slot_conf "$other_after" \
-    -e 's/^image-invalid:.*/image-invalid: 0/'; then
+  -e 's/^image-invalid:.*/image-invalid: 0/'; then
   alog "ERROR: updated boot config could not be marked valid"
   rollback_target "$other_after" || alog "ERROR: rollback verification failed"
   exit 1

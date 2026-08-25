@@ -41,13 +41,12 @@ NVIDIA GPU modules are shown but **not** pre-checked. For desktop installs (not 
 Pass a space-separated module list:
 
 ```bash
-./steamos-nvidia.sh --action build \
-    --image ... \
-    --initramfs "nvme ahci xhci_hcd xhci_pci nvidia nvidia_modeset nvidia_drm nvidia_uvm"
+# In your build.conf:
+INITRAMFS_MODULES="nvme ahci xhci_hcd xhci_pci nvidia nvidia_modeset nvidia_drm nvidia_uvm"
 ```
 
 An empty string means stock initramfs (no modifications):
 
 ```bash
---initramfs ""
+INITRAMFS_MODULES=""
 ```

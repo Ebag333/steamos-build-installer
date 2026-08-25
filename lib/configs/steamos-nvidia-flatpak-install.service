@@ -1,0 +1,10 @@
+[Unit]
+Description=Install staged SteamOS NVIDIA Flatpaks
+ConditionPathExists=/usr/share/steamos-nvidia/flatpaks
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/steamos-nvidia/install-staged-flatpaks
+
+[Install]
+WantedBy=default.target

@@ -26,7 +26,7 @@ apply_update_strategy() {
     for bin in steamos-update steamos-update-os steamos-atomupd-client; do
       [[ -f "$MNT/usr/bin/$bin" && ! -f "$MNT/usr/bin/$bin.orig" ]] || continue
       mv "$MNT/usr/bin/$bin" "$MNT/usr/bin/$bin.orig"
-      cat > "$MNT/usr/bin/$bin" <<'EOF'
+      cat >"$MNT/usr/bin/$bin" <<'EOF'
 #!/bin/bash
 # Stubbed by steamos-nvidia-installer: an OS update would replace the rootfs
 # and remove the NVIDIA driver. Original saved as $0.orig.
@@ -42,19 +42,13 @@ EOF
     log "Installing self-healing update machinery"
     mkdir -p "$MNT/usr/lib/steamos-nvidia"
 
-    # Bundle HID source into the rootfs for self-heal repatch.
-    # Only if logitech-hid was selected in system tweaks.
-    if [[ -n "${GAMING_ITEMS:-}" && " $GAMING_ITEMS " == *" logitech-hid "* ]]; then
-      local hid_bundle="$MNT/usr/lib/steamos-nvidia/hid"
-      rm -rf "$hid_bundle"
-      mkdir -p "$hid_bundle"
-      cp -a "$DRIVER_SRC_DIR/." "$hid_bundle/"
-    fi
+    # HID source bundle is now created by the builds system (logitech-hid.sh)
+    # No need to copy from DRIVER_SRC_DIR here
 
     # Persist build selections needed by repatch.  Package source/version policy
     # lives in the bundled hw-packages-{valve,arch}.conf manifests.  Entries
     # marked "latest" are resolved again on every self-heal.
-    cat > "$MNT/usr/lib/steamos-nvidia/driver.conf" <<EOF
+    cat >"$MNT/usr/lib/steamos-nvidia/driver.conf" <<EOF
 # Written by steamos-nvidia-installer at image build time.
 # Package versions are controlled by:
 #   /usr/lib/steamos-nvidia/configs/hw-packages-valve.conf
@@ -83,8 +77,7 @@ EOF
       install-hw-libs \
       grub \
       update-wrapper \
-      atomupd-wrapper
-    do
+      atomupd-wrapper; do
       install -m 755 \
         "$SCRIPT_DIR/lib/$helper.sh" \
         "$MNT/usr/lib/steamos-nvidia/$helper.sh"
@@ -105,7 +98,7 @@ EOF
     # shared interception point for Game Mode and Discover.
     if [[ ! -f "$MNT/usr/bin/steamos-atomupd-client.orig" ]]; then
       mv "$MNT/usr/bin/steamos-atomupd-client" \
-         "$MNT/usr/bin/steamos-atomupd-client.orig"
+        "$MNT/usr/bin/steamos-atomupd-client.orig"
     fi
     install -m 755 \
       "$SCRIPT_DIR/lib/atomupd-wrapper.sh" \

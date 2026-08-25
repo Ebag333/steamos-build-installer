@@ -1,5 +1,18 @@
 # Troubleshooting
 
+## Emergency recovery after a bad OS update
+
+If an OS update breaks boot or the system gets stuck, you can bypass Steam and get to a usable desktop:
+
+1. Press `Ctrl+F4` to switch to a terminal (try `F2`–`F5` if `F4` doesn't work)
+2. Log in as `deck`
+3. Run:
+   ```bash
+   steamos-session-select plasma-wayland-persistent
+   ```
+
+This drops you into a Wayland desktop session and skips the Steam update process, giving you a working environment to diagnose or fix the issue.
+
 ## Build issues
 
 ### Black screen on first boot of the installed system
@@ -17,7 +30,7 @@ https://help.steampowered.com/en/faqs/view/65B4-2AA3-5F37-4227#install
 
 ### pacman signature errors during the build
 
-Rerun with `--skip-sigcheck` or enable `fix-keyring` in system tweaks. Packages come from Valve's and Arch's own servers over HTTPS.
+Rerun with `SKIP_SIG=1` or `FIX_KEYRING=1` in your config file. Packages come from Valve's and Arch's own servers over HTTPS.
 
 ### "glibc version mismatch" or package compatibility errors
 
@@ -33,8 +46,8 @@ The build uses a private mount namespace to avoid this, but if it happens:
 
 ### Build takes very long or runs out of disk space
 
-- With `--workdir-location ram`, the build uses `/dev/shm` (RAM disk). Needs ~3x the image size in free RAM.
-- With `--workdir-location disk`, ensure at least 20 GB free in the workspace directory.
+- With `WORKDIR_LOCATION=ram` in your config, the build uses `/dev/shm` (RAM disk). Needs ~3x the image size in free RAM.
+- With `WORKDIR_LOCATION=disk`, ensure at least 20 GB free in the workspace directory.
 - `auto` mode picks ram if enough free memory exists, otherwise disk.
 
 ## Installed system issues
@@ -132,26 +145,63 @@ If `scx_lavd` is not installed, the `scx-scheds` package may not have been in th
 
 ## Log locations
 
-### On the installed system
+### Installed system — self-heal / update logs
 
 | Path | Contents |
 |---|---|
-| `/home/.steamos-nvidia/logs/atomupd-latest.log` | Most recent self-heal log |
-| `/home/.steamos-nvidia/logs/update-latest.log` | Most recent update wrapper log |
-| `/home/.steamos-nvidia/logs/atomupd-*.log` | All self-heal logs (timestamped) |
-| `/home/.steamos-nvidia/logs/update-*.log` | All update wrapper logs (timestamped) |
-| `/usr/lib/steamos-nvidia/build.conf` | Build manifest (flags, versions, timestamp) |
+| `/home/.steamos-nvidia/logs/atomupd-latest.log` | Symlink → most recent atomupd wrapper log |
+| `/home/.steamos-nvidia/logs/atomupd-*.log` | All atomupd wrapper logs (timestamped) |
+| `/home/.steamos-nvidia/logs/repatch-latest.log` | Symlink → most recent repatch log (driver/module rebuild output) |
+| `/home/.steamos-nvidia/logs/repatch-*.log` | All repatch logs (timestamped) |
+| `/home/.steamos-nvidia/logs/update-latest.log` | Symlink → most recent steamos-update wrapper log |
+| `/home/.steamos-nvidia/logs/update-*.log` | All steamos-update wrapper logs (timestamped) |
 
-### During the build (host machine)
+### Installed system — post-install and config
 
-The GUI shows the log path when the build completes. Logs are in `/tmp/steamos-nvidia.XXXXXX/backend.log`.
+| Path | Contents |
+|---|---|
+| `/var/log/steamos-nvidia-post-install.log` | Post-install configuration utility log |
+| `/usr/lib/steamos-nvidia/build.conf` | Build manifest (flags, driver version, kernel version, timestamp) |
 
-### Verbose boot logging
+### Installed system — boot logs (USB collector)
 
-If you enabled `debug-boot` during the build, kernel command line includes `rd.debug rd.log=all`. Boot logs are available via:
+If the build included the boot log collector, each boot writes a compressed archive to the USB's home partition:
+
+| Path | Contents |
+|---|---|
+| `<USB>/deck/logs/boot/boot-logs-*.tar.gz` | Compressed boot log archives (last 20 kept) |
+
+Each archive contains: `init.log` (initramfs), `dmesg.txt`, `dmesg-warnings.txt`, `journal.txt`, `journal-errors.txt`, `lspci.txt`, `lsusb.txt`, `lsmod.txt`, `nvidia-smi.txt`, `modinfo-nvidia.txt`, `nvidia-version.txt`, `grub-default.txt`, `grub.cfg`, network diagnostics, and more.
+
+### Installed system — systemd journal
+
+All components log to the systemd journal with dedicated tags. Filter with:
+
+```bash
+journalctl -t steamos-nvidia-atomupd -b    # atomupd wrapper
+journalctl -t steamos-nvidia-repatch -b    # repatch (driver rebuild)
+journalctl -t steamos-nvidia-update -b     # steamos-update wrapper
+journalctl -t steamos-nvidia-build -b      # build steps (if journal was available)
+```
+
+If you enabled `debug-boot` during the build, the kernel command line includes `rd.debug rd.log=all` for verbose initramfs logging:
 
 ```bash
 journalctl -b
+```
+
+### During the build (host machine)
+
+The GUI shows the log path when the build completes. Logs are in a temporary directory:
+
+| Path | Contents |
+|---|---|
+| `/tmp/steamos-nvidia.XXXXXX/backend.log` | Full build backend output (stdout + stderr) |
+
+The `XXXXXX` suffix is random; the GUI prints the exact path to stderr. To find it:
+
+```bash
+ls -lt /tmp/steamos-nvidia.*/backend.log | head -1
 ```
 
 ## Diagnostics

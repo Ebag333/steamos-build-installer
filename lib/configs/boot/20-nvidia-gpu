@@ -7,15 +7,15 @@ command -v nvidia-smi >/dev/null 2>&1 || exit 0
 
 # Driver may not be ready immediately after boot.
 for _ in $(seq 1 30); do
-    nvidia-smi -L >/dev/null 2>&1 && break
-    sleep 1
+  nvidia-smi -L >/dev/null 2>&1 && break
+  sleep 1
 done
 nvidia-smi -L >/dev/null 2>&1 || exit 0
 
 # Persistence mode: keeps the driver loaded even with no GPU clients.
 pm="$(nvidia-smi --query-gpu=persistence_mode --format=csv,noheader 2>/dev/null | head -1)"
 if [ "$pm" != "Enabled" ]; then
-    nvidia-smi -pm 1 >/dev/null 2>&1 || true
+  nvidia-smi -pm 1 >/dev/null 2>&1 || true
 fi
 
 # Power limit: raise to the card's own ceiling.
@@ -25,5 +25,5 @@ current="${current%%.*}"
 maximum="${maximum%%.*}"
 
 if [ -n "$maximum" ] && [ "$current" != "$maximum" ]; then
-    nvidia-smi -pl "$maximum" >/dev/null 2>&1 || true
+  nvidia-smi -pl "$maximum" >/dev/null 2>&1 || true
 fi

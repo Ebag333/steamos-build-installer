@@ -102,11 +102,11 @@ report_failure() {
   local reason="${4:-}"
 
   # A manually invoked die() might follow a command that returned 0.
-  (( rc != 0 )) || rc=1
+  ((rc != 0)) || rc=1
 
   # Prevent ERR + die, or failures inside diagnostics, from producing
   # multiple snapshots.
-  if (( FAILURE_REPORTED )); then
+  if ((FAILURE_REPORTED)); then
     exit "$rc"
   fi
   FAILURE_REPORTED=1
@@ -136,7 +136,7 @@ die() {
   local reason="$*"
   local line="${BASH_LINENO[0]:-${LINENO}}"
 
-  (( rc != 0 )) || rc=1
+  ((rc != 0)) || rc=1
 
   report_failure \
     "$rc" \
@@ -163,16 +163,149 @@ ensure_steamos_nvidia_dirs() {
   chmod 777 "$root/recovery"
 }
 
+# ---------------------------------------------------------------------------
+# Project Persistence (Self-Heal)
+# ---------------------------------------------------------------------------
+# Persist a copy of the project into /home/.steamos-nvidia/ so users can
+# re-run from the device without caching the original scripts.
+#
+# Self-heal semantics:
+#   - Same version → no-op (skip copy)
+#   - Newer version → overwrite changed files
+#   - Partially deleted/damaged → restore missing files
+#   - Never deletes user files (logs/, recovery/)
+
+# Compute a version identifier for the current project tree.
+# Uses git describe if available, otherwise hashes key files.
+_get_project_version() {
+  local src="${1:?_get_project_version: missing source dir}"
+
+  # Prefer git describe (includes tag + commit hash)
+  if command -v git &>/dev/null && [[ -d "$src/.git" ]]; then
+    git -C "$src" describe --always --dirty 2>/dev/null && return 0
+  fi
+
+  # Fallback: hash of key files that change with releases
+  local hash_input=""
+  for f in "$src/steamos-nvidia.sh" "$src/lib/common.sh" "$src/lib/backend.sh" \
+    "$src/lib/library-loader.sh" "$src/lib/configs/customizations.conf"; do
+    [[ -f "$f" ]] && hash_input+="$(cat "$f")"
+  done
+
+  if [[ -n "$hash_input" ]]; then
+    echo "$hash_input" | md5sum | cut -d' ' -f1
+  else
+    date +%s
+  fi
+}
+
+# Persist project files into /home/.steamos-nvidia/ with self-heal.
+# Args: $1 = source dir (project root), $2 = (optional) target base (default /home)
+#
+# Copies: steamos-nvidia.sh, lib/, tools/, recipes/, build.conf, LICENSE
+# Skips: .git/, .idea/, test-*.sh, docs/, __pycache__/
+# Preserves: logs/, recovery/, .version
+persist_project_files() {
+  local src="${1:?persist_project_files: missing source dir}"
+  local base="${2:-/home}"
+  local dest="$base/.steamos-nvidia"
+  local version_file="$dest/.version"
+
+  # Compute current version
+  local current_version
+  current_version="$(_get_project_version "$src")"
+
+  # Check if persisted version matches
+  if [[ -f "$version_file" ]]; then
+    local persisted_version
+    persisted_version="$(cat "$version_file")"
+    if [[ "$persisted_version" == "$current_version" ]]; then
+      log "Project already persisted at $dest (version $current_version)"
+      return 0
+    fi
+    log "Project version changed ($persisted_version → $current_version) — updating"
+  else
+    log "Persisting project to $dest"
+  fi
+
+  # Ensure target directory exists
+  mkdir -p "$dest"
+
+  # Sync project files using rsync if available, otherwise cp
+  if command -v rsync &>/dev/null; then
+    rsync -a --delete \
+      --exclude='.git/' \
+      --exclude='.idea/' \
+      --exclude='test-*.sh' \
+      --exclude='docs/' \
+      --exclude='__pycache__/' \
+      --exclude='logs/' \
+      --exclude='recovery/' \
+      --exclude='.version' \
+      "$src/" "$dest/" \
+      || {
+        warn "rsync failed — falling back to cp"
+        _persist_project_files_cp "$src" "$dest"
+      }
+  else
+    _persist_project_files_cp "$src" "$dest"
+  fi
+
+  # Write version stamp
+  echo "$current_version" >"$version_file"
+  log "Project persisted (version $current_version)"
+}
+
+# Fallback copy when rsync is not available.
+# Copies specific files/dirs, skips known exclusions.
+_persist_project_files_cp() {
+  local src="${1:?_persist_project_files_cp: missing source}"
+  local dest="${2:?_persist_project_files_cp: missing dest}"
+
+  # Copy top-level files
+  local f
+  for f in steamos-nvidia.sh steamos-recovery-update-diagnostics.sh build.conf LICENSE README.md; do
+    [[ -f "$src/$f" ]] && cp -f "$src/$f" "$dest/$f"
+  done
+
+  # Copy directories
+  local d
+  for d in lib tools recipes; do
+    [[ -d "$src/$d" ]] && cp -a "$src/$d" "$dest/$d"
+  done
+}
+
+# Ensure the project is persisted to /home/.steamos-nvidia/.
+# Entry point for all pipelines — handles source detection and calls persist.
+# Args: $1 = (optional) source dir (default: $SCRIPT_DIR)
+#        $2 = (optional) target base (default: /home)
+ensure_project_persisted() {
+  local src="${1:-${SCRIPT_DIR:-}}"
+  local base="${2:-/home}"
+
+  if [[ -z "$src" || ! -d "$src/lib" ]]; then
+    warn "Cannot determine project source directory — skipping persistence"
+    return 0
+  fi
+
+  ensure_steamos_nvidia_dirs "$base"
+  persist_project_files "$src" "$base"
+}
+
 # curl_retry ATTEMPTS [CURL_ARGS...]
 #   Run curl with retry on transient failures (network errors, HTTP 5xx).
 curl_retry() {
-  local attempts="${1:?curl_retry: missing attempt count}"; shift
+  local attempts="${1:?curl_retry: missing attempt count}"
+  shift
   local i
-  for (( i = 1; i <= attempts; i++ )); do
+  for ((i = 1; i <= attempts; i++)); do
     if curl "$@"; then
       return 0
     fi
-    (( i < attempts )) && { warn "curl attempt $i failed, retrying..."; sleep 2; }
+    ((i < attempts)) && {
+      warn "curl attempt $i failed, retrying..."
+      sleep 2
+    }
   done
   warn "curl failed after $attempts attempts"
   return 1
@@ -189,25 +322,25 @@ progress_emit() {
   local step="${1:?progress_emit: missing step name}"
   local weight=0
   case "$step" in
-    decompress)        weight=20 ;;
-    create_fs)         weight=5  ;;
-    write_fs)          weight=2  ;;
-    mount)             weight=1  ;;
-    resolve_driver)    weight=8  ;;
-    setup_chroot)      weight=5  ;;
-    install_headers)   weight=5  ;;
-    install_driver)    weight=25 ;;
-    build_hid)         weight=2  ;;
-    install_hw)        weight=15 ;;
-    copy_payload)      weight=3  ;;
-    configure_grub)    weight=3  ;;
-    patch_installer)   weight=1  ;;
-    finalize)          weight=2  ;;
+    decompress) weight=20 ;;
+    create_fs) weight=5 ;;
+    write_fs) weight=2 ;;
+    mount) weight=1 ;;
+    resolve_driver) weight=8 ;;
+    setup_chroot) weight=5 ;;
+    install_headers) weight=5 ;;
+    install_driver) weight=25 ;;
+    build_hid) weight=2 ;;
+    install_hw) weight=15 ;;
+    copy_payload) weight=3 ;;
+    configure_grub) weight=3 ;;
+    patch_installer) weight=1 ;;
+    finalize) weight=2 ;;
   esac
-  if (( weight > 0 )); then
-    _PROGRESS_SO_FAR=$(( _PROGRESS_SO_FAR + weight ))
-    (( _PROGRESS_SO_FAR > _PROGRESS_TOTAL )) && _PROGRESS_SO_FAR=$_PROGRESS_TOTAL
-    local pct=$(( _PROGRESS_SO_FAR * 100 / _PROGRESS_TOTAL ))
+  if ((weight > 0)); then
+    _PROGRESS_SO_FAR=$((_PROGRESS_SO_FAR + weight))
+    ((_PROGRESS_SO_FAR > _PROGRESS_TOTAL)) && _PROGRESS_SO_FAR=$_PROGRESS_TOTAL
+    local pct=$((_PROGRESS_SO_FAR * 100 / _PROGRESS_TOTAL))
     printf '%s\n' "@@PROGRESS:$pct@@"
   fi
 }
@@ -218,8 +351,8 @@ progress_emit() {
 loops_for_file() {
   local target="${1:?loops_for_file: missing backing file}"
 
-  losetup -J 2>/dev/null |
-    python3 -c '
+  losetup -J 2>/dev/null \
+    | python3 -c '
 import json, sys
 
 target = sys.argv[1]
@@ -239,23 +372,21 @@ for dev in data.get("loopdevices", []):
 ' "$target"
 }
 
-
 # Print mounts whose source is a loop device or one of its partitions.
 #
 # Be careful not to match /dev/loop1 against /dev/loop10.
 mounts_for_loop() {
   local loop="${1:?mounts_for_loop: missing loop device}"
 
-  findmnt -rn -o TARGET,SOURCE 2>/dev/null |
-    awk -v l="$loop" '
+  findmnt -rn -o TARGET,SOURCE 2>/dev/null \
+    | awk -v l="$loop" '
       $2 == l || index($2, l "p") == 1 {
         print length($1) "\t" $1
       }
-    ' |
-    sort -rn |
-    cut -f2-
+    ' \
+    | sort -rn \
+    | cut -f2-
 }
-
 
 # Unmount an exact mount hierarchy. Never lazy-unmount persistent storage.
 strict_unmount() {
@@ -284,7 +415,6 @@ strict_unmount() {
   return 0
 }
 
-
 # Wait until an ext4 superblock associated with a loop device is gone.
 #
 # If this remains after the mount disappeared, the filesystem still has a
@@ -297,7 +427,7 @@ wait_ext4_gone() {
 
   [[ -e "$sys" ]] || return 0
 
-  for ((i=0; i<50; i++)); do
+  for ((i = 0; i < 50; i++)); do
     [[ ! -e "$sys" ]] && return 0
     sleep 0.1
   done
@@ -307,8 +437,8 @@ wait_ext4_gone() {
   if [[ -r "$sys/journal_task" ]]; then
     local journal_pid
     journal_pid="$(cat "$sys/journal_task" 2>/dev/null || true)"
-    [[ -n "$journal_pid" ]] &&
-      warn "  ext4 journal task: $journal_pid"
+    [[ -n "$journal_pid" ]] \
+      && warn "  ext4 journal task: $journal_pid"
 
     # Deep diagnostics: interrogate the kernel about why the jbd2 thread
     # is still holding a reference to this ext4 superblock.
@@ -335,8 +465,7 @@ wait_ext4_gone() {
 
       # Open file descriptors — might reveal what the thread has open
       local _fd_count
-      # shellcheck disable=SC2012
-      _fd_count="$(ls "/proc/$journal_pid/fd" 2>/dev/null | wc -l)"
+      _fd_count="$(find "/proc/$journal_pid/fd" -maxdepth 1 -mindepth 1 2>/dev/null | wc -l)"
       warn "    open fds: $_fd_count"
     fi
   fi
@@ -360,8 +489,7 @@ wait_ext4_gone() {
   # Ext4 sysfs state
   if [[ -d "$sys" ]]; then
     local _ext4_state
-    # shellcheck disable=SC2012
-    _ext4_state="$(ls "$sys/" 2>/dev/null | head -20)"
+    _ext4_state="$(find "$sys" -maxdepth 1 -mindepth 1 -printf '%f\n' 2>/dev/null | head -20)"
     if [[ -n "$_ext4_state" ]]; then
       warn "  ext4 sysfs entries for $name:"
       printf '%s\n' "$_ext4_state" | while IFS= read -r entry; do warn "    $entry"; done
@@ -370,7 +498,6 @@ wait_ext4_gone() {
 
   return 1
 }
-
 
 # Detach a loop device and verify it really disappeared.
 strict_detach_loop() {
@@ -392,7 +519,7 @@ strict_detach_loop() {
   udevadm settle --timeout=5 2>/dev/null || true
 
   local i
-  for ((i=0; i<20; i++)); do
+  for ((i = 0; i < 20; i++)); do
     if ! losetup "$loop" >/dev/null 2>&1; then
       return 0
     fi
@@ -403,7 +530,6 @@ strict_detach_loop() {
   losetup -l -O NAME,AUTOCLEAR,RO,BACK-FILE "$loop" >&2 2>/dev/null || true
   return 1
 }
-
 
 # Tear down all visible mounts belonging to a loop and then detach it.
 strict_cleanup_loop() {
@@ -458,7 +584,7 @@ cleanup() {
     # ----------------------------------------------------------
     # Main image loop.
     # ----------------------------------------------------------
-    if (( rc == 0 )) && [[ -n "${LOOPDEV:-}" ]]; then
+    if ((rc == 0)) && [[ -n "${LOOPDEV:-}" ]]; then
       while IFS= read -r m; do
         [[ -n "$m" ]] || continue
 
@@ -467,7 +593,7 @@ cleanup() {
         fi
       done < <(mounts_for_loop "$LOOPDEV")
 
-      if (( rc == 0 )); then
+      if ((rc == 0)); then
         strict_detach_loop "$LOOPDEV" || rc=1
       fi
     fi
@@ -495,8 +621,8 @@ cleanup() {
     fi
   fi
 
-  if [[ -n "${LOOPDEV:-}" ]] &&
-     losetup "$LOOPDEV" >/dev/null 2>&1; then
+  if [[ -n "${LOOPDEV:-}" ]] \
+    && losetup "$LOOPDEV" >/dev/null 2>&1; then
     warn "cleanup: main image loop still attached: $LOOPDEV"
     losetup "$LOOPDEV" >&2 2>/dev/null || true
     rc=1
@@ -516,11 +642,13 @@ compute_payload() {
   # Use pacman -Q (name + version) instead of -Qq (name only) so that
   # version upgrades are detected — e.g. nvidia-utils 580→590 would otherwise
   # be invisible to comm since both lines contain the same package name.
-  pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" | LC_ALL=C sort > "$WORKDIR/pkgs-before.txt"
-  in_chroot "pacman -Q" | LC_ALL=C sort > "$WORKDIR/pkgs-after.txt"
+  pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" | LC_ALL=C sort >"$WORKDIR/pkgs-before.txt"
+  in_chroot "pacman -Q" | LC_ALL=C sort >"$WORKDIR/pkgs-after.txt"
 
   # New or upgraded packages minus build-only toolchain = what ships in the image.
-  compute_new_pkgs "$WORKDIR/pkgs-before.txt" "$WORKDIR/pkgs-after.txt"
+  # The optional extra-exclude file is populated by build modules (e.g. AoTofu)
+  # that record their own transitive build-only dependencies.
+  compute_new_pkgs "$WORKDIR/pkgs-before.txt" "$WORKDIR/pkgs-after.txt" "$WORKDIR/build-only-exclusions.txt"
   if [[ ${#NEW_PKGS[@]} -eq 0 ]]; then
     log "No runtime package changes — module-only payload"
   else
@@ -533,16 +661,19 @@ compute_payload() {
   if [[ $TRIM_CUDA -eq 1 ]]; then
     log "Trimming CUDA/OpenCL/NVVM/OptiX libraries"
     grep -Ev 'libcuda|libcudadebugger|libnvidia-nvvm|libnvidia-opencl|libnvoptix|nvidia-cuda-mps|OpenCL' \
-      "$FILELIST" > "$FILELIST.trim" && mv "$FILELIST.trim" "$FILELIST"
+      "$FILELIST" >"$FILELIST.trim" && mv "$FILELIST.trim" "$FILELIST"
   fi
-  sed 's|^/||' "$FILELIST" > "$FILELIST.rel"
+  sed 's|^/||' "$FILELIST" >"$FILELIST.rel"
 
   # Space check: pacman -Qlq lists directories too — size only files/symlinks.
   # If no runtime packages changed, PAYLOAD_MB is 0 (module-only update).
   if [[ -s "$FILELIST" ]]; then
-    PAYLOAD_MB="$(set +o pipefail; cd "$MERGED" && while IFS= read -r p; do
+    PAYLOAD_MB="$(
+      set +o pipefail
+      cd "$MERGED" && while IFS= read -r p; do
         if [[ -f "$p" || -L "$p" ]]; then printf '%s\0' "$p"; fi
-      done < "$FILELIST.rel" | { du -scm --no-dereference --files0-from=- 2>/dev/null || true; } | tail -1 | cut -f1)"
+      done <"$FILELIST.rel" | { du -scm --no-dereference --files0-from=- 2>/dev/null || true; } | tail -1 | cut -f1
+    )"
     [[ "$PAYLOAD_MB" =~ ^[0-9]+$ ]] || die "Could not size the payload"
   else
     PAYLOAD_MB=0
@@ -550,7 +681,7 @@ compute_payload() {
   MODULES_MB="$(du -sm "$UPPER/usr/lib/modules/$KVER/updates" | cut -f1)"
   AVAIL_MB="$(df -m --output=avail "$MNT" | tail -1 | tr -d ' ')"
   log "Payload ≈ ${PAYLOAD_MB} MB files + ${MODULES_MB} MB modules (before btrfs zstd); rootfs has ${AVAIL_MB} MB free"
-  if (( PAYLOAD_MB + MODULES_MB > AVAIL_MB * 2 )); then   # zstd roughly halves it
+  if ((PAYLOAD_MB + MODULES_MB > AVAIL_MB * 2)); then # zstd roughly halves it
     die "Not enough space in rootfs. Rerun with --trim-cuda."
   fi
 }

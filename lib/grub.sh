@@ -26,7 +26,7 @@ fi
 add_kernel_param() {
   local param="${1:?add_kernel_param: missing parameter}"
   case " $EXTRA_CMDLINE_ADD " in
-    *" $param "*) ;;  # already present
+    *" $param "*) ;; # already present
     *) EXTRA_CMDLINE_ADD="${EXTRA_CMDLINE_ADD:+$EXTRA_CMDLINE_ADD }$param" ;;
   esac
 }
@@ -36,7 +36,7 @@ add_kernel_param() {
 _build_all_params() {
   local all_params="$NVIDIA_CMDLINE_ADD"
   [[ -n "${EXTRA_CMDLINE_ADD:-}" ]] && all_params+=" $EXTRA_CMDLINE_ADD"
-  [[ "${DEBUG_BOOT:-0}" -eq 1 ]]   && all_params+=" $DEBUG_CMDLINE_ADD"
+  [[ "${DEBUG_BOOT:-0}" -eq 1 ]] && all_params+=" $DEBUG_CMDLINE_ADD"
   echo "$all_params"
 }
 
@@ -62,7 +62,7 @@ _param_on_kernel_line() {
     found_any=1
     _has_token "$line" "$param" || return 1
   done < <(grep 'steamenv_boot.*linux.*/boot/vmlinuz' "$grub_cfg" 2>/dev/null)
-  [[ $found_any -eq 1 ]] || return 1  # no kernel lines at all = fail
+  [[ $found_any -eq 1 ]] || return 1 # no kernel lines at all = fail
   return 0
 }
 
@@ -116,12 +116,12 @@ _read_grub_steamos_value() {
       else
         # Last line — strip trailing quote and whitespace
         line="${line%\"*}"
-        line="${line%"${line##*[![:space:]]}"}"  # trim trailing whitespace
+        line="${line%"${line##*[![:space:]]}"}" # trim trailing whitespace
         full_value+="$line"
         break
       fi
     fi
-  done < "$file"
+  done <"$file"
   echo "$full_value"
 }
 
@@ -140,7 +140,8 @@ _param_in_grub_steamos() {
 # closing quote.
 # Args: $1 = file path, $2... = parameters to add
 _add_params_to_grub_steamos() {
-  local file="$1"; shift
+  local file="$1"
+  shift
   local params_to_add=("$@")
 
   local current_value
@@ -204,7 +205,7 @@ _add_params_to_grub_steamos() {
       next
     }
     { print }
-  ' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  ' "$file" >"$file.tmp" && mv "$file.tmp" "$file"
 }
 
 # ── Phase 1: persistent defaults ─────────────────────────────────────────────
@@ -261,7 +262,7 @@ _ensure_grub_steamos_keep_list() {
   if [[ -d "$keep_dir" ]]; then
     if ! grep -q '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
       mkdir -p "$keep_dir"
-      echo "/etc/default/grub-steamos" >> "$keep_file"
+      echo "/etc/default/grub-steamos" >>"$keep_file"
       log "  Added grub-steamos to atomic-update keep-list"
     fi
   else
@@ -329,7 +330,7 @@ patch_kernel_cmdline() {
           next
         }
         { print }
-      ' "$grub_cfg" > "$grub_cfg.tmp" && mv "$grub_cfg.tmp" "$grub_cfg"
+      ' "$grub_cfg" >"$grub_cfg.tmp" && mv "$grub_cfg.tmp" "$grub_cfg"
     fi
   done
 }
@@ -408,7 +409,6 @@ finalize_grub() {
 
   log "Kernel command line verified: $all_params"
 }
-
 
 # Reconcile GRUB for a mounted target rootfs/EFI device.
 #

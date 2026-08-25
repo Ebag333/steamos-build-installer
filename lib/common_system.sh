@@ -16,8 +16,10 @@ mount_chroot_fs() {
   log "Mounting chroot filesystems in $root"
   mkdir -p "$root/proc" "$root/sys" "$root/dev"
   mount -t proc proc "$root/proc"
-  mount --rbind /sys "$root/sys"; mount --make-rslave "$root/sys"
-  mount --rbind /dev "$root/dev"; mount --make-rslave "$root/dev"
+  mount --rbind /sys "$root/sys"
+  mount --make-rslave "$root/sys"
+  mount --rbind /dev "$root/dev"
+  mount --make-rslave "$root/dev"
   log "  chroot mounts ready: proc sys dev"
 }
 
@@ -67,11 +69,28 @@ run_depmod_ldconfig() {
 }
 
 # Enable nvidia power management services in a chroot.
+# Creates enable symlinks directly rather than relying on systemctl inside a
+# chroot (no running systemd daemon means systemctl enable is unreliable).
 # Args: $1 = root path
 enable_nvidia_power_services() {
   local root="${1:?enable_nvidia_power_services: missing root}"
-  chroot "$root" systemctl enable nvidia-suspend nvidia-resume nvidia-hibernate 2>/dev/null \
-    || warn "Could not enable nvidia power services (non-fatal)"
+  local wants_dir="$root/etc/systemd/system/multi-user.target.wants"
+  local svc enabled=0
+
+  for svc in nvidia-suspend nvidia-resume nvidia-hibernate; do
+    if [[ -f "$root/usr/lib/systemd/system/${svc}.service" ]]; then
+      mkdir -p "$wants_dir"
+      ln -sf "/usr/lib/systemd/system/${svc}.service" \
+        "$wants_dir/${svc}.service"
+      ((enabled++)) || true
+    fi
+  done
+
+  if ((enabled == 0)); then
+    warn "No nvidia power services found in image — nothing to enable"
+  else
+    log "Enabled $enabled nvidia power service(s)"
+  fi
 }
 
 # Backup steamos-update and install the self-heal wrapper.
@@ -113,7 +132,8 @@ rsync_verified() {
   shift 3
 
   rsync -aHAX --numeric-ids "$src" "$dst" || {
-    local m; for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
+    local m
+    for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
     die "Failed to $label"
   }
 
@@ -121,14 +141,16 @@ rsync_verified() {
   _diff="$(
     rsync -aHAXcn --numeric-ids --delete --itemize-changes "$src" "$dst"
   )" || {
-    local m; for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
+    local m
+    for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
     die "Failed to verify $label"
   }
 
   if [[ -n "$_diff" ]]; then
     warn "$label verification — content differs:"
     printf '%s\n' "$_diff" >&2
-    local m; for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
+    local m
+    for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
     die "$label verification failed"
   fi
 }

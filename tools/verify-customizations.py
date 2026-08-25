@@ -174,6 +174,13 @@ def run_cmd(cmd: list[str], label: str = "") -> tuple[int, str]:
         return -1, str(e)
 
 
+def run_in_mnt(cmd: list[str], label: str = "") -> tuple[int, str]:
+    """Run a command inside MNT.  Skips chroot when MNT is the live system."""
+    if MNT == "/":
+        return run_cmd(cmd, label)
+    return run_cmd(["chroot", MNT] + cmd, label)
+
+
 def owned_by(path: str, uid: int = 1000, gid: int = 1000, label: str = "") -> bool:
     label = label or f"{path} owned by {uid}:{gid}"
     try:
@@ -297,7 +304,8 @@ def has_hid_modules() -> bool:
 def has_hid_source_bundle() -> bool:
     if CHECK_ALL:
         return True
-    return os.path.isdir(os.path.join(HOMEMNT, ".driver-packages/hid"))
+    return (os.path.isdir(os.path.join(MNT, "usr/lib/steamos-nvidia/hid")) or
+            os.path.isdir(os.path.join(HOMEMNT, ".driver-packages/hid")))
 
 
 def has_cuda_trimmed() -> bool:
@@ -314,7 +322,7 @@ def has_cuda_trimmed() -> bool:
 def has_gamemode() -> bool:
     if CHECK_ALL:
         return True
-    rc, out = run_cmd(["chroot", MNT, "id", "deck"])
+    rc, out = run_in_mnt(["id", "deck"])
     return rc == 0 and "gamemode" in out
 
 
@@ -369,15 +377,15 @@ def check_nvidia_kernel_modules():
     else:
         fail("nvidia.ko exists", f"no match for {nvidia_ko}")
 
-    rc, out = run_cmd(["chroot", MNT, "modinfo", "-k", KVER, "-n", "nvidia"])
+    rc, out = run_in_mnt(["modinfo", "-k", KVER, "-n", "nvidia"])
     if rc == 0 and "/updates/" in out:
         ok("modinfo nvidia resolves to /updates/")
     elif rc == 0:
         fail("modinfo nvidia resolves to /updates/", f"resolves to: {out}")
     else:
-        skip("modinfo nvidia resolution", "chroot modinfo failed")
+        skip("modinfo nvidia resolution", "modinfo failed")
 
-    rc, out = run_cmd(["chroot", MNT, "modinfo", "-k", KVER, "-F", "vermagic", "nvidia"])
+    rc, out = run_in_mnt(["modinfo", "-k", KVER, "-F", "vermagic", "nvidia"])
     if rc == 0 and out.startswith(KVER + " "):
         ok(f"nvidia vermagic matches {KVER}")
     elif rc == 0:
@@ -505,15 +513,19 @@ def check_grub_steamos():
 def check_nvidia_power_services():
     section("NVIDIA power management services")
     for svc in ("nvidia-suspend", "nvidia-resume", "nvidia-hibernate"):
+        svc_file = os.path.join(MNT, f"usr/lib/systemd/system/{svc}.service")
+        if not os.path.isfile(svc_file):
+            skip(f"{svc}.service", "service file not installed")
+            continue
         enabled_path = os.path.join(MNT, f"etc/systemd/system/multi-user.target.wants/{svc}.service")
         if os.path.islink(enabled_path):
             ok(f"{svc}.service enabled")
         else:
-            rc, out = run_cmd(["chroot", MNT, "systemctl", "is-enabled", svc])
+            rc, out = run_in_mnt(["systemctl", "is-enabled", svc])
             if rc == 0 and "enabled" in out:
                 ok(f"{svc}.service enabled")
             else:
-                skip(f"{svc}.service", "could not determine enabled state")
+                fail(f"{svc}.service enabled", "not enabled")
 
 
 def check_depmod_ldconfig():
@@ -724,14 +736,19 @@ def check_hid_modules():
         else:
             fail(f"{mod}.ko exists", f"no match for {path}")
 
-    rc, out = run_cmd(["chroot", MNT, "modinfo", "-F", "alias",
-                        f"/usr/lib/modules/{KVER}/updates/logitech/hid-logitech-dj.ko"])
-    if rc == 0 and "v0000046Dp0000C547" in out.upper():
-        ok("hid-logitech-dj has 046d:c547 alias")
-    elif rc == 0:
-        fail("hid-logitech-dj has 046d:c547 alias", f"aliases: {out}")
+    dj_matches = glob.glob(os.path.join(
+        MNT, f"usr/lib/modules/{KVER}/updates/logitech/hid-logitech-dj.ko*"))
+    if dj_matches:
+        dj_path = dj_matches[0].replace(MNT, "", 1)
+        rc, out = run_in_mnt(["modinfo", "-F", "alias", dj_path])
+        if rc == 0 and "v0000046Dp0000C547" in out.upper():
+            ok("hid-logitech-dj has 046d:c547 alias")
+        elif rc == 0:
+            fail("hid-logitech-dj has 046d:c547 alias", f"aliases: {out}")
+        else:
+            skip("hid-logitech-dj alias check", "modinfo failed")
     else:
-        skip("hid-logitech-dj alias check", "modinfo failed")
+        skip("hid-logitech-dj alias check", "module file not found")
 
 
 def check_hardware_packages():
@@ -1004,7 +1021,10 @@ def check_hid_selfheal_bundle():
         skip("HID source bundle", f"not in selfheal mode (detected: {UPDATE_MODE})")
         return
 
-    hid_dir = os.path.join(HOMEMNT, ".driver-packages/hid")
+    # Check canonical location first, fall back to legacy.
+    hid_dir = os.path.join(MNT, "usr/lib/steamos-nvidia/hid")
+    if not os.path.isdir(hid_dir):
+        hid_dir = os.path.join(HOMEMNT, ".driver-packages/hid")
     dir_exists(hid_dir, "HID source bundle dir")
     for f in ("hid-logitech-dj.c", "hid-logitech-hidpp.c", "hid-ids.h",
               "usbhid/usbhid.h", "Makefile"):
@@ -1079,7 +1099,9 @@ def main():
     CHECK_ALL = getattr(args, 'all')
 
     if ONLINE:
-        MNT = HOMEMNT = EFIMNT = "/"
+        MNT = "/"
+        HOMEMNT = "/home"
+        EFIMNT = "/"
 
     resolve_paths()
 

@@ -26,25 +26,19 @@ IMG=""
 TARGET_DEV=""
 CONFIG_FILE=""
 
-UPDATE_MODE="selfheal"       # selfheal | hold | stock
+UPDATE_MODE="selfheal" # selfheal | hold | stock
 ADD_INSTALLER=1
-TRIM_CUDA=0
-SKIP_SIG=0
 BUILD_HW_SUPPORT=0
-HW_SUPPORT_ITEMS=""          # space-separated items: linux-firmware libfprint fprintd bolt dkms
-THUNDERBOLT=0
-DEFAULT_SESSION=""           # "" | desktop | game
-FIX_KEYRING=0
-INITRAMFS_MODULES=""         # space-separated module list; empty = stock
-GAMING_ITEMS=""              # space-separated: trim-cuda gamemode pci-realloc tb-host-reset resize-bar fix-keyring skip-sigcheck debug-boot thunderbolt logitech-hid unset-libva-driver scx-lavd vm-tunables cpu-performance gpu-power-limit
-DEBUG_BOOT=0                 # 1 = add rd.debug rd.log=all to kernel cmdline
-INSTALL_PIPX=0               # 1 = install pipx packages from pipx-packages.conf
-PIPX_ITEMS=""                # space-separated pipx package names to install
-TARGET_VARIANT="steamdeck"    # steamdeck | steamdeck-oobe
-UPDATE_BRANCH="stable"        # stable | beta | preview | rc | bc | pc | main
+HW_SUPPORT_ITEMS=""        # space-separated items: linux-firmware libfprint fprintd bolt dkms
+DEFAULT_SESSION="game"     # desktop | game
+INITRAMFS_MODULES=""       # space-separated module list; empty = stock
+GAMING_ITEMS=""            # space-separated: (all items now handled by optimization system)
+TARGET_VARIANT="steamdeck" # steamdeck | steamdeck-oobe
+UPDATE_BRANCH="stable"     # stable | beta | preview | rc | bc | pc | main
 ROOTFS_SIZE=""
+OUTPUT_DIR="" # empty = same directory as source image
 WORKDIR=""
-WORKDIR_LOCATION="auto"      # auto | ram | disk
+WORKDIR_LOCATION="auto" # auto | ram | disk
 _WORKDIR_EXPLICIT=""
 
 FLASH_CONFIRMED=0
@@ -65,33 +59,17 @@ Usage:
   backend.sh --action <build|flash|flashless|list-images|list-devices|is-system-disk|configure|reboot> [options]
 
 Common:
-  --action ACTION
-  --image FILE
-  --config FILE
+  --action ACTION           Required: build, flash, flashless, list-images, list-devices, is-system-disk, configure, reboot
+  --image FILE              Source image path (for build)
+  --config FILE             Build configuration file (see build.conf)
 
 Build:
-  --workingdir DIR          Canonical name for build workspace
-  --workdir DIR             Compatibility alias for --workingdir
-  --workdir-location MODE   auto | ram | disk
-  --rootfs-size SIZE
-  --session MODE            desktop | game
-  --hold-updates
-  --no-hold-updates
-  --no-installer
-  --trim-cuda
-  --thunderbolt
-  --hw-support
-  --hw-support-items ITEMS  Space-separated: linux-firmware libfprint fprintd bolt dkms
-  --initramfs MODULES   Space-separated module list for initramfs (empty = stock)
-  --gaming-items ITEMS  Space-separated: trim-cuda gamemode pci-realloc tb-host-reset resize-bar fix-keyring skip-sigcheck debug-boot
-  --debug-boot          Add rd.debug rd.log=all to kernel cmdline for boot debugging
-  --skip-sigcheck
-  --fix-keyring
-  --oobe-variant VARIANT  steamdeck | steamdeck-oobe
-  --branch BRANCH         stable | beta | preview | rc | bc | pc | main
+  All build settings are configured via --config file.
+  See build.conf for available options.
+  --output-dir DIR          Directory for finished image (default: same as source)
 
 Flash:
-  --device /dev/sdX
+  --device /dev/sdX         Target device for flash action
   --confirm                 Required for destructive CLI/backend flash
   --allow-system-disk       Override system-disk protection
 
@@ -104,68 +82,91 @@ EOF
 # ---------------------------------------------------------------------------
 # shellcheck disable=SC2034
 args=("$@")
-for ((i=0; i<${#args[@]}; i++)); do
+for ((i = 0; i < ${#args[@]}; i++)); do
   if [[ "${args[$i]}" == "--config" ]]; then
-    (( i + 1 < ${#args[@]} )) || { echo "--config requires a value" >&2; exit 2; }
-    CONFIG_FILE="${args[$((i+1))]}"
+    ((i + 1 < ${#args[@]})) || {
+      echo "--config requires a value" >&2
+      exit 2
+    }
+    CONFIG_FILE="${args[$((i + 1))]}"
     break
   fi
 done
 
 if [[ -n "$CONFIG_FILE" ]]; then
-  [[ -f "$CONFIG_FILE" ]] || { echo "Config file not found: $CONFIG_FILE" >&2; exit 2; }
-  # shellcheck disable=SC1090
+  [[ -f "$CONFIG_FILE" ]] || {
+    echo "Config file not found: $CONFIG_FILE" >&2
+    exit 2
+  }
+  # shellcheck source=build.conf
   source "$CONFIG_FILE"
 fi
 
 # shellcheck disable=SC2034
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --action)            ACTION="${2:?--action requires a value}"; shift 2 ;;
-    --image)             IMG="${2:?--image requires a value}"; shift 2 ;;
-    --device)            TARGET_DEV="${2:?--device requires a value}"; shift 2 ;;
-    --config)            CONFIG_FILE="${2:?--config requires a value}"; shift 2 ;;
+    --action)
+      ACTION="${2:?--action requires a value}"
+      shift 2
+      ;;
+    --image)
+      IMG="${2:?--image requires a value}"
+      shift 2
+      ;;
+    --device)
+      TARGET_DEV="${2:?--device requires a value}"
+      shift 2
+      ;;
+    --config)
+      CONFIG_FILE="${2:?--config requires a value}"
+      shift 2
+      ;;
+    --output-dir)
+      OUTPUT_DIR="${2:?--output-dir requires a value}"
+      shift 2
+      ;;
 
-    --workingdir|--workdir)
-                         WORKDIR="${2:?$1 requires a value}"; _WORKDIR_EXPLICIT=1; shift 2 ;;
-    --workdir-location)  WORKDIR_LOCATION="${2:?--workdir-location requires a value}"; shift 2 ;;
-    --rootfs-size)       ROOTFS_SIZE="${2:?--rootfs-size requires a value}"; shift 2 ;;
-    --session)           DEFAULT_SESSION="${2:?--session requires a value}"; shift 2 ;;
-    --hold-updates)      UPDATE_MODE="hold"; shift ;;
-    --no-hold-updates)   UPDATE_MODE="stock"; shift ;;
-    --no-installer)      ADD_INSTALLER=0; shift ;;
-    --trim-cuda)         TRIM_CUDA=1; shift ;;
-    --thunderbolt)       THUNDERBOLT=1; shift ;;
-    --hw-support)        BUILD_HW_SUPPORT=1; shift ;;
-    --hw-support-items)  HW_SUPPORT_ITEMS="${2:?--hw-support-items requires a list}"; BUILD_HW_SUPPORT=1; shift 2 ;;
-    --initramfs)         INITRAMFS_MODULES="${2:?--initramfs requires a module list}"; shift 2 ;;
-    --gaming-items)      GAMING_ITEMS="${2:?--gaming-items requires a list}"; shift 2 ;;
-    --debug-boot)        DEBUG_BOOT=1; shift ;;
-    --skip-sigcheck)     SKIP_SIG=1; shift ;;
-    --fix-keyring)       FIX_KEYRING=1; shift ;;
-    --oobe-variant)      TARGET_VARIANT="${2:?--oobe-variant requires a value}"; shift 2 ;;
-    --branch)            UPDATE_BRANCH="${2:?--branch requires a value}"; shift 2 ;;
-    --pipx-packages)     INSTALL_PIPX=1; shift ;;
-    --pipx-items)        PIPX_ITEMS="${2:?--pipx-items requires a list}"; INSTALL_PIPX=1; shift 2 ;;
+    --confirm)
+      FLASH_CONFIRMED=1
+      shift
+      ;;
+    --allow-system-disk)
+      ALLOW_SYSTEM_DISK=1
+      shift
+      ;;
 
-    --confirm)           FLASH_CONFIRMED=1; shift ;;
-    --allow-system-disk) ALLOW_SYSTEM_DISK=1; shift ;;
-
-    -h|--help) backend_usage; exit 0 ;;
-    --) shift; [[ $# -eq 0 ]] || { echo "Positional parameters are not supported." >&2; exit 2; } ;;
-    *) echo "Unknown argument: $1" >&2; backend_usage >&2; exit 2 ;;
+    -h | --help)
+      backend_usage
+      exit 0
+      ;;
+    --)
+      shift
+      [[ $# -eq 0 ]] || {
+        echo "Positional parameters are not supported." >&2
+        exit 2
+      }
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      backend_usage >&2
+      exit 2
+      ;;
   esac
 done
 
-[[ -n "$ACTION" ]] || { echo "--action is required" >&2; backend_usage >&2; exit 2; }
+[[ -n "$ACTION" ]] || {
+  echo "--action is required" >&2
+  backend_usage >&2
+  exit 2
+}
 
 # ---------------------------------------------------------------------------
 # Shared flash backend.
 # ---------------------------------------------------------------------------
 load_flash_libs() {
-  # shellcheck disable=SC1091
+  # shellcheck source=lib/common.sh
   source "$BACKEND_DIR/common.sh"
-  # shellcheck disable=SC1091
+  # shellcheck source=lib/flash.sh
   source "$BACKEND_DIR/flash.sh"
 }
 
@@ -183,6 +184,7 @@ flash_discover_images() {
     "/dev/shm/nvidia-build"
     "$HOME/Downloads"
   )
+  [[ -n "${OUTPUT_DIR:-}" ]] && search_dirs+=("$OUTPUT_DIR")
   local d f
   local -a found=()
 
@@ -217,7 +219,10 @@ flash_discover_images() {
 
 flash_validate_image() {
   local image="$1"
-  [[ -f "$image" ]] || { echo "Image not found: $image" >&2; return 1; }
+  [[ -f "$image" ]] || {
+    echo "Image not found: $image" >&2
+    return 1
+  }
 
   if [[ "$(basename "$image")" == *nvidia*usbinstall*.img ]] && ! flash_image_is_complete "$image"; then
     echo "Refusing NVIDIA installer image without .build-complete marker: $image" >&2
@@ -226,17 +231,29 @@ flash_validate_image() {
 }
 
 backend_flash() {
-  [[ $EUID -eq 0 ]] || { echo "Flash action requires root." >&2; exit 1; }
+  [[ $EUID -eq 0 ]] || {
+    echo "Flash action requires root." >&2
+    exit 1
+  }
   [[ "$FLASH_CONFIRMED" -eq 1 ]] || {
     echo "Flash is destructive. Re-run with --confirm after the user has confirmed the target." >&2
     exit 2
   }
-  [[ -n "$IMG" ]] || { echo "--image is required for flash" >&2; exit 2; }
-  [[ -n "$TARGET_DEV" ]] || { echo "--device is required for flash" >&2; exit 2; }
+  [[ -n "$IMG" ]] || {
+    echo "--image is required for flash" >&2
+    exit 2
+  }
+  [[ -n "$TARGET_DEV" ]] || {
+    echo "--device is required for flash" >&2
+    exit 2
+  }
 
   IMG="$(readlink -f "$IMG")"
   flash_validate_image "$IMG"
-  [[ -b "$TARGET_DEV" ]] || { echo "Not a block device: $TARGET_DEV" >&2; exit 1; }
+  [[ -b "$TARGET_DEV" ]] || {
+    echo "Not a block device: $TARGET_DEV" >&2
+    exit 1
+  }
 
   if [[ "$ALLOW_SYSTEM_DISK" -ne 1 ]] && flash_is_system_disk "$TARGET_DEV"; then
     echo "Refusing to flash the current system disk: $TARGET_DEV" >&2
@@ -252,13 +269,20 @@ backend_flash() {
 # orchestration moved out of the frontend.
 # ---------------------------------------------------------------------------
 load_build_libs() {
-  local m
-  for m in common common_system common_modules common_drivers overlay rootfs-etc setup \
-         grub install-hw-libs \
-         update-strategy installer finalize flashless; do
-    # shellcheck disable=SC1090
-    source "$BACKEND_DIR/$m.sh"
-  done
+  # Source library loader and pipeline
+  # shellcheck source=lib/library-loader.sh
+  source "$BACKEND_DIR/library-loader.sh"
+  # shellcheck source=lib/pipeline.sh
+  source "$BACKEND_DIR/pipeline.sh"
+  # shellcheck source=lib/workflow-common.sh
+  source "$BACKEND_DIR/workflow-common.sh"
+
+  # Source pipeline definition
+  # shellcheck source=lib/pipelines/pipeline_build.sh
+  source "$BACKEND_DIR/pipelines/pipeline_build.sh"
+
+  # Load all build workflow libraries
+  load_workflow_libs "build" "$BACKEND_DIR"
 }
 
 check_build_deps() {
@@ -277,11 +301,11 @@ check_build_deps() {
     local pkgs=()
     for cmd in "${missing[@]}"; do
       case "$cmd" in
-        btrfs)     pkgs+=(btrfs-progs) ;;
-        readelf)   pkgs+=(binutils) ;;
-        depmod)    pkgs+=(kmod) ;;
-        sgdisk)    pkgs+=(gptfdisk) ;;
-        *)         pkgs+=("$cmd") ;;
+        btrfs) pkgs+=(btrfs-progs) ;;
+        readelf) pkgs+=(binutils) ;;
+        depmod) pkgs+=(kmod) ;;
+        sgdisk) pkgs+=(gptfdisk) ;;
+        *) pkgs+=("$cmd") ;;
       esac
     done
     mapfile -t pkgs < <(printf "%s\n" "${pkgs[@]}" | sort -u)
@@ -295,27 +319,27 @@ normalize_build_options() {
     || die "--rootfs-size takes a size like 10G, 10240M, or 10240 (plain = MiB)"
 
   case "$DEFAULT_SESSION" in
-    ""|desktop|game) ;;
+    "" | desktop | game) ;;
     *) die "--session must be desktop or game" ;;
   esac
 
   case "$WORKDIR_LOCATION" in
-    auto|ram|disk) ;;
+    auto | ram | disk) ;;
     *) die "--workdir-location must be auto, ram, or disk" ;;
   esac
 
   case "$UPDATE_MODE" in
-    selfheal|hold|stock) ;;
+    selfheal | hold | stock) ;;
     *) die "Invalid update mode: $UPDATE_MODE" ;;
   esac
 
   if [[ -n "$ROOTFS_SIZE" ]]; then
     case "${ROOTFS_SIZE: -1}" in
-      G|g) ROOTFS_SIZE=$(( ${ROOTFS_SIZE%[Gg]} * 1024 )) ;;
-      M|m) ROOTFS_SIZE="${ROOTFS_SIZE%[Mm]}" ;;
-      K|k) ROOTFS_SIZE=$(( ${ROOTFS_SIZE%[Kk]} / 1024 )) ;;
+      G | g) ROOTFS_SIZE=$((${ROOTFS_SIZE%[Gg]} * 1024)) ;;
+      M | m) ROOTFS_SIZE="${ROOTFS_SIZE%[Mm]}" ;;
+      K | k) ROOTFS_SIZE=$((${ROOTFS_SIZE%[Kk]} / 1024)) ;;
     esac
-    (( ROOTFS_SIZE > 0 )) || die "--rootfs-size must be positive"
+    ((ROOTFS_SIZE > 0)) || die "--rootfs-size must be positive"
   fi
 }
 
@@ -335,7 +359,10 @@ resolve_build_image() {
 
   case ${#candidates[@]} in
     0) die "No source image specified with --image and none was found beside the script." ;;
-    1) IMG="$(realpath "${candidates[0]}")"; log "Auto-detected image: $IMG" ;;
+    1)
+      IMG="$(realpath "${candidates[0]}")"
+      log "Auto-detected image: $IMG"
+      ;;
     *) die "Multiple source images found; pass one explicitly with --image." ;;
   esac
 }
@@ -356,14 +383,23 @@ backend_build() {
   IMG_BASE="${IMG_BASE%.xz}"
   IMG_BASE="${IMG_BASE%.zst}"
 
-  OUT_FINAL="${IMG_BASE%.img}-nvidia-usbinstall.img"
+  local out_basename="${IMG_BASE%.img}-nvidia-usbinstall.img"
+  out_basename="$(basename "$out_basename")"
+
+  # Output directory: explicit OUTPUT_DIR, or same directory as source image.
+  if [[ -n "${OUTPUT_DIR:-}" ]]; then
+    mkdir -p "$OUTPUT_DIR"
+    OUT_FINAL="$OUTPUT_DIR/$out_basename"
+  else
+    OUT_FINAL="$(dirname "$IMG_BASE")/$out_basename"
+  fi
   OUT="${OUT_FINAL}.building"
 
   [[ -n "$WORKDIR" ]] || WORKDIR="$(dirname "$OUT")/.nvidia-usb-work"
 
   # shellcheck disable=SC2034
   LOOPDEV=""
-  # shellcheck disable=SC2154
+  local _trap_rc
   trap '_trap_rc=$?; trap - EXIT; set +e; cleanup; exit "$_trap_rc"' EXIT
 
   : "${UPSTREAM_DRIVER_REF:=master}"
@@ -376,226 +412,11 @@ backend_build() {
 
   log "Starting steamos-nvidia build (hw=$BUILD_HW_SUPPORT rootfs=${ROOTFS_SIZE:-5120}M)"
 
-  # Normalize gaming-items members that also have standalone switches.
-  # This makes --gaming-items "pci-realloc debug-boot" equivalent to
-  # passing both --gaming-items "pci-realloc" and --debug-boot.
-  # shellcheck disable=SC2034
-  [[ " $GAMING_ITEMS " == *" trim-cuda "* ]]     && TRIM_CUDA=1
-  # shellcheck disable=SC2034
-  [[ " $GAMING_ITEMS " == *" debug-boot "* ]]    && DEBUG_BOOT=1
-  # shellcheck disable=SC2034
-  [[ " $GAMING_ITEMS " == *" skip-sigcheck "* ]] && SKIP_SIG=1
-  # shellcheck disable=SC2034
-  [[ " $GAMING_ITEMS " == *" fix-keyring "* ]]   && FIX_KEYRING=1
-  [[ " $GAMING_ITEMS " == *" thunderbolt "* ]]   && THUNDERBOLT=1
-
-  # Preserve the current builder behavior while the output/publication cleanup
-  # is handled as a separate refactor.
-  ORIG_OUT_FINAL="$OUT_FINAL"
-
-  setup_resolve_workdir
-
-  if [[ "$OUT_FINAL" != "$ORIG_OUT_FINAL" ]]; then
-    local stale
-    for stale in "$ORIG_OUT_FINAL" "${ORIG_OUT_FINAL}.building" \
-                 "${ORIG_OUT_FINAL}.src-fingerprint" "${ORIG_OUT_FINAL}.build-complete"; do
-      if [[ -e "$stale" ]]; then
-        log "Removing stale build artifact from previous mode: $(basename "$stale")"
-        rm -f "$stale"
-      fi
-    done
+  # Register and run the build pipeline
+  register_build_pipeline
+  if ! run_pipeline; then
+    die "Build pipeline failed"
   fi
-
-  MNT="$WORKDIR/mnt"
-  # shellcheck disable=SC2034
-  EFIMNT="$WORKDIR/efi"
-  HOMEMNT="$WORKDIR/home"
-  # shellcheck disable=SC2034
-  UPPER="$WORKDIR/upper"
-  # shellcheck disable=SC2034
-  OVLWORK="$WORKDIR/ovlwork"
-  # shellcheck disable=SC2034
-  MERGED="$WORKDIR/merged"
-  # shellcheck disable=SC2034
-  OVL_IMG="$WORKDIR/overlay-work.img"
-  # shellcheck disable=SC2034
-  OVL_MNT="$WORKDIR/overlay-mnt"
-  # shellcheck disable=SC2034
-  OVL_LOOPDEV=""
-
-  setup_clear_stale_state
-  setup_dirs
-
-  setup_copy_image
-  progress_emit decompress
-  setup_loop_mount
-
-  echo '=== SHARED HOME ==='
-  ls -l /dev/disk/by-partsets/shared/home || true
-  readlink -f /dev/disk/by-partsets/shared/home || true
-
-  echo
-  echo '=== LOOP HOME PROPERTIES ==='
-  udevadm info -q property -n "$HOMEPART" |
-    grep -E 'ID_PART_ENTRY_(UUID|NAME)|UDISKS_IGNORE' || true
-
-  echo
-  echo '=== LINKS OWNED BY LOOP HOME ==='
-  udevadm info -q symlink -n "$HOMEPART" || true
-
-  # Preparation
-  prepare_writable_rootfs
-  progress_emit create_fs
-
-  setup_mount_partitions
-  setup_discover
-  progress_emit mount
-
-  # Overlay
-  setup_overlay_chroot
-  progress_emit setup_chroot
-
-  # Kernel build environment
-  install_kernel_headers
-
-  # Sources needed for custom modules
-  fetch_hid_sources
-  progress_emit resolve_driver
-
-  # Packages + NVIDIA
-  # Temporary symlink so install-hw-libs.sh finds configs at the canonical
-  # /usr/lib/steamos-nvidia/configs/ path during the build (the real files
-  # don't land there until install_payload).  Removed below.
-  mkdir -p "$MNT/usr/lib/steamos-nvidia"
-  ln -sfn "$SCRIPT_DIR/lib/configs" "$MNT/usr/lib/steamos-nvidia/configs"
-  install_hw_libs
-  progress_emit install_hw
-
-  # Custom modules
-  build_hid
-  progress_emit build_hid
-
-  # Hardware configuration
-  install_thunderbolt_support
-
-  # Update channel (variant + branch) and OOBE suppression
-  configure_update_channel
-
-  # Pipx packages (linuxgamebench, etc.)
-  install_pipx_packages
-
-  # Build payload
-  compute_payload
-
-  # Remove the temp symlink before install_payload — its mkdir -p and cp
-  # must create a real directory at the canonical path, not follow the link.
-  rm -f "$MNT/usr/lib/steamos-nvidia/configs"
-
-  # Install payload
-  install_payload
-  progress_emit copy_payload
-
-  # ── Final parameter accumulation checkpoint ──────────────────────────────
-  # All add_kernel_param() calls must happen BEFORE this point.
-  # Anything added after apply_update_strategy() creates split-brain:
-  # the initial image boots with it, but driver.conf won't contain it,
-  # so the next self-heal loses it.
-
-  # Phase 1: write accumulated params to persistent defaults.
-  # Idempotent — safe to call even if install_payload already called
-  # patch_grub_steamos earlier (which it no longer does, but future-proof).
-  patch_persistent_defaults
-
-  # Phase 2: authoritative direct patch of EFI grub.cfg.
-  patch_kernel_cmdline
-
-  # Phase 3: validate everything landed.
-  finalize_grub
-  progress_emit configure_grub
-
-  # Capture FINAL EXTRA_CMDLINE_ADD in driver.conf so self-heal
-  # reproduces the exact same kernel parameters.
-  apply_update_strategy
-
-  inject_log_collector
-  install_one_click_installer
-  progress_emit patch_installer
-
-  if [[ -n "$DEFAULT_SESSION" ]]; then
-    log "Setting default login mode to $DEFAULT_SESSION"
-
-    # Select persistent desktop session variant if available.
-    if [[ "$DEFAULT_SESSION" == "desktop" ]] \
-      && chroot "$MNT" command -v steamos-session-select >/dev/null 2>&1; then
-      chroot "$MNT" steamos-session-select plasma-wayland-persistent 2>/dev/null \
-        || warn "steamos-session-select failed in chroot (non-fatal)"
-    fi
-
-    local state_toml_content
-    state_toml_content="$(cat <<EOF
-version = 1
-
-[services]
-
-[session_manager]
-default_login_mode = "$DEFAULT_SESSION"
-EOF
-)"
-
-    # Write to rootfs — this gets dd'd to the internal disk by the
-    # one-click installer, so the installed system boots to the right mode.
-    local rootfs_cfg="$MNT/home/deck/.config/steamos-manager"
-    mkdir -p "$rootfs_cfg"
-    echo "$state_toml_content" > "$rootfs_cfg/state.toml"
-    chown -R 1000:1000 "$rootfs_cfg"
-
-    # Write to the live USB's home partition so the USB itself also
-    # boots to the selected mode.
-    local usb_cfg="$HOMEMNT/deck/.config/steamos-manager"
-    mkdir -p "$usb_cfg"
-    echo "$state_toml_content" > "$usb_cfg/state.toml"
-    chown -R 1000:1000 "$usb_cfg"
-  fi
-
-  # Build manifest — captures the exact options used for this image.
-  # Written into the rootfs so it propagates through self-heal and can
-  # be re-ingested for reinstallation.
-  local manifest_content
-  manifest_content="$(cat <<EOF
-# steamos-nvidia build manifest — generated $(date -Iseconds)
-# This records the exact options used to produce this image.
-
-UPDATE_MODE="$UPDATE_MODE"
-TARGET_VARIANT="$TARGET_VARIANT"
-UPDATE_BRANCH="$UPDATE_BRANCH"
-DEFAULT_SESSION="$DEFAULT_SESSION"
-ADD_INSTALLER=$ADD_INSTALLER
-TRIM_CUDA=$TRIM_CUDA
-SKIP_SIG=$SKIP_SIG
-BUILD_HW_SUPPORT=$BUILD_HW_SUPPORT
-HW_SUPPORT_ITEMS="$HW_SUPPORT_ITEMS"
-THUNDERBOLT=$THUNDERBOLT
-INITRAMFS_MODULES="$INITRAMFS_MODULES"
-GAMING_ITEMS="$GAMING_ITEMS"
-DEBUG_BOOT=$DEBUG_BOOT
-FIX_KEYRING=$FIX_KEYRING
-ROOTFS_SIZE="$ROOTFS_SIZE"
-EOF
-  )"
-
-  log "Baking build manifest into rootfs"
-  mkdir -p "$MNT/usr/lib/steamos-nvidia"
-  echo "$manifest_content" > "$MNT/usr/lib/steamos-nvidia/build.conf"
-  chmod 644 "$MNT/usr/lib/steamos-nvidia/build.conf"
-
-  progress_emit finalize
-  finalize
-
-  # Also write alongside the image for external inspection/re-ingestion.
-  local manifest="${OUT}.conf"
-  log "Writing build manifest: $manifest"
-  echo "$manifest_content" > "$manifest"
-  chmod 644 "$manifest"
 }
 
 backend_configure() {
@@ -617,7 +438,10 @@ backend_flashless() {
 }
 
 backend_reboot() {
-  [[ $EUID -eq 0 ]] || { echo "Reboot action requires root." >&2; exit 1; }
+  [[ $EUID -eq 0 ]] || {
+    echo "Reboot action requires root." >&2
+    exit 1
+  }
   [[ -f "$BACKEND_DIR/post-install.sh" ]] || {
     echo "post-install.sh not found in lib/" >&2
     exit 1
@@ -647,13 +471,22 @@ case "$ACTION" in
     flash_scan_devices
     ;;
   is-system-disk)
-    [[ -n "$TARGET_DEV" ]] || { echo "--device is required" >&2; exit 2; }
+    [[ -n "$TARGET_DEV" ]] || {
+      echo "--device is required" >&2
+      exit 2
+    }
     load_flash_libs
     flash_is_system_disk "$TARGET_DEV"
     ;;
   preflight)
-    [[ -n "$IMG" ]] || { echo "--image is required" >&2; exit 2; }
-    [[ -n "$TARGET_DEV" ]] || { echo "--device is required" >&2; exit 2; }
+    [[ -n "$IMG" ]] || {
+      echo "--image is required" >&2
+      exit 2
+    }
+    [[ -n "$TARGET_DEV" ]] || {
+      echo "--device is required" >&2
+      exit 2
+    }
     load_flash_libs
     IMG="$(readlink -f "$IMG")"
     flash_preflight "$IMG" "$TARGET_DEV"

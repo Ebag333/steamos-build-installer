@@ -25,7 +25,7 @@ class_name() {
     08) echo "system" ;;
     09) echo "input" ;;
     0c) echo "serial" ;;
-    *)  echo "other" ;;
+    *) echo "other" ;;
   esac
 }
 

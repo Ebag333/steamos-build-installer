@@ -23,7 +23,7 @@ _FL_CLEANUP_CMDS=()
 FL_IMG_LOOP=""
 
 flashless_register_mount() { _FL_CLEANUP_MOUNTS+=("$1"); }
-flashless_register_dir()   { _FL_CLEANUP_DIRS+=("$1"); }
+flashless_register_dir() { _FL_CLEANUP_DIRS+=("$1"); }
 flashless_register_cleanup() { _FL_CLEANUP_CMDS+=("$1"); }
 
 flashless_unregister_mount() {
@@ -43,7 +43,7 @@ flashless_cleanup() {
 
   # Unmount in reverse registration order.
   local i
-  for (( i=${#_FL_CLEANUP_MOUNTS[@]}-1; i>=0; i-- )); do
+  for ((i = ${#_FL_CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
     local m="${_FL_CLEANUP_MOUNTS[$i]}"
     if mountpoint -q "$m" 2>/dev/null; then
       umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
@@ -59,12 +59,12 @@ flashless_cleanup() {
   # Detach loop device last.
   if [[ -n "$FL_IMG_LOOP" ]]; then
     losetup -d "$FL_IMG_LOOP" 2>/dev/null || true
-FL_IMG_LOOP=""
-FL_ROOTFS_WAS_RO=0
+    FL_IMG_LOOP=""
+    FL_ROOTFS_WAS_RO=0
   fi
 
   # Remove temporary directories in reverse order (children before parents).
-  for (( i=${#_FL_CLEANUP_DIRS[@]}-1; i>=0; i-- )); do
+  for ((i = ${#_FL_CLEANUP_DIRS[@]} - 1; i >= 0; i--)); do
     rmdir "${_FL_CLEANUP_DIRS[$i]}" 2>/dev/null || true
   done
 
@@ -87,10 +87,10 @@ flashless_detect_slots() {
     | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("booted",""))' 2>/dev/null)" || true
 
   case "$rauc_booted" in
-    A|rootfs.0) rauc_slot=A ;;
-    B|rootfs.1) rauc_slot=B ;;
-    dev)        rauc_slot="$bootconf_slot" ;;  # dev = running from development; trust bootconf
-    *)          rauc_slot="" ;;
+    A | rootfs.0) rauc_slot=A ;;
+    B | rootfs.1) rauc_slot=B ;;
+    dev) rauc_slot="$bootconf_slot" ;; # dev = running from development; trust bootconf
+    *) rauc_slot="" ;;
   esac
 
   # Require RAUC to return a recognizable slot — no silent bypass.
@@ -118,8 +118,8 @@ flashless_detect_slots() {
     || die "Cannot resolve target var device — unexpected disk layout"
 
   [[ -b "$FL_TARGET_ROOTFS" ]] || die "Target rootfs not a block device: $FL_TARGET_ROOTFS"
-  [[ -b "$FL_TARGET_EFI" ]]    || die "Target EFI not a block device: $FL_TARGET_EFI"
-  [[ -b "$FL_TARGET_VAR" ]]    || die "Target var not a block device: $FL_TARGET_VAR"
+  [[ -b "$FL_TARGET_EFI" ]] || die "Target EFI not a block device: $FL_TARGET_EFI"
+  [[ -b "$FL_TARGET_VAR" ]] || die "Target var not a block device: $FL_TARGET_VAR"
 
   log "Flashless: current=$FL_CURRENT target=$FL_TARGET"
   log "  rootfs: $FL_TARGET_ROOTFS"
@@ -176,7 +176,7 @@ flashless_extract_image() {
   # the rule is removed on cleanup regardless of which loop device was used.
   local _flashless_udev_rule="/run/udev/rules.d/89-steamos-nvidia-flashless.rules"
   mkdir -p /run/udev/rules.d
-  cat > "$_flashless_udev_rule" <<'EOF'
+  cat >"$_flashless_udev_rule" <<'EOF'
 # steamos-nvidia flashless-loop quarantine.
 SUBSYSTEM=="block", KERNEL=="loop[0-9]*p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0"
 EOF
@@ -249,7 +249,7 @@ flashless_check_sizes() {
     || die "Could not determine target rootfs size"
 
   log "Size check: source=$src_bytes target=$tgt_bytes"
-  if (( src_bytes > tgt_bytes )); then
+  if ((src_bytes > tgt_bytes)); then
     die "Source rootfs ($src_bytes bytes) is larger than target partition ($tgt_bytes bytes)"
   fi
 }
@@ -315,7 +315,7 @@ flashless_write_rootfs() {
     || die "btrfs check failed on target rootfs"
 
   # Expand to fill partition if the source was smaller.
-  if (( src_bytes < tgt_bytes )); then
+  if ((src_bytes < tgt_bytes)); then
     log "Expanding target rootfs to fill partition"
     local resize_mnt
     resize_mnt="$(mktemp -d /tmp/flashless-resize.XXXXXX)"
@@ -383,8 +383,8 @@ flashless_restore_etc() {
   # after all modifications are complete.
   local btrfs_ro
   btrfs_ro="$(
-    btrfs property get -ts "$target_mnt" ro 2>/dev/null |
-      awk -F= '/^ro=/{print $2}' || true
+    btrfs property get -ts "$target_mnt" ro 2>/dev/null \
+      | awk -F= '/^ro=/{print $2}' || true
   )"
   if [[ "$btrfs_ro" == "true" ]]; then
     btrfs property set -ts "$target_mnt" ro false \
@@ -481,7 +481,7 @@ flashless_rebuild_boot() {
 # Restore the target rootfs's original Btrfs ro property after all
 # modifications are complete.  Called once, after reconcile_grub succeeds.
 flashless_restore_rootfs_ro() {
-  (( ${FL_ROOTFS_WAS_RO:-0} )) || return 0
+  ((${FL_ROOTFS_WAS_RO:-0})) || return 0
 
   local mnt
   mnt="$(mktemp -d /tmp/flashless-ro.XXXXXX)" \
@@ -565,7 +565,10 @@ flashless_verify_final() {
   # Fall back to whichever exists even without VARIANT_ID (will fail the check).
   if [[ -z "$os_release" ]]; then
     for _candidate in "$target_mnt/usr/lib/os-release" "$target_mnt/etc/os-release"; do
-      [[ -f "$_candidate" ]] && { os_release="$_candidate"; break; }
+      [[ -f "$_candidate" ]] && {
+        os_release="$_candidate"
+        break
+      }
     done
   fi
   if [[ ! -f "$os_release" ]]; then
@@ -576,20 +579,6 @@ flashless_verify_final() {
     verify_failed=1
   else
     log "  OK os-release VARIANT_ID=${TARGET_VARIANT:-steamdeck}"
-  fi
-
-  # steam-jupiter safety (only when OOBE is suppressed).
-  if [[ "${TARGET_VARIANT:-steamdeck}" != *-oobe ]]; then
-    local jupiter="$target_mnt/usr/bin/steam-jupiter"
-    if [[ ! -f "$jupiter" ]]; then
-      warn "  VERIFY FAILED: steam-jupiter missing"
-      verify_failed=1
-    elif grep -Fq 'rm -rf --one-file-system "$STEAM_DIR" "$STEAM_LINKS"' "$jupiter"; then
-      warn "  VERIFY FAILED: steam-jupiter still has destructive reset"
-      verify_failed=1
-    else
-      log "  OK steam-jupiter: destructive reset absent"
-    fi
   fi
 
   # preferences.conf — must exist and match.
@@ -657,7 +646,7 @@ flashless_verify_final() {
     log "  OK /esp/SteamOS/conf/$FL_TARGET.conf present"
   fi
 
-  if (( verify_failed )); then
+  if ((verify_failed)); then
     die "Final verification failed — do not reboot until issues are resolved"
   fi
 

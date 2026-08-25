@@ -157,22 +157,11 @@ Also enables NVIDIA persistence mode so the driver stays loaded even with no GPU
 
 ## Use via CLI
 
-Pass tweaks as a space-separated list:
+Pass tweaks as a space-separated list in your config file:
 
 ```bash
-./steamos-nvidia.sh --action build \
-    --image ... \
-    --gaming-items "gamemode pci-realloc resize-bar scx-lavd vm-tunables cpu-performance gpu-power-limit"
-```
-
-Some tweaks also have dedicated flags:
-
-```bash
---trim-cuda       # equivalent to including trim-cuda in --gaming-items
---debug-boot      # equivalent to including debug-boot in --gaming-items
---skip-sigcheck   # equivalent to including skip-sigcheck in --gaming-items
---fix-keyring     # equivalent to including fix-keyring in --gaming-items
---thunderbolt     # equivalent to including thunderbolt in --gaming-items
+# In your build.conf:
+GAMING_ITEMS="gamemode pci-realloc resize-bar scx-lavd vm-tunables cpu-performance gpu-power-limit"
 ```
 
 ## Custom script hook

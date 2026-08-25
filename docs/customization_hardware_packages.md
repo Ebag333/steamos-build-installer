@@ -77,14 +77,13 @@ Replace `latest` with a specific version:
 NVIDIA|nvidia-open-dkms|570.86.15|TRUE|NVIDIA open kernel module sources for DKMS
 ```
 
-### Use via CLI
+### Use via config file
 
-Pass `--hw-support` and `--hw-support-items` to select packages without the GUI:
+Set `HW_SUPPORT_ITEMS` in your config file:
 
 ```bash
-./steamos-nvidia.sh --action build \
-    --image ... \
-    --hw-support-items "linux-firmware nvidia-open-dkms nvidia-utils lib32-nvidia-utils libva-nvidia-driver"
+# In your build.conf:
+HW_SUPPORT_ITEMS="linux-firmware nvidia-open-dkms nvidia-utils lib32-nvidia-utils libva-nvidia-driver"
 ```
 
 ## Notes

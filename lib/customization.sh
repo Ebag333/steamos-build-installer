@@ -1,0 +1,152 @@
+#!/bin/bash
+#
+# steamos-nvidia-installer — lib/customization.sh
+# Single entry point for applying customizations across all contexts.
+# Loops through requested customizations and applies each one.
+#
+# Usage: apply_customizations ITEMS [MODE] [ROOT]
+#   ITEMS - Space-separated list of customization names
+#   MODE  - Optional: build|rebuild|live (auto-detected if omitted)
+#   ROOT  - Optional: root filesystem path (auto-detected if omitted)
+#
+# Sourced by the build backend, repatch, and post-install — do not run directly.
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "lib/customization.sh is a library — source it from the wrapper, not run directly." >&2
+  exit 1
+fi
+
+CUSTOMIZATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source optimization entry point
+source "$CUSTOMIZATION_DIR/optimizations/entry.sh"
+
+# ---------------------------------------------------------------------------
+# Get All Customization Items
+# ---------------------------------------------------------------------------
+# Returns selected items from customizations.conf as a space-separated list.
+# Items with default "always" are always included.
+# Items with default TRUE/FALSE are only included if present in GAMING_ITEMS.
+# Useful for applying all customizations dynamically.
+
+get_all_customization_items() {
+  local conf="$CUSTOMIZATION_DIR/configs/customizations.conf"
+  local items=""
+
+  if [[ ! -r "$conf" ]]; then
+    warn "Customizations config not found: $conf"
+    return 1
+  fi
+
+  local module item default desc
+  while IFS='|' read -r module item default desc; do
+    [[ "$module" =~ ^#.*$ || -z "$module" ]] && continue
+
+    # "always" items are unconditionally included
+    if [[ "$default" == "always" ]]; then
+      items+=" $item"
+      continue
+    fi
+
+    # Optional items are only included if selected in GAMING_ITEMS
+    if [[ -n "${GAMING_ITEMS:-}" && " $GAMING_ITEMS " == *" $item "* ]]; then
+      items+=" $item"
+    fi
+  done <"$conf"
+
+  echo "${items# }"
+}
+
+# ---------------------------------------------------------------------------
+# Get Build Items from Config
+# ---------------------------------------------------------------------------
+# Returns selected items from hw-packages-build.conf as space-separated list.
+# Items with default TRUE are always included.
+# Items with default FALSE are only included if present in CUSTOM_DRIVERS.
+# Args: $1 = type filter (optional, e.g., "kernel-module", "flatpak")
+
+get_build_items() {
+  local type_filter="${1:-}"
+  local conf="$CUSTOMIZATION_DIR/configs/hw-packages-build.conf"
+  local items=""
+
+  if [[ ! -r "$conf" ]]; then
+    warn "Build config not found: $conf"
+    return 1
+  fi
+
+  local type name version default desc
+  while IFS='|' read -r type name version default desc; do
+    [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
+    [[ -n "$type_filter" && "$type" != "$type_filter" ]] && continue
+
+    # TRUE items are always included
+    if [[ "$default" == "TRUE" ]]; then
+      items+=" $name"
+      continue
+    fi
+
+    # FALSE items are only included if selected in CUSTOM_DRIVERS
+    if [[ -n "${CUSTOM_DRIVERS:-}" && " $CUSTOM_DRIVERS " == *" $name "* ]]; then
+      items+=" $name"
+    fi
+  done <"$conf"
+
+  echo "${items# }"
+}
+
+# ---------------------------------------------------------------------------
+# Get Build Item Version from Config
+# ---------------------------------------------------------------------------
+# Returns the version for a specific build item.
+# Args: $1 = item name
+# Output: version string (e.g., "latest", "5841e54418d3...")
+
+get_build_item_version() {
+  local item_name="${1:?get_build_item_version: missing item name}"
+  local conf="$CUSTOMIZATION_DIR/configs/hw-packages-build.conf"
+
+  if [[ ! -r "$conf" ]]; then
+    echo "latest"
+    return 0
+  fi
+
+  local type name version default desc
+  while IFS='|' read -r type name version default desc; do
+    [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
+    if [[ "$name" == "$item_name" ]]; then
+      echo "$version"
+      return 0
+    fi
+  done <"$conf"
+
+  echo "latest"
+}
+
+# ---------------------------------------------------------------------------
+# Main Entry Point
+# ---------------------------------------------------------------------------
+# Apply a list of customizations.
+#
+# Usage: apply_customizations ITEMS [MODE] [ROOT]
+#   ITEMS - Space-separated list of customization names
+#   MODE  - Optional: build|rebuild|live (auto-detected if omitted)
+#   ROOT  - Optional: root filesystem path (auto-detected if omitted)
+#
+# Returns 0 if all succeeded, 1 if any failed.
+
+apply_customizations() {
+  local items="${1:?apply_customizations: missing items list}"
+  local mode="${2:-}"
+  local root="${3:-}"
+  local failed=0
+
+  for item in $items; do
+    if ! apply_optimization_for_item "$item" "$mode" "$root"; then
+      warn "Customization failed: $item"
+      failed=1
+    fi
+  done
+
+  return $failed
+}
