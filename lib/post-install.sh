@@ -65,76 +65,7 @@ restore_rootfs_readonly() {
 # ============================================================
 
 apply_thunderbolt() {
-  log "Installing Thunderbolt support"
-
-  install -d -m755 \
-    "$config_root/etc/udev/rules.d" \
-    "$config_root/usr/local/bin" \
-    "$config_root/usr/lib/steamos-nvidia/thunderbolt" \
-    || return 1
-
-  #
-  # Rescan PCI when an authorized Thunderbolt device appears.
-  #
-  cat >"$config_root/etc/udev/rules.d/98-thunderbolt-rescan.rules" <<'EOF'
-# steamos-nvidia-installer
-# Rescan the PCI bus when an authorized Thunderbolt device appears.
-ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{authorized}=="1", RUN+="/usr/local/bin/thunderbolt-rescan.sh"
-EOF
-
-  chmod 644 "$config_root/etc/udev/rules.d/98-thunderbolt-rescan.rules" \
-    || return 1
-
-  #
-  # PCI rescan helper.
-  #
-  cat >"$config_root/usr/local/bin/thunderbolt-rescan.sh" <<'EOF'
-#!/bin/bash
-echo 1 > /sys/bus/pci/rescan
-EOF
-
-  chmod 755 "$config_root/usr/local/bin/thunderbolt-rescan.sh" \
-    || return 1
-
-  #
-  # Bundle our custom files so the NVIDIA self-heal mechanism can
-  # restore them after a SteamOS rootfs update.
-  #
-  install -m644 \
-    "$config_root/etc/udev/rules.d/98-thunderbolt-rescan.rules" \
-    "$config_root/usr/lib/steamos-nvidia/thunderbolt/98-thunderbolt-rescan.rules" \
-    || return 1
-
-  install -m755 \
-    "$config_root/usr/local/bin/thunderbolt-rescan.sh" \
-    "$config_root/usr/lib/steamos-nvidia/thunderbolt/thunderbolt-rescan.sh" \
-    || return 1
-
-  #
-  # Activate the new rule immediately (only for live OS).
-  #
-  if [[ "$config_root" == "/" ]]; then
-    udevadm control --reload-rules \
-      || warn "Could not reload udev rules"
-    udevadm trigger --subsystem-match=thunderbolt \
-      || warn "Could not trigger thunderbolt udev events"
-  fi
-
-  #
-  # bolt/plasma-thunderbolt are already present in SteamOS.
-  # Enable only for live OS — offline roots will enable on boot.
-  #
-  if [[ "$config_root" == "/" ]]; then
-    if systemctl list-unit-files bolt.service >/dev/null 2>&1; then
-      systemctl enable --now bolt.service \
-        || return 1
-    else
-      warn "bolt.service was not found"
-      return 1
-    fi
-  fi
-
-  return 0
+  apply_optimization_for_item "thunderbolt" "live" "$config_root"
 }
 
 # ============================================================

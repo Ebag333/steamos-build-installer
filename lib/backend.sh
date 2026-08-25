@@ -28,7 +28,6 @@ CONFIG_FILE=""
 
 UPDATE_MODE="selfheal" # selfheal | hold | stock
 ADD_INSTALLER=1
-BUILD_HW_SUPPORT=0
 HW_SUPPORT_ITEMS=""        # space-separated items: linux-firmware libfprint fprintd bolt dkms
 DEFAULT_SESSION="game"     # desktop | game
 INITRAMFS_MODULES=""       # space-separated module list; empty = stock
@@ -61,11 +60,10 @@ Usage:
 Common:
   --action ACTION           Required: build, flash, flashless, list-images, list-devices, is-system-disk, configure, reboot
   --image FILE              Source image path (for build)
-  --config FILE             Build configuration file (see build.conf)
+  --config FILE             Build configuration file
 
 Build:
   All build settings are configured via --config file.
-  See build.conf for available options.
   --output-dir DIR          Directory for finished image (default: same as source)
 
 Flash:
@@ -98,7 +96,7 @@ if [[ -n "$CONFIG_FILE" ]]; then
     echo "Config file not found: $CONFIG_FILE" >&2
     exit 2
   }
-  # shellcheck source=build.conf
+  # shellcheck source=steamos-nvidia.example.conf
   source "$CONFIG_FILE"
 fi
 
@@ -410,7 +408,7 @@ backend_build() {
   log "Build mount namespace: $(readlink /proc/self/ns/mnt 2>/dev/null || echo '<unknown>')"
   log "Root mount propagation: $(findmnt -no PROPAGATION / 2>/dev/null || echo '<unknown>')"
 
-  log "Starting steamos-nvidia build (hw=$BUILD_HW_SUPPORT rootfs=${ROOTFS_SIZE:-5120}M)"
+  log "Starting steamos-nvidia build (rootfs=${ROOTFS_SIZE:-5120}M)"
 
   # Register and run the build pipeline
   register_build_pipeline

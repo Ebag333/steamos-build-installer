@@ -563,19 +563,6 @@ strict_detach_loop() {
   return 1
 }
 
-# Tear down all visible mounts belonging to a loop and then detach it.
-strict_cleanup_loop() {
-  local loop="${1:?strict_cleanup_loop: missing loop device}"
-  local m
-
-  while IFS= read -r m; do
-    [[ -n "$m" ]] || continue
-    strict_unmount "$m" "mount backed by $loop" || return 1
-  done < <(mounts_for_loop "$loop")
-
-  strict_detach_loop "$loop"
-}
-
 # Tear down everything mounted/created on OUR loop device + the overlay, and
 # drop the udisks guard rule. Idempotent — safe to run twice (EXIT trap).
 cleanup() {

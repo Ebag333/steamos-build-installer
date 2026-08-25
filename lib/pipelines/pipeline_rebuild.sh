@@ -218,18 +218,22 @@ phase_rebuild_discover() {
   discover_neptune_kver "$NEWROOT"
   log "Target kernel: $KVER"
 
-  # Load persisted build selections
-  [[ -r /usr/lib/steamos-nvidia/driver.conf ]] \
-    || {
-      die "driver.conf is missing"
-      return 1
-    }
-  source /usr/lib/steamos-nvidia/driver.conf
+  # Load persisted build selections from user's config
+  if [[ -r /home/.steamos-nvidia/build.conf ]]; then
+    source /home/.steamos-nvidia/build.conf
+  else
+    die "Build config not found at /home/.steamos-nvidia/build.conf"
+  fi
 
   : "${INITRAMFS_MODULES:=}"
   : "${HW_SUPPORT_ITEMS:=}"
-  : "${BUILD_HW_SUPPORT:=0}"
-  : "${EXTRA_CMDLINE_ADD:=}"
+  : "${GAMING_ITEMS:=}"
+
+  # Derive build flags from GAMING_ITEMS (same as pipeline_build.sh)
+  if [[ -n "${GAMING_ITEMS:-}" ]]; then
+    [[ " $GAMING_ITEMS " == *" fix-keyring "* ]] && export FIX_KEYRING=1
+    [[ " $GAMING_ITEMS " == *" skip-sigcheck "* ]] && export SKIP_SIG=1
+  fi
 
   # Set HID bundle location: prefer /home (latest), fall back to /usr
   if [[ -d "/home/.steamos-nvidia/bundles/hid" ]]; then
@@ -464,28 +468,12 @@ phase_rebuild_configure() {
     REPATCH_EXIT=10
   fi
 
-  # Restore persisted kernel parameters
-  if [[ -n "${EXTRA_CMDLINE_ADD:-}" ]]; then
-    step "Restoring persisted kernel params: $EXTRA_CMDLINE_ADD"
-    _kparams_ok=1
-    for _param in $EXTRA_CMDLINE_ADD; do
-      add_kernel_param "$_param" || _kparams_ok=0
-    done
-    if ((_kparams_ok)); then
-      patch_record "kernel-params" "ok"
-    else
-      patch_record "kernel-params" "fail" "could not restore all persisted kernel params"
-      REPATCH_EXIT=10
-    fi
-  fi
-
   return 0
 }
 
 # Phase: Reconcile and verify
 phase_rebuild_reconcile() {
   # Propagate self-healing scripts from /home (latest) or /usr (fallback).
-  # State (driver.conf, build.conf) stays in /usr/lib/steamos-nvidia/.
   local nvidia_dir
   nvidia_dir="$(resolve_nvidia_dir)" || die "Cannot find steamos-nvidia directory"
 

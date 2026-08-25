@@ -342,13 +342,6 @@ install_payload() {
 
   enable_nvidia_power_services "$MNT"
 
-  # Bundle configs for repatch self-heal.
-  log "Bundling config files for self-heal"
-  mkdir -p "$MERGED/usr/lib/steamos-nvidia/configs"
-  cp -r "$SCRIPT_DIR/lib/configs/"* "$MERGED/usr/lib/steamos-nvidia/configs/"
-  mkdir -p "$MNT/usr/lib/steamos-nvidia/configs"
-  cp -r "$SCRIPT_DIR/lib/configs/"* "$MNT/usr/lib/steamos-nvidia/configs/"
-
   # Bundle scan-hardware.sh for manual use.
   log "Installing hardware scan tool"
   mkdir -p "$MERGED/usr/local/bin/diagnostics"

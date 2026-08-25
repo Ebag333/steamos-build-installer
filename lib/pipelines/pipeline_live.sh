@@ -161,35 +161,7 @@ phase_live_verify() {
 
 _apply_live_thunderbolt() {
   local root="$1"
-  log "Installing Thunderbolt support"
-
-  # Install udev rule
-  cat >"$root/etc/udev/rules.d/98-thunderbolt-rescan.rules" <<'EOF'
-ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{authorized}=="1", RUN+="/usr/local/bin/thunderbolt-rescan.sh"
-EOF
-  chmod 644 "$root/etc/udev/rules.d/98-thunderbolt-rescan.rules"
-
-  # Install rescan script
-  cat >"$root/usr/local/bin/thunderbolt-rescan.sh" <<'EOF'
-#!/bin/bash
-echo 1 > /sys/bus/pci/rescan
-EOF
-  chmod 755 "$root/usr/local/bin/thunderbolt-rescan.sh"
-
-  # Enable bolt service
-  if [[ -f "$root/usr/lib/systemd/system/bolt.service" ]]; then
-    mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
-    ln -sf /usr/lib/systemd/system/bolt.service \
-      "$root/etc/systemd/system/multi-user.target.wants/bolt.service"
-  fi
-
-  # Trigger udev reload if live
-  if [[ "$root" == "/" ]]; then
-    udevadm control --reload-rules 2>/dev/null || true
-    udevadm trigger --subsystem-match=thunderbolt 2>/dev/null || true
-  fi
-
-  return 0
+  apply_optimization_for_item "thunderbolt" "live" "$root"
 }
 
 _apply_live_gamemode() {

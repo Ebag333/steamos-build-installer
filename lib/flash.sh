@@ -76,18 +76,6 @@ flash_is_system_disk() {
   [[ -n "$src_disk" && "$target_dev" == "/dev/$src_disk" ]]
 }
 
-# Get human-readable size of a block device.
-flash_device_size() {
-  local dev="$1"
-  local bytes
-  bytes="$(lsblk -dnbo SIZE "$dev" 2>/dev/null | head -1)"
-  if [[ -n "$bytes" && "$bytes" -gt 0 ]]; then
-    numfmt --to=iec "$bytes" 2>/dev/null || echo "$bytes bytes"
-  else
-    echo "unknown size"
-  fi
-}
-
 # Collect and display pre-flight comparison between image and target device.
 # Runs safety checks and returns non-zero if the flash should not proceed.
 # Args: $1 = image path, $2 = target device

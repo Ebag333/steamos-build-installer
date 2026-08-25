@@ -263,6 +263,12 @@ phase_build_configure() {
   # Persist project files to /home for later re-run
   ensure_project_persisted "$SCRIPT_DIR" "$HOMEMNT"
 
+  # Persist user's build config to /home for repatch to source
+  if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
+    cp -f "$CONFIG_FILE" "$HOMEMNT/.steamos-nvidia/build.conf"
+    log "Build config persisted to /home/.steamos-nvidia/build.conf"
+  fi
+
   # Install log collector and one-click installer
   inject_log_collector
   install_one_click_installer
@@ -273,31 +279,6 @@ phase_build_configure() {
     configure_desktop_session "$MNT" "$DEFAULT_SESSION"
   fi
 
-  # Write build manifest
-  local manifest_content
-  manifest_content="$(
-    cat <<EOF
-# steamos-nvidia build manifest — generated $(date -Iseconds)
-# This records the exact options used to produce this image.
-
-UPDATE_MODE="$UPDATE_MODE"
-TARGET_VARIANT="$TARGET_VARIANT"
-UPDATE_BRANCH="$UPDATE_BRANCH"
-DEFAULT_SESSION="$DEFAULT_SESSION"
-ADD_INSTALLER=$ADD_INSTALLER
-BUILD_HW_SUPPORT=$BUILD_HW_SUPPORT
-HW_SUPPORT_ITEMS="$HW_SUPPORT_ITEMS"
-INITRAMFS_MODULES="$INITRAMFS_MODULES"
-GAMING_ITEMS="$GAMING_ITEMS"
-ROOTFS_SIZE="$ROOTFS_SIZE"
-EOF
-  )"
-
-  log "Baking build manifest into rootfs"
-  mkdir -p "$MNT/usr/lib/steamos-nvidia"
-  echo "$manifest_content" >"$MNT/usr/lib/steamos-nvidia/build.conf"
-  chmod 644 "$MNT/usr/lib/steamos-nvidia/build.conf"
-
   return 0
 }
 
@@ -306,25 +287,12 @@ phase_build_finalize() {
   progress_emit finalize
   finalize
 
-  # Write manifest alongside image
+  # Write manifest alongside image (copy of user's config for reference)
   local manifest="${OUT}.conf"
-  log "Writing build manifest: $manifest"
-  cat >"$manifest" <<EOF
-# steamos-nvidia build manifest — generated $(date -Iseconds)
-# This records the exact options used to produce this image.
-
-UPDATE_MODE="$UPDATE_MODE"
-TARGET_VARIANT="$TARGET_VARIANT"
-UPDATE_BRANCH="$UPDATE_BRANCH"
-DEFAULT_SESSION="$DEFAULT_SESSION"
-ADD_INSTALLER=$ADD_INSTALLER
-BUILD_HW_SUPPORT=$BUILD_HW_SUPPORT
-HW_SUPPORT_ITEMS="$HW_SUPPORT_ITEMS"
-INITRAMFS_MODULES="$INITRAMFS_MODULES"
-GAMING_ITEMS="$GAMING_ITEMS"
-ROOTFS_SIZE="$ROOTFS_SIZE"
-EOF
-  chmod 644 "$manifest"
+  if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
+    cp -f "$CONFIG_FILE" "$manifest"
+    log "Build manifest written: $manifest"
+  fi
 
   return 0
 }

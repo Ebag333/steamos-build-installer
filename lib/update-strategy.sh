@@ -48,22 +48,6 @@ EOF
     # Persist build selections needed by repatch.  Package source/version policy
     # lives in the bundled hw-packages-{valve,arch}.conf manifests.  Entries
     # marked "latest" are resolved again on every self-heal.
-    cat >"$MNT/usr/lib/steamos-nvidia/driver.conf" <<EOF
-# Written by steamos-nvidia-installer at image build time.
-# Package versions are controlled by:
-#   /usr/lib/steamos-nvidia/configs/hw-packages-valve.conf
-#   /usr/lib/steamos-nvidia/configs/hw-packages-arch.conf
-INITRAMFS_MODULES="${INITRAMFS_MODULES:-}"
-GAMING_ITEMS="${GAMING_ITEMS:-}"
-DEBUG_BOOT=${DEBUG_BOOT:-0}
-HW_SUPPORT_ITEMS="${HW_SUPPORT_ITEMS:-}"
-BUILD_HW_SUPPORT=${BUILD_HW_SUPPORT:-0}
-SKIP_SIG=${SKIP_SIG:-0}
-FIX_KEYRING=${FIX_KEYRING:-0}
-EXTRA_CMDLINE_ADD="${EXTRA_CMDLINE_ADD:-}"
-EOF
-    chmod 644 "$MNT/usr/lib/steamos-nvidia/driver.conf"
-
     # ---- on-device re-patch/runtime bundle
     # common.sh is required by repatch; keep both wrappers in the bundle so a
     # successful repatch can propagate the update machinery into the new slot.

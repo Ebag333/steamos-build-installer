@@ -71,7 +71,7 @@ Flash:
   --allow-system-disk      Permit a target detected as the current system disk
 
 All build options (rootfs size, session, update mode, packages, tweaks, etc.)
-are set via --config. See build.conf for the full list.
+are set via --config. See docs/customization_build_config.md for the full list.
 
 No positional parameters are accepted.
 EOF
@@ -339,8 +339,8 @@ build_backend_args() {
   [[ -n "$IMG" ]] && BACKEND_ARGS+=(--image "$IMG")
   [[ -n "$TARGET_DEV" ]] && BACKEND_ARGS+=(--device "$TARGET_DEV")
   [[ -n "$CONFIG_FILE" ]] && BACKEND_ARGS+=(--config "$CONFIG_FILE")
-  [[ -n "$OUTPUT_DIR" ]] && BACKEND_ARGS+=(--output-dir "$OUTPUT_DIR")
-  [[ "$ALLOW_SYSTEM_DISK" -eq 1 ]] && BACKEND_ARGS+=(--allow-system-disk)
+  [[ -n "${OUTPUT_DIR:-}" ]] && BACKEND_ARGS+=(--output-dir "$OUTPUT_DIR")
+  [[ "${ALLOW_SYSTEM_DISK:-0}" -eq 1 ]] && BACKEND_ARGS+=(--allow-system-disk)
 }
 
 backend_needs_root() {
@@ -970,7 +970,7 @@ Packages are sourced from Valve's repository or official Arch repositories.</spa
 ui_select_system_tweaks() {
   local conf="$SCRIPT_DIR/lib/configs/customizations.conf"
   if [[ ! -r "$conf" ]]; then
-    warn "Customizations config not found: $conf"
+    echo "Customizations config not found: $conf" >&2
     echo ""
     return
   fi
@@ -1027,7 +1027,7 @@ ui_select_system_tweaks() {
 ui_select_package_builds() {
   local conf="$SCRIPT_DIR/lib/configs/hw-packages-build.conf"
   if [[ ! -r "$conf" ]]; then
-    warn "Drivers config not found: $conf"
+    echo "Drivers config not found: $conf" >&2
     echo ""
     return
   fi

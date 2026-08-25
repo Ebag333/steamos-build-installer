@@ -153,28 +153,6 @@ _pipeline_report_failure() {
 # Phase Helpers
 # ---------------------------------------------------------------------------
 
-# Get the current phase name.
-get_current_phase() {
-  echo "$_PIPELINE_CURRENT_PHASE"
-}
-
-# Check if a phase exists in the pipeline.
-# Args: $1 = phase name
-# Returns 0 if exists, 1 if not
-phase_exists() {
-  local phase="$1"
-  [[ -n "${_PIPELINE_PHASES[$phase]:-}" ]]
-}
-
-# Get the list of defined phases.
-# Output: one phase per line
-list_phases() {
-  local phase
-  for phase in "${_PIPELINE_ORDER[@]}"; do
-    echo "$phase: ${_PIPELINE_PHASE_DESC[$phase]:-}"
-  done
-}
-
 # ---------------------------------------------------------------------------
 # Common Phase Implementations
 # ---------------------------------------------------------------------------

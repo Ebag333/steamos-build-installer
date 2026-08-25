@@ -226,8 +226,8 @@ EOF
   fi
 
   # Check NVIDIA payload is present.
-  if [[ ! -f "$verify_mnt/usr/lib/steamos-nvidia/driver.conf" ]]; then
-    die "Source rootfs-A is not an NVIDIA-patched build (driver.conf missing)"
+  if [[ ! -f "$verify_mnt/home/.steamos-nvidia/build.conf" ]]; then
+    die "Source rootfs-A is not an NVIDIA-patched build (build.conf missing)"
   fi
 
   log "  Source verified: variant=${TARGET_VARIANT:-steamdeck}, NVIDIA payload present"

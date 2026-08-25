@@ -101,7 +101,7 @@ finalize() {
     [[ -f "$MNT/usr/bin/steamos-update.orig" ]] || die "original steamos-update not preserved"
     grep -q 'repatch' "$MNT/usr/lib/steamos-nvidia/repatch.sh" || die "repatch tool missing"
     [[ -f "$MNT/usr/lib/steamos-nvidia/overlay.sh" ]] || die "overlay helper missing"
-    [[ -f "$MNT/usr/lib/steamos-nvidia/driver.conf" ]] || die "driver.conf missing"
+    [[ -f "$MNT/home/.steamos-nvidia/build.conf" ]] || die "build.conf missing"
     # Verify HID source bundle for self-heal (always applied)
     for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
       [[ -f "$MNT/usr/lib/steamos-nvidia/hid/$f" ]] \
