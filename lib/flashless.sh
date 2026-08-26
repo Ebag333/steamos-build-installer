@@ -225,9 +225,9 @@ EOF
     die "Source rootfs-A variant does not match TARGET_VARIANT=${TARGET_VARIANT:-steamdeck}"
   fi
 
-  # Check NVIDIA payload is present.
-  if [[ ! -f "$verify_mnt/home/.steamos-nvidia/build.conf" ]]; then
-    die "Source rootfs-A is not an NVIDIA-patched build (build.conf missing)"
+  # Check NVIDIA payload is present (repatch.sh is installed by update-strategy).
+  if [[ ! -f "$verify_mnt/usr/lib/steamos-nvidia/repatch.sh" ]]; then
+    die "Source rootfs-A is not an NVIDIA-patched build (repatch.sh missing)"
   fi
 
   log "  Source verified: variant=${TARGET_VARIANT:-steamdeck}, NVIDIA payload present"
@@ -396,6 +396,9 @@ flashless_restore_etc() {
   MNT="$target_mnt"
   configure_update_channel
   MNT="$_saved_mnt"
+
+  # Persist project files to /home so scripts stay current
+  ensure_project_persisted
 
   sync -f "$target_mnt" 2>/dev/null || sync
   umount "$target_mnt" 2>/dev/null || umount -l "$target_mnt" 2>/dev/null

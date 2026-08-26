@@ -459,8 +459,15 @@ wait_ext4_gone() {
 
   [[ -e "$sys" ]] || return 0
 
-  for ((i = 0; i < 50; i++)); do
+  # Wait up to 15 seconds for the ext4 superblock to release.
+  # The jbd2 journal thread can hold it for several seconds after unmount
+  # while flushing dirty metadata.
+  for ((i = 0; i < 150; i++)); do
     [[ ! -e "$sys" ]] && return 0
+    # After 2 seconds, try flushing block device buffers to speed up release
+    if ((i == 20)); then
+      blockdev --flushbufs "$loop" 2>/dev/null || true
+    fi
     sleep 0.1
   done
 
@@ -645,6 +652,14 @@ cleanup() {
     warn "cleanup: main image loop still attached: $LOOPDEV"
     losetup "$LOOPDEV" >&2 2>/dev/null || true
     rc=1
+  fi
+
+  # ------------------------------------------------------------
+  # Remove build workspace (always, even on failure).
+  # ------------------------------------------------------------
+  if [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]]; then
+    log "Cleaning up build workspace: $WORKDIR"
+    rm -rf "$WORKDIR" 2>/dev/null || warn "cleanup: could not remove $WORKDIR"
   fi
 
   [[ "$_had_e" -eq 1 ]] && set -e

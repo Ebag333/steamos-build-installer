@@ -147,7 +147,7 @@ _verify_gpu_power_limit() {
   [[ -x "${root}/usr/lib/steam-perf/apply-boot" ]] \
     && [[ -x "${root}/usr/lib/steam-perf/boot.d/20-nvidia-gpu" ]] \
     && [[ -x "${root}/usr/lib/steam-perf/boot.d/25-amd-gpu" ]] \
-    && [[ -f "${root}/etc/systemd/system/steam-perf.service" ]]
+    && [[ -f "${root}/usr/lib/systemd/system/steam-perf.service" ]]
 }
 
 _verify_resize_bar() {

@@ -87,6 +87,12 @@ load_workflow_libs() {
       )
       driver_libs=()
       ;;
+    validate)
+      workflow_libs=(
+        initramfs
+      )
+      driver_libs=()
+      ;;
     *)
       warn "Unknown workflow type: $workflow"
       return 1

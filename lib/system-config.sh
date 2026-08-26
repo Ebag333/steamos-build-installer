@@ -52,17 +52,18 @@ verify_system_config() {
 # Write the update branch to /etc/steamos-atomupd/preferences.conf.
 #
 # Args: $1 = root path, $2 = branch name (stable, beta, preview, etc.)
+#        $3 = (optional) variant — if omitted, reads from existing file or defaults to steamdeck
 
 _apply_update_branch() {
   local root="${1:?_apply_update_branch: missing root}"
   local branch="${2:?_apply_update_branch: missing branch}"
+  local variant="${3:-}"
 
   local prefs_dir="$root/etc/steamos-atomupd"
   local prefs="$prefs_dir/preferences.conf"
 
-  # Read existing prefs to preserve other keys
-  local variant=""
-  if [[ -f "$prefs" ]]; then
+  # Read existing variant if not provided
+  if [[ -z "$variant" && -f "$prefs" ]]; then
     variant="$(sed -n 's/^Variant=//p' "$prefs" 2>/dev/null)"
   fi
 

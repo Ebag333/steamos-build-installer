@@ -827,6 +827,12 @@ overlay_cleanup() {
     umount -v "$OVL_MNT" 2>&1 || umount_ovl_rc=$?
     echo "umount OVL_MNT rc=$umount_ovl_rc"
 
+    # Flush pending writes so the jbd2 thread releases the superblock
+    sync -f "$OVL_MNT" 2>/dev/null || sync
+    if [[ -n "${OVL_LOOPDEV:-}" ]]; then
+      blockdev --flushbufs "$OVL_LOOPDEV" 2>/dev/null || true
+    fi
+
     echo "=== AFTER OVL_MNT ==="
     findmnt -R "$OVL_MNT" 2>/dev/null || true
     if [[ -n "${OVL_LOOPDEV:-}" ]]; then

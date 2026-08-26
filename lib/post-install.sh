@@ -592,9 +592,9 @@ apply_boot_framework() {
     chmod 755 "$boot_dst/boot.d/25-amd-gpu"
   fi
 
-  cp "$boot_src/steam-perf.service" /etc/systemd/system/steam-perf.service
+  cp "$boot_src/steam-perf.service" /usr/lib/systemd/system/steam-perf.service
   install -d -m755 /etc/systemd/system/multi-user.target.wants
-  ln -sf ../steam-perf.service \
+  ln -sf /usr/lib/systemd/system/steam-perf.service \
     /etc/systemd/system/multi-user.target.wants/steam-perf.service \
     || warn "Failed to enable steam-perf.service"
   systemctl daemon-reload 2>/dev/null || true

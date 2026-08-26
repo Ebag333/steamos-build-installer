@@ -167,12 +167,47 @@ phase_build_install() {
   install_hw_libs
   progress_emit install_hw
 
+  # Build framework setup (used when USE_BUILD_FRAMEWORK=1)
+  local _build_framework_ready=0
+  if [[ "${USE_BUILD_FRAMEWORK:-0}" -eq 1 ]]; then
+    # Source the build framework
+    source "$SCRIPT_DIR/lib/build/engine.sh"
+    source "$SCRIPT_DIR/lib/build/repository.sh"
+    source "$SCRIPT_DIR/lib/build/verify.sh"
+    source "$SCRIPT_DIR/lib/build/backends/arch-devtools.sh"
+    source "$SCRIPT_DIR/lib/build/backends/overlay-chroot.sh"
+    source "$SCRIPT_DIR/lib/build/profiles/steamos.sh"
+
+    # Derive profile from target rootfs
+    if build_profile_from_root "$MERGED"; then
+      _build_framework_ready=1
+      log "Build framework initialized (profile: ${PROFILE_DIR:-unknown})"
+    else
+      warn "Failed to derive build profile — falling back to legacy build"
+    fi
+  fi
+
   # Build and install custom drivers from hw-packages-build.conf
   step "Building custom drivers"
   local kernel_modules
   kernel_modules="$(get_build_items "kernel-module")"
   if [[ -n "$kernel_modules" ]]; then
     for module in $kernel_modules; do
+      local recipe_dir="$SCRIPT_DIR/recipes/$module"
+
+      # Use new framework if available and recipe exists
+      if ((_build_framework_ready)) && [[ -d "$recipe_dir" ]]; then
+        log "Building $module via build framework"
+        if build_recipe --recipe "$recipe_dir" --profile "$PROFILE_DIR" --output "$WORKDIR/packages"; then
+          install_build_artifact "$MERGED" "$BUILD_ARTIFACT"
+          log "$module built and installed via framework"
+        else
+          warn "FAILED: $module build via framework failed"
+        fi
+        continue
+      fi
+
+      # Legacy build path
       case "$module" in
         logitech-hid)
           fetch_hid_sources

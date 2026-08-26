@@ -585,7 +585,7 @@ configure_update_channel() {
   log "Configuring update channel: variant=$variant branch=$branch (suppress_oobe=$suppress_oobe)"
 
   # ── 1) Write atomupd preferences.conf (offline — no D-Bus needed) ────────
-  _apply_update_branch "$MNT" "$branch"
+  _apply_update_branch "$MNT" "$branch" "$variant"
 
   if ((suppress_oobe)); then
     # ── 2) Neutralize the destructive OOBE Steam reset in steam-jupiter ────

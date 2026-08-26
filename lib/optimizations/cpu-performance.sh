@@ -183,7 +183,7 @@ _verify_cpu_performance() {
   local root
   root="$(get_root)"
   [[ -x "${root}/usr/lib/steam-perf/boot.d/30-cpu" ]] \
-    && [[ -f "${root}/etc/systemd/system/steam-perf.service" ]]
+    && [[ -f "${root}/usr/lib/systemd/system/steam-perf.service" ]]
 }
 
 _verify_scx_lavd() {

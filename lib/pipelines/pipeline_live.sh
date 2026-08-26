@@ -250,9 +250,9 @@ _apply_live_cpu_performance() {
   mkdir -p "$root/etc/steam-perf"
   cp "$boot_src/config.conf" "$root/etc/steam-perf/config.conf"
 
-  mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
-  cp "$boot_src/steam-perf.service" "$root/etc/systemd/system/steam-perf.service"
-  ln -sf ../steam-perf.service \
+  mkdir -p "$root/usr/lib/systemd/system" "$root/etc/systemd/system/multi-user.target.wants"
+  cp "$boot_src/steam-perf.service" "$root/usr/lib/systemd/system/steam-perf.service"
+  ln -sf /usr/lib/systemd/system/steam-perf.service \
     "$root/etc/systemd/system/multi-user.target.wants/steam-perf.service"
 
   return 0
@@ -277,9 +277,9 @@ _apply_live_gpu_power_limit() {
   mkdir -p "$root/etc/steam-perf"
   cp "$boot_src/config.conf" "$root/etc/steam-perf/config.conf"
 
-  mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
-  cp "$boot_src/steam-perf.service" "$root/etc/systemd/system/steam-perf.service"
-  ln -sf ../steam-perf.service \
+  mkdir -p "$root/usr/lib/systemd/system" "$root/etc/systemd/system/multi-user.target.wants"
+  cp "$boot_src/steam-perf.service" "$root/usr/lib/systemd/system/steam-perf.service"
+  ln -sf /usr/lib/systemd/system/steam-perf.service \
     "$root/etc/systemd/system/multi-user.target.wants/steam-perf.service"
 
   return 0

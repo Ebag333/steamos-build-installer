@@ -54,6 +54,7 @@ Usage:
   steamos-nvidia.sh --action build --image FILE --config FILE [options]
   steamos-nvidia.sh --action flash --image FILE --device /dev/sdX
   steamos-nvidia.sh --action configure
+  steamos-nvidia.sh --action validate [--config FILE]
   steamos-nvidia.sh --action reboot
   steamos-nvidia.sh --setup
 
@@ -436,9 +437,8 @@ _feed_progress() {
   done
 
   # Drain any remaining output after the runner exited.
-  while IFS= read -r line < <(tail -c +$((offset + 1)) "$logfile" 2>/dev/null | head -n 1); do
-    [[ -z "$line" ]] && break
-    offset=$((offset + ${#line} + 1))
+  tail -c +$((offset + 1)) "$logfile" 2>/dev/null | while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
     if [[ "$line" =~ @@PROGRESS:([0-9]+)@@ ]]; then
       printf '%s\n' "${BASH_REMATCH[1]}"
     elif [[ "$show_log" == "log" ]]; then
@@ -756,6 +756,7 @@ ui_select_action() {
     "Flash" "Flash a completed installer image to USB" \
     "Flashless" "Install a built image to inactive A/B slot (no USB)" \
     "Configure" "Apply configuration to a live system" \
+    "Validate" "Check configuration and system state" \
     "Diagnostics" "System diagnostics and reporting" \
     "Reboot" "Run the project reboot helper" \
     "Quit" "Exit"
@@ -1414,22 +1415,25 @@ Configure the build options below. The image will be selected when you build." \
 
   if [[ "${hw_support^^}" == "TRUE" ]]; then
     hw_items="$(ui_select_hw_support)"
+    [[ -n "$hw_items" ]] || return 0
     hw_items="$(echo "$hw_items" | tr '\n' ' ' | xargs)"
   fi
 
   if [[ "${system_tweaks^^}" == "TRUE" ]]; then
     gaming_items="$(ui_select_system_tweaks)"
+    [[ -n "$gaming_items" ]] || return 0
     gaming_items="$(echo "$gaming_items" | tr '\n' ' ' | xargs)"
   fi
 
   if [[ "${package_builds^^}" == "TRUE" ]]; then
     drivers="$(ui_select_package_builds)"
+    [[ -n "$drivers" ]] || return 0
     drivers="$(echo "$drivers" | tr '\n' ' ' | xargs)"
   fi
 
   if [[ "${initramfs_support^^}" == "TRUE" ]]; then
     initramfs_mods="$(ui_select_initramfs_modules)"
-    initramfs_mods="$(echo "$initramfs_mods" | tr '\n' ' ' | xargs)"
+    [[ -n "$initramfs_mods" ]] || return 0
   fi
 
   # Derive TARGET_VARIANT from neutralize-oobe checkbox state.
@@ -2063,6 +2067,9 @@ ui_main() {
       Configure)
         require_action_dependencies configure || continue
         bash "$BACKEND" --action configure || ui_error "Post-install configuration failed."
+        ;;
+      Validate)
+        run_backend_gui "Validating configuration..." --action validate
         ;;
       Reboot)
         yad --question \

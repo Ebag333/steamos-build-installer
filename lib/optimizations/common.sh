@@ -262,7 +262,7 @@ enable_service() {
 #   - /usr/lib/steam-perf/apply-boot (runner)
 #   - /usr/lib/steam-perf/boot.d/ (hook directory)
 #   - /etc/steam-perf/config.conf (configuration)
-#   - /etc/systemd/system/steam-perf.service (systemd unit)
+#   - /usr/lib/systemd/system/steam-perf.service (systemd unit)
 #
 # Returns 0 on success, 1 on failure.
 
@@ -307,7 +307,7 @@ install_boot_framework() {
   done
 
   # Install and enable systemd service
-  if ! install_file "$boot_src/steam-perf.service" "/etc/systemd/system/steam-perf.service"; then
+  if ! install_file "$boot_src/steam-perf.service" "/usr/lib/systemd/system/steam-perf.service"; then
     return 1
   fi
 

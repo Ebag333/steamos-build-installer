@@ -58,7 +58,7 @@ Usage:
   backend.sh --action <build|flash|flashless|list-images|list-devices|is-system-disk|configure|reboot> [options]
 
 Common:
-  --action ACTION           Required: build, flash, flashless, list-images, list-devices, is-system-disk, configure, reboot
+  --action ACTION           Required: build, flash, flashless, validate, list-images, list-devices, is-system-disk, configure, reboot
   --image FILE              Source image path (for build)
   --config FILE             Build configuration file
 
@@ -425,6 +425,24 @@ backend_configure() {
   exec bash "$BACKEND_DIR/post-install.sh"
 }
 
+backend_validate() {
+  load_workflow_libs "validate" "$BACKEND_DIR"
+
+  # Source the validate pipeline
+  # shellcheck source=lib/pipelines/pipeline_validate.sh
+  source "$BACKEND_DIR/pipelines/pipeline_validate.sh"
+
+  # Pass config and root via environment for the pipeline to read
+  export VALIDATE_CONFIG="${CONFIG_FILE:-}"
+  export VALIDATE_ROOT="${VALIDATE_ROOT:-/}"
+  export VALIDATE_ITEMS="${VALIDATE_ITEMS:-}"
+
+  register_validate_pipeline
+  if ! run_pipeline; then
+    exit 1
+  fi
+}
+
 backend_flashless() {
   [[ $EUID -eq 0 ]] || die "Flashless install requires root."
   [[ -n "$IMG" ]] || die "--image is required for flashless install"
@@ -491,6 +509,9 @@ case "$ACTION" in
     ;;
   configure)
     backend_configure
+    ;;
+  validate)
+    backend_validate
     ;;
   reboot)
     backend_reboot
