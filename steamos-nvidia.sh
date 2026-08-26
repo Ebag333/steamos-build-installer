@@ -415,12 +415,12 @@ ui_require_yad() {
   require_action_dependencies gui || exit 1
 }
 
-# _feed_progress LOGFILE RCFILE [LOG_LINES]
+# _feed_progress LOGFILE RCFILE [LOG_LINES] [RUNNER_PID]
 #   Emit yad/zenity-compatible progress lines from a backend log file.
 #   Blocks until RCFILE appears (runner finished), then emits 100.
 #   If LOG_LINES is "log", also emits "# " prefixed log lines for yad --enable-log.
 _feed_progress() {
-  local logfile="$1" rcfile="$2" show_log="${3:-}"
+  local logfile="$1" rcfile="$2" show_log="${3:-}" runner_pid="${4:-}"
   local offset=0 line
 
   while [[ ! -f "$rcfile" ]]; do
@@ -432,6 +432,11 @@ _feed_progress() {
         printf '# %s\n' "$line"
       fi
     else
+      # No new data yet.  If the runner is gone and rcfile still doesn't
+      # exist, the backend died without writing its exit code — bail out.
+      if [[ -n "$runner_pid" ]] && ! kill -0 "$runner_pid" 2>/dev/null; then
+        break
+      fi
       sleep 0.2
     fi
   done
@@ -607,7 +612,7 @@ run_backend_gui() {
   # _feed_progress blocks until the runner writes rcfile, drains remaining
   # output, emits 100, and exits.  No tail -F, no hangs.
   echo "[gui] starting yad progress dialog (primary)..." >&2
-  _feed_progress "$logfile" "$rcfile" log >"$progress_pipe" &
+  _feed_progress "$logfile" "$rcfile" log "$runner_pid" >"$progress_pipe" &
   local feed_pid=$!
   disown "$feed_pid" 2>/dev/null || true
 
@@ -636,7 +641,7 @@ run_backend_gui() {
     echo "[gui] Retrying with simpler yad flags..." >&2
     progress_pipe="$tmpdir/progress-simple"
     mkfifo "$progress_pipe"
-    _feed_progress "$logfile" "$rcfile" >"$progress_pipe" &
+    _feed_progress "$logfile" "$rcfile" "" "$runner_pid" >"$progress_pipe" &
     disown $! 2>/dev/null || true
 
     yad --progress \
@@ -654,7 +659,7 @@ run_backend_gui() {
         rm -f "$progress_pipe"
         progress_pipe="$tmpdir/progress-zenity"
         mkfifo "$progress_pipe"
-        _feed_progress "$logfile" "$rcfile" >"$progress_pipe" &
+        _feed_progress "$logfile" "$rcfile" "" "$runner_pid" >"$progress_pipe" &
         disown $! 2>/dev/null || true
         zenity --progress \
           --title="$title" \

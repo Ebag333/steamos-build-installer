@@ -22,7 +22,7 @@ exec > >(tee -a "$RUN_LOG") 2>&1
 
 # Resolve script directory: prefer /home (writable, latest), fall back to /usr
 if [[ -d "/home/.steamos-nvidia/lib" ]]; then
-  SCRIPT_DIR="/home/.steamos-nvidia"
+  SCRIPT_DIR="/home/.steamos-nvidia/lib"
 elif [[ -d "/usr/lib/steamos-nvidia" ]]; then
   SCRIPT_DIR="/usr/lib/steamos-nvidia"
 else

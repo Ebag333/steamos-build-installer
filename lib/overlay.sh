@@ -667,7 +667,85 @@ setup_clear_stale_state() {
     rm -rf "$m"
   done
 
+  # ============================================================
+  # 6. Clean up stale build root overlays from previous runs.
+  # ============================================================
+  _cleanup_stale_build_roots
+
   log "Stale build state is clean"
+}
+
+# Clean up stale build root overlays from previous runs.
+# Build roots live at $WORKDIR/build-roots/*/overlay-work.img.
+# Called from setup_clear_stale_state().
+_cleanup_stale_build_roots() {
+  local build_roots_dir="$WORKDIR/build-roots"
+  [[ -d "$build_roots_dir" ]] || return 0
+
+  local stale_img
+  for stale_img in "$build_roots_dir"/*/overlay-work.img; do
+    [[ -f "$stale_img" ]] || continue
+
+    local stale_dir="${stale_img%/overlay-work.img}"
+    local stale_loops
+    stale_loops="$(loops_for_file "$stale_img")"
+
+    if [[ -z "$stale_loops" ]]; then
+      # No loop attached — just remove the directory
+      log "  Removing orphaned build root: $stale_dir"
+      rm -rf "$stale_dir"
+      continue
+    fi
+
+    warn "Cleaning stale build root: $stale_dir"
+
+    # Unmount anything backed by these loops
+    while IFS= read -r loop; do
+      [[ -n "$loop" ]] || continue
+
+      local m
+      while IFS= read -r m; do
+        [[ -n "$m" ]] || continue
+        warn "  Unmounting stale build root mount: $m"
+        umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null || true
+      done < <(mounts_for_loop "$loop")
+
+      # Also try unmounting known paths inside the build root
+      local merged="$stale_dir/merged"
+      for m in "$merged/dev/pts" "$merged/dev/shm" "$merged/dev" "$merged/sys" "$merged/proc" "$merged/tmp" "$merged"; do
+        [[ -e "$m" ]] || continue
+        if mountpoint -q "$m" 2>/dev/null; then
+          warn "  Unmounting stale build root path: $m"
+          umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null || true
+        fi
+      done
+
+      local ovl_mnt="$stale_dir/overlay-mnt"
+      if [[ -e "$ovl_mnt" ]] && mountpoint -q "$ovl_mnt" 2>/dev/null; then
+        warn "  Unmounting stale build root workspace: $ovl_mnt"
+        umount "$ovl_mnt" 2>/dev/null || umount -l "$ovl_mnt" 2>/dev/null || true
+      fi
+
+      # Wait for ext4 release and detach
+      if wait_ext4_gone "$loop"; then
+        strict_detach_loop "$loop" || warn "  Could not detach $loop"
+      else
+        warn "  $loop ext4 superblock still alive; attempting detach anyway"
+        losetup -d "$loop" 2>/dev/null || true
+      fi
+    done <<<"$stale_loops"
+
+    # Remove directory if no loops remain
+    stale_loops="$(loops_for_file "$stale_img")"
+    if [[ -z "$stale_loops" ]]; then
+      rm -rf "$stale_dir"
+    else
+      warn "  Build root $stale_dir still has active loops; preserving"
+    fi
+  done
+
+  # Remove empty build-roots directory
+  rmdir "$build_roots_dir" 2>/dev/null || true
 }
 
 # Initialize pacman keyring in the overlay chroot.

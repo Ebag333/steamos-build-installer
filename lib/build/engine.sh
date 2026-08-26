@@ -107,12 +107,17 @@ _build_resolve_dep() {
 # Cleanup function for build_recipe trap
 _build_cleanup_build_root=""
 _build_cleanup_keep_failed=0
+_build_parent_exit_trap=""
 _build_exit_cleanup() {
   if ((_build_cleanup_keep_failed)) && [[ -n "$_build_cleanup_build_root" && -d "$_build_cleanup_build_root" ]]; then
     warn "Build failed — preserving build root: $_build_cleanup_build_root"
     warn "Enter with: arch-nspawn $_build_cleanup_build_root/root"
   else
     _build_destroy_root "$_build_cleanup_build_root"
+  fi
+  # Restore parent trap if it was saved
+  if [[ -n "$_build_parent_exit_trap" ]]; then
+    eval "$_build_parent_exit_trap"
   fi
 }
 
@@ -163,7 +168,15 @@ build_recipe() {
 
   local name="${NAME:?recipe.conf must set NAME}"
   local pkgbuild="$recipe_dir/PKGBUILD"
-  [[ -f "$pkgbuild" ]] || die "build_recipe: PKGBUILD not found in $recipe_dir"
+
+  # Check for direct install mode (INSTALL_CMD in recipe.conf)
+  local install_cmd=""
+  install_cmd="$(sed -n 's/^INSTALL_CMD=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
+
+  # PKGBUILD is required for package build mode, but not for direct install mode
+  if [[ -z "$install_cmd" ]]; then
+    [[ -f "$pkgbuild" ]] || die "build_recipe: PKGBUILD not found in $recipe_dir (required for package build mode)"
+  fi
 
   # Default output directory
   output_dir="${output_dir:-${WORKDIR:-/tmp}/build-output/$name}"
@@ -177,8 +190,9 @@ build_recipe() {
   # Load profile
   _build_load_profile "$profile"
 
-  # Source repository policy
+  # Source repository policy and initialize from recipe
   source "${BASH_SOURCE[0]%/*}/repository.sh"
+  repo_init "$recipe_conf"
 
   # Resolve and log dependency provenance
   _BUILD_DEP_LOG=()
@@ -197,11 +211,12 @@ build_recipe() {
   local build_root=""
   build_root="$(_build_create_root "$name" "$profile")" || die "Failed to create build root"
 
-  # Ensure cleanup on exit
+  # Ensure cleanup on exit — save and restore any parent EXIT trap
   _build_cleanup_build_root=""
   _build_cleanup_keep_failed=0
   _build_cleanup_build_root="$build_root"
   _build_cleanup_keep_failed="$keep_failed"
+  _build_parent_exit_trap="$(trap -p EXIT)" || true
   trap _build_exit_cleanup EXIT
 
   # Sync build root with profile
@@ -216,27 +231,41 @@ build_recipe() {
     return 1
   }
 
-  # Collect artifact
-  local artifact=""
-  artifact="$(_build_collect_artifact "$output_dir" "$name")" || {
-    warn "Failed to collect artifact for $name"
-    return 1
-  }
+  # For direct install mode, the driver installs directly into the overlay
+  # so there's no artifact to collect or verify
+  if [[ -n "$install_cmd" ]]; then
+    BUILD_ARTIFACT=""
+    log "Build complete: direct install mode (no artifact)"
+    log ""
+    log "IMPORTANT: Direct install mode installs into the build root overlay."
+    log "The driver is now available in the build root."
+  else
+    # Collect artifact (package build mode only)
+    local artifact=""
+    artifact="$(_build_collect_artifact "$output_dir" "$name")" || {
+      warn "Failed to collect artifact for $name"
+      return 1
+    }
 
-  # Verify artifact
-  _build_verify_artifact "$artifact" "$profile" || {
-    warn "Artifact verification failed for $name"
-    return 1
-  }
+    # Verify artifact
+    _build_verify_artifact "$artifact" "$profile" || {
+      warn "Artifact verification failed for $name"
+      return 1
+    }
 
-  BUILD_ARTIFACT="$artifact"
-  log "Build complete: $artifact"
-  log ""
-  log "IMPORTANT: build_recipe does NOT install into the target."
-  log "Use install_build_artifact separately to install the package."
+    BUILD_ARTIFACT="$artifact"
+    log "Build complete: $artifact"
+    log ""
+    log "IMPORTANT: build_recipe does NOT install into the target."
+    log "Use install_build_artifact separately to install the package."
+  fi
 
-  # Disable cleanup trap on success
+  # Disable cleanup trap on success, restore parent trap
   trap - EXIT
+  if [[ -n "$_build_parent_exit_trap" ]]; then
+    eval "$_build_parent_exit_trap"
+    _build_parent_exit_trap=""
+  fi
   _build_destroy_root "$build_root"
 
   return 0
@@ -543,9 +572,11 @@ EOF
 }
 
 # Record ABI-critical package versions from a root.
+# Args: $1 = root path, $2 = output file, $3 = recipe.conf path (optional)
 _build_record_package_versions() {
   local root="${1:?}"
   local output="${2:?}"
+  local recipe_conf="${3:-}"
 
   local dbpath=""
   if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
@@ -558,14 +589,22 @@ _build_record_package_versions() {
     return 0
   fi
 
-  # ABI-critical packages
+  # Base ABI-critical packages (generic system packages)
   local -a critical=(
     glibc gcc-libs
-    libdrm libva libglvnd mesa llvm-libs
-    gst-plugins-bad-libs gstreamer
     systemd linux linux-api-headers
-    vulkan-icd-loader vulkan-tools
   )
+
+  # Add recipe-specific ABI-critical packages if provided
+  if [[ -n "$recipe_conf" && -f "$recipe_conf" ]]; then
+    local extra_str
+    extra_str="$(sed -n 's/^ABI_CRITICAL_PKGS=(//;s/)//p' "$recipe_conf" 2>/dev/null)"
+    if [[ -n "$extra_str" ]]; then
+      local -a extra_pkgs
+      eval "extra_pkgs=($extra_str)"
+      critical+=("${extra_pkgs[@]}")
+    fi
+  fi
 
   : >"$output"
   local pkg

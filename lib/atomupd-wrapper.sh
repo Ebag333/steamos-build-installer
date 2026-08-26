@@ -19,8 +19,8 @@ elif [[ -d "/usr/lib/steamos-nvidia" ]]; then
   _NVIDIA_DIR="/usr/lib/steamos-nvidia"
 fi
 
-REPATCH="$_NVIDIA_DIR/repatch.sh"
-SELF_BUNDLE="$_NVIDIA_DIR/atomupd-wrapper.sh"
+REPATCH="$_NVIDIA_DIR/lib/repatch.sh"
+SELF_BUNDLE="$_NVIDIA_DIR/lib/atomupd-wrapper.sh"
 
 if [[ $EUID -eq 0 ]]; then
   LOGDIR=/home/.steamos-nvidia/logs

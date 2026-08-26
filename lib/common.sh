@@ -347,7 +347,7 @@ curl_retry() {
 # Weights are proportional to expected wall-clock time (not step count).
 # progress_emit "step_name" at each major milestone; the frontend parses
 # @@PROGRESS:XX@@ markers from the log stream to drive a yad progress bar.
-_PROGRESS_TOTAL=97
+_PROGRESS_TOTAL=98
 _PROGRESS_SO_FAR=0
 
 progress_emit() {
@@ -368,6 +368,7 @@ progress_emit() {
     configure_grub) weight=3 ;;
     patch_installer) weight=1 ;;
     finalize) weight=2 ;;
+    cleanup) weight=1 ;;
   esac
   if ((weight > 0)); then
     _PROGRESS_SO_FAR=$((_PROGRESS_SO_FAR + weight))
@@ -457,15 +458,20 @@ wait_ext4_gone() {
   local sys="/sys/fs/ext4/$name"
   local i
 
-  [[ -e "$sys" ]] || return 0
+  [[ -e "$sys" ]] && log "wait_ext4_gone: waiting for $loop ext4 superblock to release" || return 0
 
-  # Wait up to 15 seconds for the ext4 superblock to release.
-  # The jbd2 journal thread can hold it for several seconds after unmount
+  # Flush pending writes before waiting
+  sync 2>/dev/null || true
+  blockdev --flushbufs "$loop" 2>/dev/null || true
+
+  # Wait up to 30 seconds for the ext4 superblock to release.
+  # The jbd2 journal thread can hold it for 10-20 seconds after unmount
   # while flushing dirty metadata.
-  for ((i = 0; i < 150; i++)); do
-    [[ ! -e "$sys" ]] && return 0
-    # After 2 seconds, try flushing block device buffers to speed up release
-    if ((i == 20)); then
+  for ((i = 0; i < 300; i++)); do
+    [[ ! -e "$sys" ]] && log "wait_ext4_gone: $loop ext4 superblock released after ${i}00ms" && return 0
+    # Retry flushing every 5 seconds
+    if ((i > 0 && i % 50 == 0)); then
+      log "wait_ext4_gone: still waiting for $loop (${i}00ms elapsed, retrying flush)"
       blockdev --flushbufs "$loop" 2>/dev/null || true
     fi
     sleep 0.1
@@ -580,20 +586,28 @@ cleanup() {
   local rc=0
   local kid m
 
+  log "cleanup: starting (WORKDIR=${WORKDIR:-<unset>} LOOPDEV=${LOOPDEV:-<unset>} MERGED=${MERGED:-<unset>})"
+
   # Stop background children owned by this shell.
+  local kid_count=0
   for kid in $(jobs -p 2>/dev/null); do
     kill "$kid" 2>/dev/null || true
     wait "$kid" 2>/dev/null || true
+    ((kid_count++))
   done
+  ((kid_count > 0)) && log "cleanup: stopped $kid_count background child(ren)"
 
   # ------------------------------------------------------------
   # Overlay must disappear before its lower filesystem.
   # ------------------------------------------------------------
+  log "cleanup: tearing down overlay"
   if ! overlay_cleanup; then
     warn "cleanup: overlay teardown incomplete"
     warn "cleanup: refusing to unmount main image filesystems underneath it"
     rc=1
   else
+    log "cleanup: overlay teardown complete"
+
     # ----------------------------------------------------------
     # Main image filesystem mounts.
     # ----------------------------------------------------------
@@ -601,7 +615,9 @@ cleanup() {
       [[ -n "$m" ]] || continue
 
       if mountpoint -q "$m" 2>/dev/null; then
+        log "cleanup: unmounting $m"
         if ! strict_unmount "$m" "main image filesystem"; then
+          warn "cleanup: failed to unmount $m"
           rc=1
         fi
       fi
@@ -610,23 +626,37 @@ cleanup() {
     # ----------------------------------------------------------
     # Main image loop.
     # ----------------------------------------------------------
-    if ((rc == 0)) && [[ -n "${LOOPDEV:-}" ]]; then
-      while IFS= read -r m; do
-        [[ -n "$m" ]] || continue
-
-        if ! strict_unmount "$m" "remaining mount from $LOOPDEV"; then
-          rc=1
-        fi
-      done < <(mounts_for_loop "$LOOPDEV")
+    if [[ -n "${LOOPDEV:-}" ]]; then
+      log "cleanup: detaching main loop $LOOPDEV"
+      local loop_mounts
+      loop_mounts="$(mounts_for_loop "$LOOPDEV")"
+      if [[ -n "$loop_mounts" ]]; then
+        log "cleanup: $LOOPDEV has remaining mounts:"
+        while IFS= read -r m; do
+          [[ -n "$m" ]] && log "cleanup:   $m"
+        done <<<"$loop_mounts"
+      fi
 
       if ((rc == 0)); then
-        strict_detach_loop "$LOOPDEV" || rc=1
+        while IFS= read -r m; do
+          [[ -n "$m" ]] || continue
+          if ! strict_unmount "$m" "remaining mount from $LOOPDEV"; then
+            rc=1
+          fi
+        done < <(mounts_for_loop "$LOOPDEV")
+
+        if ((rc == 0)); then
+          strict_detach_loop "$LOOPDEV" || rc=1
+        fi
+      else
+        warn "cleanup: skipping loop detach (previous errors)"
       fi
     fi
   fi
 
   # Udev rule itself is safe to remove regardless of mount cleanup result.
   if [[ -n "${UDEV_RULE:-}" && -f "$UDEV_RULE" ]]; then
+    log "cleanup: removing udev rule $UDEV_RULE"
     rm -f "$UDEV_RULE"
     udevadm control --reload 2>/dev/null || true
   fi
@@ -655,13 +685,18 @@ cleanup() {
   fi
 
   # ------------------------------------------------------------
-  # Remove build workspace (always, even on failure).
+  # Remove build workspace (only if cleanup succeeded).
+  # If loop devices are still attached, rm -rf will fail silently
+  # and the loops become "lost" on the host when the namespace exits.
   # ------------------------------------------------------------
-  if [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]]; then
-    log "Cleaning up build workspace: $WORKDIR"
+  if ((rc == 0)) && [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]]; then
+    log "cleanup: removing build workspace: $WORKDIR"
     rm -rf "$WORKDIR" 2>/dev/null || warn "cleanup: could not remove $WORKDIR"
+  elif ((rc != 0)) && [[ -n "${WORKDIR:-}" ]]; then
+    warn "cleanup: skipping workspace removal (loop devices may still be attached)"
   fi
 
+  log "cleanup: finished (rc=$rc)"
   [[ "$_had_e" -eq 1 ]] && set -e
   return "$rc"
 }

@@ -65,7 +65,7 @@ build_custom_package() {
 # Example 3: Check repository policy
 check_repo_policy() {
   local merged="${1:?}"
-  local -a packages=(meson ninja libdrm glibc)
+  local -a packages=(meson ninja glibc gcc-libs)
 
   log "Checking repository policy for: ${packages[*]}"
 

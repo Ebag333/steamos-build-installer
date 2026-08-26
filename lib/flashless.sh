@@ -366,6 +366,55 @@ flashless_verify_partsets() {
 # ── /etc overlay state ────────────────────────────────────────────────────────
 
 # Write update channel configuration into the target rootfs.
+# ---------------------------------------------------------------------------
+# Password Migration
+# ---------------------------------------------------------------------------
+
+# Copy a user's password hash from the running system to a target rootfs.
+# Args: $1 = username, $2 = target root mount point
+# Returns 0 on success, 1 on failure.
+_flashless_copy_user_password() {
+  local user="$1"
+  local target_root="$2"
+  local hash
+
+  hash="$(getent shadow "$user" 2>/dev/null | cut -d: -f2)" || return 1
+
+  case "$hash" in
+    "")
+      warn "  No shadow entry/password hash for $user"
+      return 1
+      ;;
+    "!"* | "*"*)
+      log "  $user: account is locked/locked — copying lock state"
+      ;;
+    *)
+      log "  $user: copying password hash"
+      ;;
+  esac
+
+  chroot "$target_root" usermod -p "$hash" "$user" 2>/dev/null
+}
+
+# Migrate passwords from the running system to the target rootfs.
+# Primarily the deck account, but carries over any UID >= 1000 users.
+# Args: $1 = target root mount point
+_flashless_migrate_passwords() {
+  local target_root="$1"
+
+  log "Migrating user passwords to target slot"
+
+  # Always migrate deck
+  _flashless_copy_user_password "deck" "$target_root" || true
+
+  # Migrate any other human users (UID >= 1000, not nobody)
+  local user uid
+  while IFS=: read -r user _ uid _ _ _ _; do
+    [[ "$uid" -ge 1000 && "$user" != "nobody" && "$user" != "deck" ]] || continue
+    _flashless_copy_user_password "$user" "$target_root" || true
+  done <"/etc/passwd"
+}
+
 # The freshly formatted var has no overlay yet, so the rootfs lower /etc
 # is authoritative until the first boot creates the runtime overlay.
 flashless_restore_etc() {
@@ -396,6 +445,10 @@ flashless_restore_etc() {
   MNT="$target_mnt"
   configure_update_channel
   MNT="$_saved_mnt"
+
+  # Migrate user passwords from current slot to target slot.
+  # Primarily the deck account, but carries over any non-system users.
+  _flashless_migrate_passwords "$target_mnt"
 
   # Persist project files to /home so scripts stay current
   ensure_project_persisted

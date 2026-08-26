@@ -44,27 +44,42 @@ ARCH_FALLBACK_ALLOWED=(
   fakeroot
 )
 
-# Packages that must NEVER come from Arch repos (ABI-critical).
-# These must match the target image exactly.
-ARCH_FALLBACK_DENIED=(
+# Base packages that must NEVER come from Arch repos (ABI-critical).
+# These are generic system packages that always match the target image.
+ARCH_FALLBACK_DENIED_BASE=(
   glibc
   gcc-libs
   libgcc
   libstdc++
-  libdrm
-  libva
-  libglvnd
-  mesa
-  llvm
-  llvm-libs
   systemd
   linux
   linux-api-headers
-  vulkan-icd-loader
-  vulkan-tools
-  gst-plugins-bad-libs
-  gstreamer
 )
+
+# Runtime denied list (base + recipe-specific).
+# Populated by repo_init() from recipe.conf ARCH_FALLBACK_DENIED_EXTRA.
+ARCH_FALLBACK_DENIED=("${ARCH_FALLBACK_DENIED_BASE[@]}")
+
+# Initialize repository policy from recipe.conf.
+# Call this after sourcing a recipe to add recipe-specific denied packages.
+# Args: $1 = recipe.conf path (optional)
+repo_init() {
+  local recipe_conf="${1:-}"
+
+  # Start with base denied list
+  ARCH_FALLBACK_DENIED=("${ARCH_FALLBACK_DENIED_BASE[@]}")
+
+  # Add recipe-specific denied packages if provided
+  if [[ -n "$recipe_conf" && -f "$recipe_conf" ]]; then
+    local extra_str
+    extra_str="$(sed -n 's/^ARCH_FALLBACK_DENIED_EXTRA=(//;s/)//p' "$recipe_conf" 2>/dev/null)"
+    if [[ -n "$extra_str" ]]; then
+      local -a extra_pkgs
+      eval "extra_pkgs=($extra_str)"
+      ARCH_FALLBACK_DENIED+=("${extra_pkgs[@]}")
+    fi
+  fi
+}
 
 # Check if a package is allowed to come from Arch repos.
 # Args: $1 = package name

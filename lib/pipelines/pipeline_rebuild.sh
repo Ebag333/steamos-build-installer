@@ -479,12 +479,8 @@ phase_rebuild_reconcile() {
 
   mkdir -p "$NEWROOT/usr/lib/steamos-nvidia"
 
-  # Copy scripts from the resolved directory
-  local f
-  for f in "$nvidia_dir"/*.sh; do
-    [[ -f "$f" ]] && cp -f "$f" "$NEWROOT/usr/lib/steamos-nvidia/"
-  done
   # Copy library subdirectories (lib/, pipelines/, diagnostics/)
+  local d
   for d in lib pipelines diagnostics; do
     [[ -d "$nvidia_dir/$d" ]] && cp -a "$nvidia_dir/$d" "$NEWROOT/usr/lib/steamos-nvidia/"
   done

@@ -40,6 +40,18 @@ register_build_pipeline() {
 
 # Phase: Validate build inputs
 phase_build_validate() {
+  # Log the build configuration
+  if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
+    log "Build config: $CONFIG_FILE"
+    log "────────────────────────────────────────────"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && log "  $line"
+    done <"$CONFIG_FILE"
+    log "────────────────────────────────────────────"
+  else
+    log "No config file — using defaults"
+  fi
+
   # Validate source image
   [[ -n "$IMG" ]] || {
     warn "No source image specified"
@@ -328,6 +340,13 @@ phase_build_finalize() {
     cp -f "$CONFIG_FILE" "$manifest"
     log "Build manifest written: $manifest"
   fi
+
+  # Explicit cleanup with progress — keeps the yad window open
+  # until loop devices are detached and workspace is removed.
+  progress_emit cleanup
+  log "Cleaning up build environment"
+  cleanup || warn "Cleanup completed with warnings"
+  _cleanup_done=1
 
   return 0
 }

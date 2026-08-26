@@ -75,9 +75,9 @@ _validate_abi_block() {
 
   log "TEST 2: ABI package available only from Arch → repository policy blocks it"
 
-  # Check that libdrm is in the denied list
-  if repo_is_arch_allowed "libdrm"; then
-    warn "FAIL: libdrm should be denied from Arch"
+  # Check that a base ABI-critical package (glibc) is in the denied list
+  if repo_is_arch_allowed "glibc"; then
+    warn "FAIL: glibc should be denied from Arch"
     return 1
   fi
 
@@ -187,17 +187,17 @@ _validate_provenance_logging() {
     return 1
   }
 
-  # Resolve a dependency
-  _build_resolve_dep "$merged" "libdrm"
+  # Resolve a base ABI-critical dependency (glibc is always present)
+  _build_resolve_dep "$merged" "glibc"
   if [[ -z "$_DEP_VERSION" ]]; then
-    warn "FAIL: Could not resolve libdrm"
+    warn "FAIL: Could not resolve glibc"
     return 1
   fi
 
-  log "  libdrm: $_DEP_VERSION from $_DEP_SOURCE ($_DEP_CLASS)"
+  log "  glibc: $_DEP_VERSION from $_DEP_SOURCE ($_DEP_CLASS)"
 
   if [[ "$_DEP_CLASS" != "abi-locked" ]]; then
-    warn "FAIL: libdrm should be abi-locked, got $_DEP_CLASS"
+    warn "FAIL: glibc should be abi-locked, got $_DEP_CLASS"
     return 1
   fi
 

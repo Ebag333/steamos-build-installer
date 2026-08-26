@@ -623,7 +623,26 @@ configure_update_channel() {
     die "/etc/os-release not found at $osrelease_target"
   fi
 
-  # ── 5) Verify final state ────────────────────────────────────────────────
+  # ── 5) Stamp Variant in rauc system.conf ────────────────────────────────
+  # rauc status reads the variant from /etc/rauc/system.conf, not from
+  # preferences.conf or os-release.  If this file exists, keep it in sync.
+  local rauc_conf="$MNT/etc/rauc/system.conf"
+  if [[ -f "$rauc_conf" ]]; then
+    log "  Setting Variant=$variant in /etc/rauc/system.conf"
+    if grep -q "^Variant=" "$rauc_conf"; then
+      sed -i "s/^Variant=.*/Variant=$variant/" "$rauc_conf"
+    elif grep -q "^\[system\]" "$rauc_conf"; then
+      # [system] section exists but no Variant key — insert after [system]
+      sed -i "/^\[system\]/a Variant=$variant" "$rauc_conf"
+    else
+      # No [system] section — append one
+      printf '\n[system]\nVariant=%s\n' "$variant" >>"$rauc_conf"
+    fi
+  else
+    warn "  /etc/rauc/system.conf not found — skipping rauc variant stamp"
+  fi
+
+  # ── 6) Verify final state ────────────────────────────────────────────────
   log "Verifying update channel configuration"
   local verify_failed=0
   local prefs="$MNT/etc/steamos-atomupd/preferences.conf"
@@ -658,6 +677,16 @@ configure_update_channel() {
     verify_failed=1
   else
     log "  OK os-release VARIANT_ID=$variant"
+  fi
+
+  # rauc system.conf
+  if [[ -f "$rauc_conf" ]]; then
+    if ! grep -q "^Variant=$variant$" "$rauc_conf"; then
+      warn "  VERIFY FAILED: rauc system.conf Variant != $variant"
+      verify_failed=1
+    else
+      log "  OK rauc system.conf Variant=$variant"
+    fi
   fi
 
   if ((verify_failed)); then

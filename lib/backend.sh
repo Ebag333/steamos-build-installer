@@ -398,7 +398,8 @@ backend_build() {
   # shellcheck disable=SC2034
   LOOPDEV=""
   local _trap_rc
-  trap '_trap_rc=$?; trap - EXIT; set +e; cleanup; exit "$_trap_rc"' EXIT
+  _cleanup_done=0
+  trap '_trap_rc=$?; trap - EXIT; set +e; [[ "${_cleanup_done:-0}" -eq 0 ]] && cleanup; exit "$_trap_rc"' EXIT
 
   : "${UPSTREAM_DRIVER_REF:=master}"
   # shellcheck disable=SC2034
