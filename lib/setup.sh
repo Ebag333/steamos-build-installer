@@ -250,7 +250,7 @@ setup_loop_mount() {
     log "udev quarantine state for $part:"
     udevadm info -q property -n "$part" 2>/dev/null \
       | grep -E 'ID_PART_ENTRY_(UUID|NAME)|UDISKS_IGNORE|SYSTEMD_READY' \
-      | while IFS= read -r line; do
+      | while IFS="" read -r line; do
         log "  $line"
       done || true
   done
@@ -259,7 +259,7 @@ setup_loop_mount() {
   local link target collision=0
 
   # Check where the currently active by-partsets symlinks resolve.
-  while IFS= read -r link; do
+  while IFS="" read -r link; do
     target="$(readlink -f "$link" 2>/dev/null || true)"
     [[ -n "$target" ]] || continue
 
@@ -322,7 +322,7 @@ setup_loop_mount() {
 
   # Unmount any stale mounts backed by our loop partition (use the device,
   # not the UUID — cloned images may share UUIDs).
-  while IFS= read -r target; do
+  while IFS="" read -r target; do
     [[ -n "$target" ]] || continue
     strict_unmount "$target" "stale mount backed by $ROOTPART" \
       || die "Cannot unmount stale mount $target"
@@ -335,10 +335,13 @@ setup_mount_partitions() {
   log "Root partition RO: $(blockdev --getro "$ROOTPART")"
   log "Mounting rootfs ($ROOTPART) → $MNT"
   mount -o compress-force=zstd:3 "$ROOTPART" "$MNT"
+  track_mount "$MNT"
   log "Mounting efi ($EFIPART) → $EFIMNT"
   mount "$EFIPART" "$EFIMNT"
+  track_mount "$EFIMNT"
   log "Mounting home ($HOMEPART) → $HOMEMNT"
   mount "$HOMEPART" "$HOMEMNT"
+  track_mount "$HOMEMNT"
 
   log "Rootfs mount options: $(findmnt -no OPTIONS "$MNT")"
 

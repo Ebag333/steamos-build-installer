@@ -72,7 +72,7 @@ repo_init() {
   # Add recipe-specific denied packages if provided
   if [[ -n "$recipe_conf" && -f "$recipe_conf" ]]; then
     local extra_str
-    extra_str="$(sed -n 's/^ARCH_FALLBACK_DENIED_EXTRA=(//;s/)//p' "$recipe_conf" 2>/dev/null)"
+    extra_str="$(sed -n '/^ARCH_FALLBACK_DENIED_EXTRA=(/,/^)/{/^ARCH_FALLBACK_DENIED_EXTRA=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
     if [[ -n "$extra_str" ]]; then
       local -a extra_pkgs
       eval "extra_pkgs=($extra_str)"

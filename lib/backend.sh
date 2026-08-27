@@ -188,7 +188,7 @@ flash_discover_images() {
 
   for d in "${search_dirs[@]}"; do
     [[ -d "$d" ]] || continue
-    while IFS= read -r f; do
+    while IFS="" read -r f; do
       [[ -n "$f" ]] || continue
       flash_image_is_complete "$f" || continue
       found+=("$(readlink -f "$f")")
@@ -198,7 +198,7 @@ flash_discover_images() {
   ((${#found[@]})) || return 0
 
   # TSV: path, location, human size, modified epoch, modified display
-  printf '%s\n' "${found[@]}" | sort -u | while IFS= read -r f; do
+  printf '%s\n' "${found[@]}" | sort -u | while IFS="" read -r f; do
     local where
     case "$f" in
       /dev/shm/*) where="RAM build" ;;

@@ -47,7 +47,7 @@ umount_chroot_fs() {
     if [[ "$mode" == "strict" ]]; then
       warn "Failed to unmount chroot filesystems in $root"
       warn "  Active mounts:"
-      findmnt --target "$root" -o SOURCE,TARGET,OPTIONS 2>/dev/null | while IFS= read -r line; do
+      findmnt --target "$root" -o SOURCE,TARGET,OPTIONS 2>/dev/null | while IFS="" read -r line; do
         warn "    $line"
       done
       die "Could not cleanly unmount chroot in $root"
@@ -110,6 +110,100 @@ ensure_unmounted() {
   if mountpoint -q "$path" 2>/dev/null; then
     strict_unmount "$path" "$label" || die "Could not clean stale $label"
   fi
+}
+
+# ── Persistent mount tracking ─────────────────────────────────────────────────
+# A plain-text file ($MOUNTS_FILE, typically $WORKDIR/mounts) records every
+# mountpoint we create.  If the process is killed before cleanup runs, the next
+# build reads this file and tears down the leftovers in reverse order.
+#
+# Callers set MOUNTS_FILE before using these helpers.  All functions are no-ops
+# when MOUNTS_FILE is unset or the file does not exist.
+
+# Append a mountpoint to the tracking file.  Idempotent — duplicates are
+# silently skipped.
+# Args: $1 = mountpoint path
+track_mount() {
+  local mnt="${1:?track_mount: missing mountpoint}"
+  [[ -n "${MOUNTS_FILE:-}" ]] || return 0
+  mkdir -p "$(dirname "$MOUNTS_FILE")"
+  if [[ ! -f "$MOUNTS_FILE" ]] || ! grep -qxF "$mnt" "$MOUNTS_FILE" 2>/dev/null; then
+    printf '%s\n' "$mnt" >>"$MOUNTS_FILE"
+  fi
+}
+
+# Remove a mountpoint from the tracking file, but ONLY after verifying the
+# mount is actually gone.  No-op if the entry does not exist or the path is
+# still mounted.
+# Args: $1 = mountpoint path
+untrack_mount() {
+  local mnt="${1:?untrack_mount: missing mountpoint}"
+  [[ -n "${MOUNTS_FILE:-}" && -f "$MOUNTS_FILE" ]] || return 0
+
+  # Safety: refuse to untrack if the mount is still alive.
+  if mountpoint -q "$mnt" 2>/dev/null; then
+    warn "untrack_mount: $mnt is still mounted — refusing to remove from tracking"
+    return 1
+  fi
+
+  local tmp="${MOUNTS_FILE}.untrack.$$"
+  if grep -vxF "$mnt" "$MOUNTS_FILE" >"$tmp" 2>/dev/null; then
+    mv -- "$tmp" "$MOUNTS_FILE"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+# Read the tracking file and tear down every listed mount in reverse order.
+# Entries for mounts that are already gone are silently removed.  Entries whose
+# unmount fails are left in place for the next attempt.
+# Args: none (uses $MOUNTS_FILE)
+cleanup_tracked_mounts() {
+  [[ -n "${MOUNTS_FILE:-}" && -f "$MOUNTS_FILE" ]] || return 0
+
+  log "Cleaning up tracked mounts from $MOUNTS_FILE"
+
+  # Read into an array so we can process in reverse (LIFO).
+  local -a mounts=()
+  local line
+  while IFS="" read -r line; do
+    [[ -n "$line" ]] && mounts+=("$line")
+  done <"$MOUNTS_FILE"
+
+  if [[ ${#mounts[@]} -eq 0 ]]; then
+    rm -f "$MOUNTS_FILE"
+    return 0
+  fi
+
+  local rc=0
+  local i
+  for ((i = ${#mounts[@]} - 1; i >= 0; i--)); do
+    local m="${mounts[$i]}"
+
+    if ! mountpoint -q "$m" 2>/dev/null; then
+      # Already gone — just clean the entry.
+      untrack_mount "$m" 2>/dev/null || true
+      continue
+    fi
+
+    if strict_unmount "$m" "tracked mount"; then
+      untrack_mount "$m" 2>/dev/null || true
+    else
+      warn "cleanup_tracked_mounts: could not unmount $m"
+      rc=1
+    fi
+  done
+
+  # If everything was cleaned up, remove the file.
+  if ((rc == 0)) && [[ -f "$MOUNTS_FILE" ]]; then
+    local remaining
+    remaining="$(wc -l <"$MOUNTS_FILE" 2>/dev/null || echo 1)"
+    if [[ "$remaining" -eq 0 ]] 2>/dev/null; then
+      rm -f "$MOUNTS_FILE"
+    fi
+  fi
+
+  return "$rc"
 }
 
 # Log entry count and human-readable size of a directory tree.

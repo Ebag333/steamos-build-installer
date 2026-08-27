@@ -49,7 +49,7 @@ printf "%-12s %-8s %-11s %-45s %-18s %s\n" "------" "-----" "------" "----------
 unclaimed=0
 critical_missing=0
 
-while IFS= read -r line; do
+while IFS="" read -r line; do
   # Parse lspci -nn output:
   # "00:1f.0 ISA bridge [0601]: Intel Corporation Device [8086:7e02] (rev 20)"
   dev=$(echo "$line" | cut -d' ' -f1)
@@ -145,7 +145,7 @@ done
 # ---- claimed critical devices ----
 echo ""
 echo -e "${CYAN}=== Claimed critical devices ===${NC}"
-while IFS= read -r line; do
+while IFS="" read -r line; do
   dev=$(echo "$line" | cut -d' ' -f1)
   vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
   desc=$(echo "$line" | sed 's/^[^ ]* //; s/\[[0-9a-f]\{4\}:[0-9a-f]\{4\}\]//g; s/(rev [^)]*)//; s/  */ /g; s/ *$//')
@@ -160,7 +160,7 @@ done < <(lspci -nn)
 if [[ $unclaimed -gt 0 ]]; then
   echo ""
   echo -e "${CYAN}=== Unclaimed devices with available modules ===${NC}"
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     dev=$(echo "$line" | cut -d' ' -f1)
     vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
     desc=$(echo "$line" | sed 's/^[^ ]* //; s/\[[0-9a-f]\{4\}:[0-9a-f]\{4\}\]//g; s/(rev [^)]*)//; s/  */ /g; s/ *$//')
@@ -181,7 +181,7 @@ if [[ $unclaimed -gt 0 ]]; then
 
   echo ""
   echo -e "${CYAN}=== Unclaimed device details ===${NC}"
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     dev=$(echo "$line" | cut -d' ' -f1)
     driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
     [[ -n "$driver" ]] && continue

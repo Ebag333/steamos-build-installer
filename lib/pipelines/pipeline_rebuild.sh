@@ -274,9 +274,9 @@ phase_rebuild_overlay() {
   log "Preparing temporary ext4 overlay workspace"
 
   # Clean up any stale workspace
-  while IFS= read -r stale_loop; do
+  while IFS="" read -r stale_loop; do
     [[ -n "$stale_loop" ]] || continue
-    while IFS= read -r stale_mnt; do
+    while IFS="" read -r stale_mnt; do
       [[ -n "$stale_mnt" ]] || continue
       umount -R "$stale_mnt" 2>/dev/null \
         || umount -Rl "$stale_mnt" 2>/dev/null \

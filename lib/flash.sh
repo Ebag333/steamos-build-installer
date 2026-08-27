@@ -106,7 +106,7 @@ flash_preflight() {
   img_loops="$(losetup -j "$img" 2>/dev/null | cut -d: -f1)"
   if [[ -n "$img_loops" ]]; then
     local loop
-    while IFS= read -r loop; do
+    while IFS="" read -r loop; do
       [[ -n "$loop" ]] || continue
       local loop_ro loop_mounts
       loop_ro="$(lsblk -ndo RO "$loop" 2>/dev/null || true)"
@@ -115,7 +115,7 @@ flash_preflight() {
       # Capture what's mounted on the loop device itself.
       if [[ -n "$loop_mounts" ]]; then
         img_loop_detail+="    $loop (RO=$loop_ro):"$'\n'
-        while IFS= read -r line; do
+        while IFS="" read -r line; do
           img_loop_detail+="      $line"$'\n'
         done <<<"$loop_mounts"
       fi
@@ -131,7 +131,7 @@ flash_preflight() {
           local child_ro
           child_ro="$(lsblk -ndo RO "$child" 2>/dev/null || true)"
           img_loop_detail+="    $child (RO=$child_ro):"$'\n'
-          while IFS= read -r line; do
+          while IFS="" read -r line; do
             img_loop_detail+="      $line"$'\n'
           done <<<"$child_mnt"
         fi
@@ -261,7 +261,7 @@ flash_preflight() {
     echo "  GPT:         ✗ INVALID"
     if [[ -n "$img_gpt_detail" ]]; then
       # Show only error/warning lines, not the full dump.
-      echo "$img_gpt_detail" | grep -iE 'error|warn|caution|problem|invalid' | head -5 | while IFS= read -r line; do
+      echo "$img_gpt_detail" | grep -iE 'error|warn|caution|problem|invalid' | head -5 | while IFS="" read -r line; do
         echo "    $line"
       done
     fi
@@ -463,7 +463,7 @@ flash_write() {
     local mount_count
     mount_count="$(printf '%s' "$mounts" | wc -l)"
     echo "Unmounting $mount_count target partition(s)..."
-    while IFS= read -r mp; do
+    while IFS="" read -r mp; do
       [[ -n "$mp" ]] || continue
       if umount "$mp" 2>/dev/null; then
         echo "  ✓ $mp"
@@ -514,7 +514,7 @@ flash_write() {
       | dd of="$target" bs="$bs" conv=fsync oflag=sync &
     local dd_pid=$!
 
-    while IFS= read -r pct; do
+    while IFS="" read -r pct; do
       [[ "$pct" =~ ^[0-9]+$ ]] || continue
       ((pct == last_pct)) && continue
       last_pct=$pct
@@ -528,7 +528,7 @@ flash_write() {
     rm -f "$flash_fifo"
   else
     dd if="$img" of="$target" bs="$bs" status=progress conv=fsync oflag=sync 2>&1 \
-      | while IFS= read -r line; do
+      | while IFS="" read -r line; do
         if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+bytes ]]; then
           local written="${BASH_REMATCH[1]}"
           local pct=$((written * 100 / img_bytes))

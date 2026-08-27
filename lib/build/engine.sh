@@ -32,8 +32,8 @@ _build_log_dep() {
 # Print the dependency provenance table.
 _build_print_deps() {
   log "Dependency resolution"
-  printf '  %-20s %-16s %-24s %s\n' "PACKAGE" "VERSION" "SOURCE" "CLASS" | while IFS= read -r line; do log "$line"; done
-  printf '  %-20s %-16s %-24s %s\n' "-------" "-------" "------" "-----" | while IFS= read -r line; do log "$line"; done
+  printf '  %-20s %-16s %-24s %s\n' "PACKAGE" "VERSION" "SOURCE" "CLASS" | while IFS="" read -r line; do log "$line"; done
+  printf '  %-20s %-16s %-24s %s\n' "-------" "-------" "------" "-----" | while IFS="" read -r line; do log "$line"; done
   local entry
   for entry in "${_BUILD_DEP_LOG[@]}"; do
     log "  $entry"
@@ -113,7 +113,12 @@ _build_exit_cleanup() {
     warn "Build failed — preserving build root: $_build_cleanup_build_root"
     warn "Enter with: arch-nspawn $_build_cleanup_build_root/root"
   else
-    _build_destroy_root "$_build_cleanup_build_root"
+    if [[ -n "$_build_cleanup_build_root" && -d "$_build_cleanup_build_root" ]]; then
+      _build_destroy_root "$_build_cleanup_build_root" || {
+        warn "Build root cleanup failed, attempting force cleanup"
+        _build_force_destroy_root "$_build_cleanup_build_root"
+      }
+    fi
   fi
   # Restore parent trap if it was saved
   if [[ -n "$_build_parent_exit_trap" ]]; then
@@ -420,6 +425,21 @@ _build_destroy_root() {
   esac
 }
 
+# Force destroy a build root (aggressive cleanup for failed builds).
+_build_force_destroy_root() {
+  local build_root="${1:?}"
+  local backend="${BUILD_BACKEND:-overlay-chroot}"
+
+  case "$backend" in
+    arch-devtools)
+      _build_devtools_destroy_root "$build_root"
+      ;;
+    overlay-chroot)
+      _build_overlay_force_destroy_root "$build_root"
+      ;;
+  esac
+}
+
 # Sync build root with profile (repos, packages).
 _build_sync_root() {
   local build_root="${1:?}"
@@ -598,7 +618,7 @@ _build_record_package_versions() {
   # Add recipe-specific ABI-critical packages if provided
   if [[ -n "$recipe_conf" && -f "$recipe_conf" ]]; then
     local extra_str
-    extra_str="$(sed -n 's/^ABI_CRITICAL_PKGS=(//;s/)//p' "$recipe_conf" 2>/dev/null)"
+    extra_str="$(sed -n '/^ABI_CRITICAL_PKGS=(/,/^)/{/^ABI_CRITICAL_PKGS=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
     if [[ -n "$extra_str" ]]; then
       local -a extra_pkgs
       eval "extra_pkgs=($extra_str)"

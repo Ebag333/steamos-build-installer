@@ -72,14 +72,14 @@ compute_new_pkgs() {
   # shellcheck disable=SC2034
   if [[ -n "$extra_exclude" && -f "$extra_exclude" ]]; then
     mapfile -t NEW_PKGS < <(
-      LC_ALL=C comm -13 "$before" "$after" \
+      env LC_ALL=C comm -13 "$before" "$after" \
         | awk '{print $1}' \
         | grep -Ev "$BUILD_ONLY_RE" \
         | grep -vxFf "$extra_exclude"
     )
   else
     mapfile -t NEW_PKGS < <(
-      LC_ALL=C comm -13 "$before" "$after" \
+      env LC_ALL=C comm -13 "$before" "$after" \
         | awk '{print $1}' \
         | grep -Ev "$BUILD_ONLY_RE"
     )
@@ -87,9 +87,9 @@ compute_new_pkgs() {
 
   # shellcheck disable=SC2034
   mapfile -t REMOVED_PKGS < <(
-    LC_ALL=C comm -23 \
-      <(awk '{print $1}' "$before" | LC_ALL=C sort -u) \
-      <(awk '{print $1}' "$after" | LC_ALL=C sort -u)
+    env LC_ALL=C comm -23 \
+      <(awk '{print $1}' "$before" | env LC_ALL=C sort -u) \
+      <(awk '{print $1}' "$after" | env LC_ALL=C sort -u)
   )
 }
 
@@ -100,7 +100,7 @@ snapshot_driver_packages() {
   local output="${1:?snapshot_driver_packages: missing output file}"
 
   mkdir -p "$(dirname "$output")"
-  in_chroot "pacman -Q" | LC_ALL=C sort >"$output"
+  in_chroot "pacman -Q" | env LC_ALL=C sort >"$output"
 }
 
 # Generate payload file list from packages.
@@ -124,7 +124,7 @@ generate_payload_filelist() {
     local merged="${MERGED:-}"
     if [[ -n "$merged" ]]; then
       local path
-      while IFS= read -r path; do
+      while IFS="" read -r path; do
         [[ -e "$merged$path" || -L "$merged$path" ]] \
           || die "Registered custom payload file is missing: $path"
       done <"$custom"
@@ -171,7 +171,7 @@ remove_replaced_packages() {
 
   for pkg in "$@"; do
     log "  Removing replaced package files: $pkg"
-    while IFS= read -r f; do
+    while IFS="" read -r f; do
       [[ "$f" == */ ]] && continue
       rm -f "$root$f" 2>/dev/null || true
     done < <(in_chroot "pacman -Qlq $pkg" 2>/dev/null)
@@ -571,127 +571,21 @@ build_hid() {
 }
 
 # Configure the OS update channel (variant + branch) and optionally suppress
-# the OOBE first-boot flow.  Writes config files directly (offline-safe)
-# rather than calling atomupd-manager, which requires a live D-Bus session.
+# the OOBE first-boot flow.  Delegates to system-config.sh for all writes.
 #
 # Uses globals: TARGET_VARIANT, UPDATE_BRANCH, MNT
 configure_update_channel() {
   local variant="${TARGET_VARIANT:-steamdeck}"
   local branch="${UPDATE_BRANCH:-stable}"
-  local suppress_oobe=0
 
-  [[ "$variant" == "steamdeck" ]] && suppress_oobe=1
+  log "Configuring update channel: variant=$variant branch=$branch"
 
-  log "Configuring update channel: variant=$variant branch=$branch (suppress_oobe=$suppress_oobe)"
+  apply_system_config variant "$MNT" "$variant"
+  apply_system_config update-branch "$MNT" "$branch"
 
-  # ── 1) Write atomupd preferences.conf (offline — no D-Bus needed) ────────
-  _apply_update_branch "$MNT" "$branch" "$variant"
-
-  if ((suppress_oobe)); then
-    # ── 2) Neutralize the destructive OOBE Steam reset in steam-jupiter ────
-    apply_optimization_for_item "neutralize-oobe" "chroot" "$MNT" \
-      || die "failed to neutralize destructive OOBE Steam reset in steam-jupiter"
-  fi
-
-  # ── 3) Stamp variant in manifest.json (canonical path, not symlink) ──────
-  # /etc/steamos-atomupd/manifest.json may symlink into /usr/lib; resolve
-  # inside the target root namespace so relative symlinks don't escape.
-  local manifest_target manifest
-  manifest_target="$(chroot "$MNT" readlink -f /usr/lib/steamos-atomupd/manifest.json 2>/dev/null)" \
-    || manifest_target="/usr/lib/steamos-atomupd/manifest.json"
-  manifest="$MNT$manifest_target"
-  if [[ -f "$manifest" ]]; then
-    log "  Setting variant=$variant in $manifest_target"
-    sed -i "s/\"variant\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"variant\": \"$variant\"/" "$manifest"
-  else
-    die "manifest.json not found at $manifest_target"
-  fi
-
-  # ── 4) Stamp VARIANT_ID in os-release (canonical path, not symlink) ──────
-  local osrelease_target os_release
-  osrelease_target="$(chroot "$MNT" readlink -f /etc/os-release 2>/dev/null)" \
-    || osrelease_target="/etc/os-release"
-  os_release="$MNT$osrelease_target"
-  if [[ -f "$os_release" ]]; then
-    log "  Setting VARIANT_ID=$variant in $osrelease_target"
-    if grep -q "^VARIANT_ID=" "$os_release"; then
-      sed -i "s/^VARIANT_ID=.*/VARIANT_ID=$variant/" "$os_release"
-    else
-      echo "VARIANT_ID=$variant" >>"$os_release"
-    fi
-  else
-    die "/etc/os-release not found at $osrelease_target"
-  fi
-
-  # ── 5) Stamp Variant in rauc system.conf ────────────────────────────────
-  # rauc status reads the variant from /etc/rauc/system.conf, not from
-  # preferences.conf or os-release.  If this file exists, keep it in sync.
-  local rauc_conf="$MNT/etc/rauc/system.conf"
-  if [[ -f "$rauc_conf" ]]; then
-    log "  Setting Variant=$variant in /etc/rauc/system.conf"
-    if grep -q "^Variant=" "$rauc_conf"; then
-      sed -i "s/^Variant=.*/Variant=$variant/" "$rauc_conf"
-    elif grep -q "^\[system\]" "$rauc_conf"; then
-      # [system] section exists but no Variant key — insert after [system]
-      sed -i "/^\[system\]/a Variant=$variant" "$rauc_conf"
-    else
-      # No [system] section — append one
-      printf '\n[system]\nVariant=%s\n' "$variant" >>"$rauc_conf"
-    fi
-  else
-    warn "  /etc/rauc/system.conf not found — skipping rauc variant stamp"
-  fi
-
-  # ── 6) Verify final state ────────────────────────────────────────────────
   log "Verifying update channel configuration"
-  local verify_failed=0
-  local prefs="$MNT/etc/steamos-atomupd/preferences.conf"
-
-  # preferences.conf — variant
-  if ! grep -q "^Variant=$variant$" "$prefs"; then
-    warn "  VERIFY FAILED: preferences.conf Variant != $variant"
-    verify_failed=1
-  else
-    log "  OK preferences.conf Variant=$variant"
-  fi
-
-  # preferences.conf — branch (delegate to system-config verify)
-  if ! _verify_update_branch "$MNT" "$branch"; then
-    warn "  VERIFY FAILED: preferences.conf Branch != $branch"
-    verify_failed=1
-  else
-    log "  OK preferences.conf Branch=$branch"
-  fi
-
-  # manifest.json
-  if ! grep -q "\"variant\"[[:space:]]*:[[:space:]]*\"$variant\"" "$manifest"; then
-    warn "  VERIFY FAILED: manifest.json variant != $variant"
-    verify_failed=1
-  else
-    log "  OK manifest.json variant=$variant"
-  fi
-
-  # os-release
-  if ! grep -q "^VARIANT_ID=$variant$" "$os_release"; then
-    warn "  VERIFY FAILED: os-release VARIANT_ID != $variant"
-    verify_failed=1
-  else
-    log "  OK os-release VARIANT_ID=$variant"
-  fi
-
-  # rauc system.conf
-  if [[ -f "$rauc_conf" ]]; then
-    if ! grep -q "^Variant=$variant$" "$rauc_conf"; then
-      warn "  VERIFY FAILED: rauc system.conf Variant != $variant"
-      verify_failed=1
-    else
-      log "  OK rauc system.conf Variant=$variant"
-    fi
-  fi
-
-  if ((verify_failed)); then
-    die "Update channel verification failed — build aborted"
-  fi
+  verify_system_config variant "$MNT" "$variant"
+  verify_system_config update-branch "$MNT" "$branch"
 
   log "Update channel configured and verified"
 }

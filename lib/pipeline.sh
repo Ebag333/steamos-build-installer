@@ -87,6 +87,13 @@ run_pipeline() {
     log "Phase $phase_num/$total_phases: $desc"
     step "$desc"
 
+    # Guard: $func must be a declared function, not a shell fragment string.
+    if [[ -z "$func" ]] || ! declare -F "$func" >/dev/null 2>&1; then
+      warn "Phase '$phase' has invalid function: '$func'"
+      _pipeline_report_failure "$phase" "$phase_num" "$total_phases"
+      return 1
+    fi
+
     # Execute phase
     local phase_start
     phase_start=$(date +%s)

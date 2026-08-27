@@ -217,11 +217,7 @@ EOF
   flashless_register_mount "$verify_mnt"
 
   # Check manifest variant matches what we built.
-  local manifest="$verify_mnt/usr/lib/steamos-atomupd/manifest.json"
-  if [[ ! -f "$manifest" ]]; then
-    die "Source rootfs-A missing manifest.json — not a valid SteamOS image"
-  fi
-  if ! grep -q "\"variant\"[[:space:]]*:[[:space:]]*\"${TARGET_VARIANT:-steamdeck}\"" "$manifest"; then
+  if ! verify_system_config variant "$verify_mnt" "${TARGET_VARIANT:-steamdeck}"; then
     die "Source rootfs-A variant does not match TARGET_VARIANT=${TARGET_VARIANT:-steamdeck}"
   fi
 
@@ -596,65 +592,9 @@ flashless_verify_final() {
 
   local verify_failed=0
 
-  # manifest.json — must exist and match.
-  local manifest="$target_mnt/usr/lib/steamos-atomupd/manifest.json"
-  if [[ ! -f "$manifest" ]]; then
-    warn "  VERIFY FAILED: manifest.json missing"
+  # variant — manifest.json (both lib paths) + os-release
+  if ! verify_system_config variant "$target_mnt" "${TARGET_VARIANT:-steamdeck}"; then
     verify_failed=1
-  elif ! grep -q "\"variant\"[[:space:]]*:[[:space:]]*\"${TARGET_VARIANT:-steamdeck}\"" "$manifest"; then
-    warn "  VERIFY FAILED: manifest.json variant mismatch"
-    verify_failed=1
-  else
-    log "  OK manifest.json variant=${TARGET_VARIANT:-steamdeck}"
-  fi
-
-  # os-release — must exist and match.  Check both canonical paths;
-  # configure_update_channel writes to whichever /etc/os-release resolves to.
-  local os_release=""
-  local _candidate
-  for _candidate in "$target_mnt/usr/lib/os-release" "$target_mnt/etc/os-release"; do
-    if [[ -f "$_candidate" ]] && grep -q "^VARIANT_ID=" "$_candidate" 2>/dev/null; then
-      os_release="$_candidate"
-      break
-    fi
-  done
-  # Fall back to whichever exists even without VARIANT_ID (will fail the check).
-  if [[ -z "$os_release" ]]; then
-    for _candidate in "$target_mnt/usr/lib/os-release" "$target_mnt/etc/os-release"; do
-      [[ -f "$_candidate" ]] && {
-        os_release="$_candidate"
-        break
-      }
-    done
-  fi
-  if [[ ! -f "$os_release" ]]; then
-    warn "  VERIFY FAILED: os-release missing"
-    verify_failed=1
-  elif ! grep -q "^VARIANT_ID=${TARGET_VARIANT:-steamdeck}$" "$os_release"; then
-    warn "  VERIFY FAILED: os-release VARIANT_ID mismatch"
-    verify_failed=1
-  else
-    log "  OK os-release VARIANT_ID=${TARGET_VARIANT:-steamdeck}"
-  fi
-
-  # preferences.conf — must exist and match.
-  local prefs="$target_mnt/etc/steamos-atomupd/preferences.conf"
-  if [[ ! -f "$prefs" ]]; then
-    warn "  VERIFY FAILED: preferences.conf missing"
-    verify_failed=1
-  else
-    if ! grep -q "^Variant=${TARGET_VARIANT:-steamdeck}$" "$prefs"; then
-      warn "  VERIFY FAILED: preferences.conf Variant mismatch"
-      verify_failed=1
-    else
-      log "  OK preferences.conf Variant=${TARGET_VARIANT:-steamdeck}"
-    fi
-    if ! grep -q "^Branch=${UPDATE_BRANCH:-stable}$" "$prefs"; then
-      warn "  VERIFY FAILED: preferences.conf Branch mismatch"
-      verify_failed=1
-    else
-      log "  OK preferences.conf Branch=${UPDATE_BRANCH:-stable}"
-    fi
   fi
 
   umount "$target_mnt" 2>/dev/null || umount -l "$target_mnt" 2>/dev/null
@@ -752,7 +692,7 @@ flashless_install() {
   # Phase 6: verify partset symlinks returned to the real target partitions.
   flashless_verify_partsets
 
-  # Phase 7: restore /etc state (preferences.conf, manifest, os-release).
+  # Phase 7: restore /etc state (manifest, os-release).
   flashless_restore_etc
 
   # Phase 8: rebuild boot environment via steamos-chroot.
@@ -770,6 +710,21 @@ flashless_install() {
   trap - EXIT
 
   log "=== Flashless install complete — slot $FL_TARGET is ready ==="
+
+  local out
+  if out="$(steamos-bootconf selected-image 2>&1)"; then
+    log "  selected-image: $out"
+  else
+    log "  selected-image: (unavailable)"
+  fi
+
+  if command -v rauc >/dev/null 2>&1; then
+    log "  RAUC status:"
+    rauc status --detailed 2>&1 | while IFS="" read -r line; do
+      log "    $line"
+    done
+  fi
+
   log "Reboot to activate.  If the new slot fails to boot, SteamOS will"
   log "automatically fall back to slot $FL_CURRENT."
 }

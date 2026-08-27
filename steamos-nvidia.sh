@@ -2006,6 +2006,7 @@ ui_diagnostics() {
         output+=("=== steamos-bootconf ===")
         if command -v steamos-bootconf >/dev/null 2>&1; then
           output+=("  this-image: $(steamos-bootconf this-image 2>&1 || echo '(failed)')")
+          output+=("  selected-image: $(steamos-bootconf selected-image 2>&1 || echo '(failed)')")
           output+=("  list-images:")
           output+=("$(steamos-bootconf list-images 2>&1 | sed 's/^/    /' || echo '  (failed)')")
         else

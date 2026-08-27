@@ -58,13 +58,13 @@ Failed step: ${CURRENT_STEP:-unknown}
 
 Log: ${RUN_LOG:-unknown}"
 
-  echo
-  echo "=== SLOT STATE ==="
+  echo >&2
+  echo "=== SLOT STATE ===" >&2
   rauc status --detailed 2>&1 || true
   steamos-bootconf list-images 2>&1 || true
 
   for _slot in A B; do
-    echo "--- $_slot ---"
+    echo "--- $_slot ---" >&2
     steamos-bootconf --image "$_slot" config \
       --get boot-attempts \
       --get boot-requested-at \
@@ -73,14 +73,14 @@ Log: ${RUN_LOG:-unknown}"
   done
 
   if [[ -n "${NEWROOT:-}" ]] && mountpoint -q "$NEWROOT" 2>/dev/null; then
-    echo
-    echo "=== TARGET ROOTFS ==="
+    echo >&2
+    echo "=== TARGET ROOTFS ===" >&2
     findmnt "$NEWROOT" 2>&1 || true
     btrfs filesystem usage "$NEWROOT" 2>&1 || true
 
     if [[ -n "${KVER:-}" ]]; then
-      echo
-      echo "=== TARGET DRIVER STATE ==="
+      echo >&2
+      echo "=== TARGET DRIVER STATE ===" >&2
       chroot "$NEWROOT" dkms status 2>&1 || true
       chroot "$NEWROOT" pacman -Q nvidia-utils 2>&1 || true
     fi

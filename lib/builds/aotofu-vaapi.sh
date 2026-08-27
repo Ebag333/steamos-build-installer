@@ -375,7 +375,7 @@ _aotofu_preflight_check() {
           qkk="$(pacman -Qkk "$pkg" 2>&1 | grep -E 'missing|warning' | head -5)"
           if [[ -n "$qkk" ]]; then
             warn "      pacman -Qkk $pkg:"
-            while IFS= read -r line; do
+            while IFS="" read -r line; do
               warn "        $line"
             done <<<"$qkk"
           fi
@@ -384,7 +384,7 @@ _aotofu_preflight_check() {
           qkk="$(chroot "$root" pacman -Qkk "$pkg" 2>&1 | grep -E 'missing|warning' | head -5)"
           if [[ -n "$qkk" ]]; then
             warn "      pacman -Qkk $pkg (in chroot):"
-            while IFS= read -r line; do
+            while IFS="" read -r line; do
               warn "        $line"
             done <<<"$qkk"
           fi
@@ -446,9 +446,9 @@ _aotofu_snapshot_packages() {
   local root="${1:?}"
   local output="${2:?}"
   if [[ "$root" == "/" ]]; then
-    pacman -Qq | LC_ALL=C sort >"$output"
+    pacman -Qq | env LC_ALL=C sort >"$output"
   else
-    chroot "$root" pacman -Qq | LC_ALL=C sort >"$output"
+    chroot "$root" pacman -Qq | env LC_ALL=C sort >"$output"
   fi
 }
 
@@ -687,10 +687,10 @@ _aotofu_record_build_only_delta() {
 
   if [[ -f "$runtime" && -f "$build" ]]; then
     local count
-    count="$(LC_ALL=C comm -13 "$runtime" "$build" | wc -l)"
+    count="$(env LC_ALL=C comm -13 "$runtime" "$build" | wc -l)"
     if ((count > 0)); then
-      LC_ALL=C comm -13 "$runtime" "$build" >>"$exclusions"
-      LC_ALL=C sort -u -o "$exclusions" "$exclusions"
+      env LC_ALL=C comm -13 "$runtime" "$build" >>"$exclusions"
+      env LC_ALL=C sort -u -o "$exclusions" "$exclusions"
       log "  Build-only delta: $count packages recorded for exclusion"
     else
       log "  Build-only delta: 0 packages"
@@ -1249,7 +1249,7 @@ apply_aotofu_vaapi_live() (
     # Remove build-only packages actually introduced by this transaction
     if [[ -f "$workdir/live-runtime.txt" && -f "$workdir/live-build.txt" ]]; then
       mapfile -t _added_build_pkgs < <(
-        LC_ALL=C comm -13 "$workdir/live-runtime.txt" "$workdir/live-build.txt"
+        env LC_ALL=C comm -13 "$workdir/live-runtime.txt" "$workdir/live-build.txt"
       )
       if ((${#_added_build_pkgs[@]})); then
         log "  Removing build-only dependencies"

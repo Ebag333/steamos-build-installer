@@ -37,6 +37,14 @@ run_action() {
 
   printf '%s... ' "$label"
 
+  # Guard: $fn must be a declared function, not a shell fragment string.
+  if [[ -z "$fn" ]] || ! declare -F "$fn" >/dev/null 2>&1; then
+    echo "✗"
+    FAIL=$((FAIL + 1))
+    warn "run_action: '$fn' is not a valid function"
+    return 1
+  fi
+
   if "$fn"; then
     echo "✓"
     PASS=$((PASS + 1))
@@ -86,7 +94,7 @@ echo
 
 found=0
 
-while IFS= read -r line; do
+while IFS="" read -r line; do
     dev="$(echo "$line" | cut -d' ' -f1)"
     desc="$(echo "$line" | cut -d' ' -f2-)"
 
@@ -622,7 +630,7 @@ detect_roots() {
   ROOT_CURRENT_LABEL=""
 
   # Find rootfs-A and rootfs-B partitions
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     local dev label
     dev="/dev/$(echo "$line" | awk '{print $1}')"
     label="$(echo "$line" | awk '{print $2}')"

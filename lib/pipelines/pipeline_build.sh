@@ -44,7 +44,7 @@ phase_build_validate() {
   if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
     log "Build config: $CONFIG_FILE"
     log "────────────────────────────────────────────"
-    while IFS= read -r line; do
+    while IFS="" read -r line; do
       [[ -n "$line" ]] && log "  $line"
     done <"$CONFIG_FILE"
     log "────────────────────────────────────────────"
@@ -118,9 +118,16 @@ phase_build_setup() {
   OVL_MNT="$WORKDIR/overlay-mnt"
   OVL_LOOPDEV=""
 
+  # Persistent mount tracking — survives killed processes.
+  MOUNTS_FILE="$WORKDIR/mounts"
+
   # Clear stale state and create directories
   setup_clear_stale_state
   setup_dirs
+
+  # Snapshot system state before build for hygiene comparison
+  # Use /tmp so the snapshot survives cleanup removing WORKDIR
+  snapshot_system_state "/tmp/.steamos-nvidia-state-before-$$"
 
   return 0
 }
@@ -341,12 +348,16 @@ phase_build_finalize() {
     log "Build manifest written: $manifest"
   fi
 
-  # Explicit cleanup with progress — keeps the yad window open
-  # until loop devices are detached and workspace is removed.
+  # finalize() already ran cleanup() and set _cleanup_done=1.
+  # Emit the progress event so the yad window shows the phase.
   progress_emit cleanup
-  log "Cleaning up build environment"
-  cleanup || warn "Cleanup completed with warnings"
-  _cleanup_done=1
+
+  # Snapshot system state after cleanup and compare with before-build state
+  local _state_before="/tmp/.steamos-nvidia-state-before-$$"
+  local _state_after="/tmp/.steamos-nvidia-state-after-$$"
+  snapshot_system_state "$_state_after"
+  compare_system_state "$_state_before" "$_state_after" "build hygiene" || true
+  rm -f "$_state_before" "$_state_after"
 
   return 0
 }

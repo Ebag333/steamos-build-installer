@@ -60,6 +60,7 @@ _build_overlay_create_root() {
     losetup -d "$ovl_loop" 2>/dev/null
     return 1
   }
+  track_mount "$ovl_mnt"
 
   mkdir -p "$ovl_mnt/upper" "$ovl_mnt/ovlwork"
 
@@ -72,13 +73,19 @@ _build_overlay_create_root() {
     losetup -d "$ovl_loop" 2>/dev/null
     return 1
   }
+  track_mount "$merged"
 
   # Mount essential filesystems
   mount --bind /dev "$merged/dev" || true
+  track_mount "$merged/dev"
   mount --bind /dev/pts "$merged/dev/pts" || true
+  track_mount "$merged/dev/pts"
   mount --bind /dev/shm "$merged/dev/shm" || true
+  track_mount "$merged/dev/shm"
   mount --bind /proc "$merged/proc" || true
+  track_mount "$merged/proc"
   mount --bind /sys "$merged/sys" || true
+  track_mount "$merged/sys"
 
   log "  Overlay build root created" >&2
   echo "$build_dir"
@@ -121,7 +128,9 @@ _build_overlay_destroy_root() {
       "$merged/tmp"; do
       [[ -e "$m" ]] || continue
       if mountpoint -q "$m" 2>/dev/null; then
-        if ! strict_unmount "$m" "build root child"; then
+        if strict_unmount "$m" "build root child"; then
+          untrack_mount "$m" 2>/dev/null || true
+        else
           rc=1
         fi
       fi
@@ -137,7 +146,9 @@ _build_overlay_destroy_root() {
   # 3. Unmount the overlay (MERGED).
   # ------------------------------------------------------------
   if mountpoint -q "$merged" 2>/dev/null; then
-    if ! strict_unmount "$merged" "build root overlay"; then
+    if strict_unmount "$merged" "build root overlay"; then
+      untrack_mount "$merged" 2>/dev/null || true
+    else
       rc=1
     fi
   fi
@@ -151,7 +162,9 @@ _build_overlay_destroy_root() {
   # 4. Unmount the ext4 overlay workspace.
   # ------------------------------------------------------------
   if mountpoint -q "$ovl_mnt" 2>/dev/null; then
-    if ! strict_unmount "$ovl_mnt" "build root workspace"; then
+    if strict_unmount "$ovl_mnt" "build root workspace"; then
+      untrack_mount "$ovl_mnt" 2>/dev/null || true
+    else
       rc=1
     fi
   fi
@@ -168,7 +181,7 @@ _build_overlay_destroy_root() {
     loops="$(losetup -j "$ovl_img" 2>/dev/null | cut -d: -f1)"
   fi
 
-  while IFS= read -r loop; do
+  while IFS="" read -r loop; do
     [[ -n "$loop" ]] || continue
 
     if ! wait_ext4_gone "$loop"; then
@@ -185,7 +198,7 @@ _build_overlay_destroy_root() {
   # ------------------------------------------------------------
   # 6. Detach loop devices.
   # ------------------------------------------------------------
-  while IFS= read -r loop; do
+  while IFS="" read -r loop; do
     [[ -n "$loop" ]] || continue
 
     if ! strict_detach_loop "$loop"; then
@@ -203,6 +216,66 @@ _build_overlay_destroy_root() {
   fi
 
   return "$rc"
+}
+
+# Force destroy a build root (aggressive cleanup for failed builds).
+# This function is more aggressive than _build_overlay_destroy_root:
+# - Kills all processes in the chroot
+# - Forces unmount even if busy
+# - Removes build directory regardless of cleanup status
+# Args: $1 = build root directory
+_build_overlay_force_destroy_root() {
+  local build_dir="${1:?}"
+
+  [[ -d "$build_dir" ]] || return 0
+
+  warn "  Force destroying build root: $build_dir" >&2
+
+  local merged="$build_dir/merged"
+  local ovl_mnt="$build_dir/overlay-mnt"
+  local ovl_img="$build_dir/overlay-work.img"
+
+  # Kill all processes in the chroot
+  if [[ -d "$merged" ]]; then
+    fuser -k "$merged" 2>/dev/null || true
+    sleep 1
+  fi
+
+  # Force unmount child mounts
+  for m in \
+    "$merged/dev/pts" \
+    "$merged/dev/shm" \
+    "$merged/dev" \
+    "$merged/sys" \
+    "$merged/proc" \
+    "$merged/tmp" \
+    "$merged"; do
+    [[ -e "$m" ]] || continue
+    if mountpoint -q "$m" 2>/dev/null; then
+      umount -l "$m" 2>/dev/null || true
+    fi
+  done
+
+  # Force unmount overlay workspace
+  if mountpoint -q "$ovl_mnt" 2>/dev/null; then
+    umount -l "$ovl_mnt" 2>/dev/null || true
+  fi
+
+  # Detach loop devices
+  local loops=""
+  if [[ -f "$ovl_img" ]]; then
+    loops="$(losetup -j "$ovl_img" 2>/dev/null | cut -d: -f1)"
+    while IFS="" read -r loop; do
+      [[ -n "$loop" ]] || continue
+      losetup -d "$loop" 2>/dev/null || true
+    done <<<"$loops"
+  fi
+
+  # Force remove build directory
+  rm -rf "$build_dir" 2>/dev/null || true
+
+  warn "  Force cleanup completed" >&2
+  return 0
 }
 
 # Sync build root with profile (update repos, install build deps).
@@ -241,7 +314,7 @@ _build_overlay_sync_root() {
       log "  Valve repos synced (Arch repos unavailable)"
     else
       warn "Failed to sync any repos"
-      echo "$sync_output" | tail -5 | while IFS= read -r line; do
+      echo "$sync_output" | tail -5 | while IFS="" read -r line; do
         warn "  $line"
       done
       return 1
@@ -372,8 +445,8 @@ _build_overlay_diagnostics() {
     # Use a subshell to avoid polluting current scope
     local recipe_conf="$recipe_dir/recipe.conf"
     local diag_pc_str diag_pkgs_str
-    diag_pc_str="$(sed -n 's/^DIAG_PC_FILES=(//;s/)//p' "$recipe_conf" 2>/dev/null)"
-    diag_pkgs_str="$(sed -n 's/^DIAG_PKGS=(//;s/)//p' "$recipe_conf" 2>/dev/null)"
+    diag_pc_str="$(sed -n '/^DIAG_PC_FILES=(/,/^)/{/^DIAG_PC_FILES=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
+    diag_pkgs_str="$(sed -n '/^DIAG_PKGS=(/,/^)/{/^DIAG_PKGS=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
 
     # Parse arrays from strings
     if [[ -n "$diag_pc_str" ]]; then
@@ -506,7 +579,7 @@ _build_overlay_diagnostics() {
   } >"$diag_log" 2>&1
 
   # Log diagnostics
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     log "  $line"
   done <"$diag_log"
 
@@ -539,6 +612,13 @@ _build_overlay_run() {
   # but with development files stripped (e.g. glibc headers, egl.pc).
   # Reinstalling without --needed restores the missing files.
   log "  Installing build dependencies"
+  # Explicitly reinstall glibc first to restore stripped development headers.
+  # SteamOS runtime images register glibc as installed but may lack /usr/include/*.h.
+  # pacman -S base-devel won't touch glibc if it's already "installed".
+  chroot "$root" pacman -S --noconfirm glibc 2>&1 | tail -5 || {
+    warn "Failed to reinstall glibc"
+    return 1
+  }
   chroot "$root" pacman -S --noconfirm base-devel 2>&1 | tail -5 || {
     warn "Failed to install build dependencies"
     return 1
@@ -584,8 +664,8 @@ _build_overlay_install_deps() {
   if [[ -n "$install_cmd" ]]; then
     # Direct install mode: read deps from recipe.conf
     if [[ -f "$recipe_conf" ]]; then
-      deps="$(sed -n 's/^BUILD_DEPS=(//;s/)//p' "$recipe_conf" 2>/dev/null | tr -d '()"')"
-      deps+=" $(sed -n 's/^RUNTIME_DEPS=(//;s/)//p' "$recipe_conf" 2>/dev/null | tr -d '()"')"
+      deps="$(sed -n '/^BUILD_DEPS=(/,/^)/{/^BUILD_DEPS=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null | tr -d '()"')"
+      deps+=" $(sed -n '/^RUNTIME_DEPS=(/,/^)/{/^RUNTIME_DEPS=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null | tr -d '()"')"
     fi
   else
     # Package build mode: extract deps from PKGBUILD

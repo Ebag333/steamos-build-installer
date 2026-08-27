@@ -55,7 +55,7 @@ _build_devtools_create_root() {
     "$build_dir/root" \
     base base-devel 2>&1)" || {
     warn "mkarchroot failed:"
-    echo "$mkarchroot_output" | while IFS= read -r line; do
+    echo "$mkarchroot_output" | while IFS="" read -r line; do
       warn "  $line"
     done
     return 1

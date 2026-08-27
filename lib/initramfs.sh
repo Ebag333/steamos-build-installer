@@ -221,7 +221,7 @@ _regenerate_initramfs() {
       mk_warnings="$(echo "$mkinitcpio_out" | grep -iE 'warning|missing|Possibly' || true)"
       if [[ -n "$mk_warnings" ]]; then
         log "  mkinitcpio warnings:"
-        while IFS= read -r w; do log "    $w"; done <<<"$mk_warnings"
+        while IFS="" read -r w; do log "    $w"; done <<<"$mk_warnings"
       fi
     fi
   else

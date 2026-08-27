@@ -82,16 +82,16 @@ failure_snapshot() {
     failure_snapshot_extra "$rc" "$line" "$cmd" "$reason" || true
   fi
 
-  echo
-  echo "=== MOUNTS ==="
+  echo >&2
+  echo "=== MOUNTS ===" >&2
   findmnt 2>&1 || true
 
-  echo
-  echo "=== LOOP DEVICES ==="
+  echo >&2
+  echo "=== LOOP DEVICES ===" >&2
   losetup -a 2>&1 || true
 
-  echo
-  echo "=== SPACE ==="
+  echo >&2
+  echo "=== SPACE ===" >&2
   df -h /home 2>&1 || df -h 2>&1 || true
 }
 
@@ -496,7 +496,7 @@ wait_ext4_gone() {
 
       # status: voluntary/nonvoluntary ctxt switches, state
       sed -n '1p;/^State:/p;/^voluntary/p' "/proc/$journal_pid/status" 2>/dev/null \
-        | while IFS= read -r line; do warn "    $line"; done
+        | while IFS="" read -r line; do warn "    $line"; done
 
       # Kernel stack trace — shows the exact call chain
       if [[ -r "/proc/$journal_pid/stack" ]]; then
@@ -504,7 +504,7 @@ wait_ext4_gone() {
         _stack="$(cat "/proc/$journal_pid/stack" 2>/dev/null || true)"
         if [[ -n "$_stack" ]]; then
           warn "    kernel stack:"
-          printf '%s\n' "$_stack" | while IFS= read -r line; do warn "      $line"; done
+          printf '%s\n' "$_stack" | while IFS="" read -r line; do warn "      $line"; done
         fi
       fi
 
@@ -520,7 +520,7 @@ wait_ext4_gone() {
   _loop_refs="$(fuser -v "$loop" 2>/dev/null || true)"
   if [[ -n "$_loop_refs" ]]; then
     warn "  Processes with $loop open:"
-    printf '%s\n' "$_loop_refs" | while IFS= read -r line; do warn "    $line"; done
+    printf '%s\n' "$_loop_refs" | while IFS="" read -r line; do warn "    $line"; done
   fi
 
   # Check for any remaining mount references
@@ -528,7 +528,7 @@ wait_ext4_gone() {
   _mount_refs="$(findmnt -rn -S "$loop" 2>/dev/null || true)"
   if [[ -n "$_mount_refs" ]]; then
     warn "  Remaining mount references for $loop:"
-    printf '%s\n' "$_mount_refs" | while IFS= read -r line; do warn "    $line"; done
+    printf '%s\n' "$_mount_refs" | while IFS="" read -r line; do warn "    $line"; done
   fi
 
   # Ext4 sysfs state
@@ -537,7 +537,7 @@ wait_ext4_gone() {
     _ext4_state="$(find "$sys" -maxdepth 1 -mindepth 1 -printf '%f\n' 2>/dev/null | head -20)"
     if [[ -n "$_ext4_state" ]]; then
       warn "  ext4 sysfs entries for $name:"
-      printf '%s\n' "$_ext4_state" | while IFS= read -r entry; do warn "    $entry"; done
+      printf '%s\n' "$_ext4_state" | while IFS="" read -r entry; do warn "    $entry"; done
     fi
   fi
 
@@ -616,7 +616,9 @@ cleanup() {
 
       if mountpoint -q "$m" 2>/dev/null; then
         log "cleanup: unmounting $m"
-        if ! strict_unmount "$m" "main image filesystem"; then
+        if strict_unmount "$m" "main image filesystem"; then
+          untrack_mount "$m" 2>/dev/null || true
+        else
           warn "cleanup: failed to unmount $m"
           rc=1
         fi
@@ -632,13 +634,13 @@ cleanup() {
       loop_mounts="$(mounts_for_loop "$LOOPDEV")"
       if [[ -n "$loop_mounts" ]]; then
         log "cleanup: $LOOPDEV has remaining mounts:"
-        while IFS= read -r m; do
+        while IFS="" read -r m; do
           [[ -n "$m" ]] && log "cleanup:   $m"
         done <<<"$loop_mounts"
       fi
 
       if ((rc == 0)); then
-        while IFS= read -r m; do
+        while IFS="" read -r m; do
           [[ -n "$m" ]] || continue
           if ! strict_unmount "$m" "remaining mount from $LOOPDEV"; then
             rc=1
@@ -670,7 +672,7 @@ cleanup() {
 
     if [[ -n "$remaining" ]]; then
       warn "cleanup: overlay workspace still attached:"
-      while IFS= read -r m; do
+      while IFS="" read -r m; do
         [[ -n "$m" ]] && warn "  $m"
       done <<<"$remaining"
       rc=1
@@ -711,8 +713,8 @@ compute_payload() {
   # Use pacman -Q (name + version) instead of -Qq (name only) so that
   # version upgrades are detected — e.g. nvidia-utils 580→590 would otherwise
   # be invisible to comm since both lines contain the same package name.
-  pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" | LC_ALL=C sort >"$WORKDIR/pkgs-before.txt"
-  in_chroot "pacman -Q" | LC_ALL=C sort >"$WORKDIR/pkgs-after.txt"
+  pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" | env LC_ALL=C sort >"$WORKDIR/pkgs-before.txt"
+  in_chroot "pacman -Q" | env LC_ALL=C sort >"$WORKDIR/pkgs-after.txt"
 
   # New or upgraded packages minus build-only toolchain = what ships in the image.
   # The optional extra-exclude file is populated by build modules (e.g. AoTofu)
@@ -737,12 +739,20 @@ compute_payload() {
   # Space check: pacman -Qlq lists directories too — size only files/symlinks.
   # If no runtime packages changed, PAYLOAD_MB is 0 (module-only update).
   if [[ -s "$FILELIST" ]]; then
-    PAYLOAD_MB="$(
+    # Guard: run sizing in a function to avoid shell-fragment expansion issues
+    # in the command substitution.  The function body is parsed once at define
+    # time, not re-parsed from a string.
+    _compute_payload_mb() {
       set +o pipefail
-      cd "$MERGED" && while IFS= read -r p; do
+      cd "$MERGED" || return 1
+      while IFS="" read -r p; do
         if [[ -f "$p" || -L "$p" ]]; then printf '%s\0' "$p"; fi
-      done <"$FILELIST.rel" | { du -scm --no-dereference --files0-from=- 2>/dev/null || true; } | tail -1 | cut -f1
-    )"
+      done <"$FILELIST.rel" \
+        | { du -scm --no-dereference --files0-from=- 2>/dev/null || true; } \
+        | tail -1 | cut -f1
+    }
+    PAYLOAD_MB="$(_compute_payload_mb)" || PAYLOAD_MB=""
+    unset -f _compute_payload_mb
     [[ "$PAYLOAD_MB" =~ ^[0-9]+$ ]] || die "Could not size the payload"
   else
     PAYLOAD_MB=0
@@ -753,4 +763,131 @@ compute_payload() {
   if ((PAYLOAD_MB + MODULES_MB > AVAIL_MB * 2)); then # zstd roughly halves it
     die "Not enough space in rootfs. Rerun with --trim-cuda."
   fi
+}
+
+# ---------------------------------------------------------------------------
+# System state snapshots (before/after build hygiene)
+# ---------------------------------------------------------------------------
+
+# Snapshot current system state (loops, mounts, ext4 superblocks).
+# Writes to a file that can be compared later.
+# Args: $1 = output file path
+snapshot_system_state() {
+  local outfile="${1:?snapshot_system_state: missing output file}"
+
+  {
+    echo "=== LOOP DEVICES ==="
+    losetup -J 2>/dev/null || echo '{"loopdevices":[]}'
+    echo ""
+    echo "=== MOUNTS ==="
+    findmnt --real -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
+    echo ""
+    echo "=== EXT4 SUPERBLOCKS ==="
+    local sys
+    for sys in /sys/fs/ext4/*/; do
+      [[ -d "$sys" ]] && basename "$sys"
+    done 2>/dev/null || true
+  } >"$outfile"
+}
+
+# Compare two system state snapshots and report differences.
+# Args: $1 = before snapshot, $2 = after snapshot, $3 = label (optional)
+# Returns 0 if clean (no new entries), 1 if leftovers detected.
+compare_system_state() {
+  local before="${1:?compare_system_state: missing before snapshot}"
+  local after="${2:?compare_system_state: missing after snapshot}"
+  local label="${3:-build}"
+
+  [[ -f "$before" && -f "$after" ]] || {
+    warn "compare_system_state: missing snapshot files"
+    return 1
+  }
+
+  local rc=0
+
+  # Extract loop device names from JSON
+  local loops_before loops_after
+  loops_before="$(python3 -c '
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    for d in data.get("loopdevices", []):
+        print(d.get("name",""))
+except: pass
+' "$before" 2>/dev/null | sort)"
+  loops_after="$(python3 -c '
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    for d in data.get("loopdevices", []):
+        print(d.get("name",""))
+except: pass
+' "$after" 2>/dev/null | sort)"
+
+  # Extract mount targets
+  local mounts_before mounts_after
+  mounts_before="$(awk 'NR>1 {print $1}' "$before" 2>/dev/null | sort)"
+  mounts_after="$(awk 'NR>1 {print $1}' "$after" 2>/dev/null | sort)"
+
+  # Extract ext4 superblocks
+  local ext4_before ext4_after
+  ext4_before="$(sed -n '/^=== EXT4 SUPERBLOCKS ===$/,/^===/{/^===/d;p}' "$before" | sort)"
+  ext4_after="$(sed -n '/^=== EXT4 SUPERBLOCKS ===$/,/^===/{/^===/d;p}' "$after" | sort)"
+
+  # Compare loops
+  local new_loops gone_loops
+  new_loops="$(comm -13 <(echo "$loops_before") <(echo "$loops_after"))"
+  gone_loops="$(comm -23 <(echo "$loops_before") <(echo "$loops_after"))"
+
+  # Compare mounts
+  local new_mounts gone_mounts
+  new_mounts="$(comm -13 <(echo "$mounts_before") <(echo "$mounts_after"))"
+  gone_mounts="$(comm -23 <(echo "$mounts_before") <(echo "$mounts_after"))"
+
+  # Compare ext4 superblocks
+  local new_ext4 gone_ext4
+  new_ext4="$(comm -13 <(echo "$ext4_before") <(echo "$ext4_after"))"
+  gone_ext4="$(comm -23 <(echo "$ext4_before") <(echo "$ext4_after"))"
+
+  # Report
+  log "System state comparison ($label):"
+
+  if [[ -n "$new_loops" ]]; then
+    warn "  NEW loop devices (left behind):"
+    while IFS="" read -r l; do [[ -n "$l" ]] && warn "    $l"; done <<<"$new_loops"
+    rc=1
+  fi
+
+  if [[ -n "$new_mounts" ]]; then
+    warn "  NEW mounts (left behind):"
+    while IFS="" read -r m; do [[ -n "$m" ]] && warn "    $m"; done <<<"$new_mounts"
+    rc=1
+  fi
+
+  if [[ -n "$new_ext4" ]]; then
+    warn "  NEW ext4 superblocks (left behind):"
+    while IFS="" read -r e; do [[ -n "$e" ]] && warn "    $e"; done <<<"$new_ext4"
+    rc=1
+  fi
+
+  if [[ -n "$gone_loops" ]]; then
+    log "  Removed loop devices (expected):"
+    while IFS="" read -r l; do [[ -n "$l" ]] && log "    $l"; done <<<"$gone_loops"
+  fi
+
+  if [[ -n "$gone_mounts" ]]; then
+    log "  Removed mounts (expected):"
+    while IFS="" read -r m; do [[ -n "$m" ]] && log "    $m"; done <<<"$gone_mounts"
+  fi
+
+  if [[ -n "$gone_ext4" ]]; then
+    log "  Removed ext4 superblocks (expected):"
+    while IFS="" read -r e; do [[ -n "$e" ]] && log "    $e"; done <<<"$gone_ext4"
+  fi
+
+  if ((rc == 0)); then
+    log "  Clean — no leftover resources detected"
+  fi
+
+  return "$rc"
 }

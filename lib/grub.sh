@@ -57,7 +57,7 @@ _has_token() {
 _param_on_kernel_line() {
   local grub_cfg="$1" param="$2"
   local found_any=0 line
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     line="${line%%#*}"
     found_any=1
     _has_token "$line" "$param" || return 1
@@ -99,7 +99,7 @@ _read_grub_steamos_value() {
   local file="$1"
   local full_value="" in_block=0
   local line
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     if [[ "$line" =~ ^GRUB_CMDLINE_LINUX= ]]; then
       in_block=1
       # Get everything after GRUB_CMDLINE_LINUX="
@@ -454,7 +454,7 @@ reconcile_grub() {
 
   if [[ -d "$EFIMNT/SteamOS/partsets" ]]; then
     local efi_line
-    while IFS= read -r efi_line; do
+    while IFS="" read -r efi_line; do
       log "  target EFI partsets: $efi_line"
     done < <(ls -la "$EFIMNT/SteamOS/partsets" 2>&1)
   else

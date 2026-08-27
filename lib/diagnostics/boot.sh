@@ -50,7 +50,7 @@ diagnose_boot_layout() {
     # Check partsets directory
     if [[ -d "$mnt/SteamOS/partsets" ]]; then
       log "  $mnt/SteamOS/partsets:"
-      while IFS= read -r out; do
+      while IFS="" read -r out; do
         log "    $out"
       done < <(ls -la "$mnt/SteamOS/partsets" 2>&1)
     else
@@ -60,7 +60,7 @@ diagnose_boot_layout() {
     # Check conf directory
     if [[ -d "$mnt/SteamOS/conf" ]]; then
       log "  $mnt/SteamOS/conf:"
-      while IFS= read -r out; do
+      while IFS="" read -r out; do
         log "    $out"
       done < <(ls -la "$mnt/SteamOS/conf" 2>&1)
     else
@@ -78,12 +78,19 @@ diagnose_boot_layout() {
     fi
 
     if out="$(steamos-bootconf list-images 2>&1)"; then
-      while IFS= read -r path; do
+      while IFS="" read -r path; do
         log "  steamos-bootconf list-images: $path"
       done <<<"$out"
     else
       rc=$?
       warn "steamos-bootconf list-images failed (rc=$rc): $out"
+    fi
+
+    if out="$(steamos-bootconf selected-image 2>&1)"; then
+      log "  steamos-bootconf selected-image: $out"
+    else
+      rc=$?
+      warn "steamos-bootconf selected-image failed (rc=$rc): $out"
     fi
   else
     warn "steamos-bootconf not found"
@@ -108,7 +115,7 @@ diagnose_boot_state() {
       --get comment 2>&1)"; then
 
       log "  [$slot]"
-      while IFS= read -r line; do
+      while IFS="" read -r line; do
         log "    $line"
       done <<<"$out"
     else

@@ -93,7 +93,7 @@ _validate_hw_manifest() {
   local conf="${1:?_validate_hw_manifest: missing conf path}"
   local line bad_lines=() line_num=0
 
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     ((++line_num))
     [[ "$line" =~ ^[[:space:]]*$ ]] && continue
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -214,7 +214,7 @@ _install_valve_hw_manifest() {
     return 0
   fi
 
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     rc=0
     _parse_hw_manifest_line "$line" || rc=$?
     case "$rc" in
@@ -364,7 +364,7 @@ check_arch_glibc_compat() {
   [[ "$img_glibc" =~ ^[0-9]+\.[0-9]+$ ]] \
     || die "Could not determine image glibc version"
 
-  while IFS= read -r -d '' pkg; do
+  while IFS="" read -r -d '' pkg; do
     pkg_files+=("$pkg")
   done < <(
     find "$pkgdir" \
@@ -444,7 +444,7 @@ _install_arch_hw_manifest() {
   [[ -f "$conf" ]] || return 0
   _validate_hw_manifest "$conf"
 
-  while IFS= read -r line; do
+  while IFS="" read -r line; do
     rc=0
     _parse_hw_manifest_line "$line" || rc=$?
     case "$rc" in

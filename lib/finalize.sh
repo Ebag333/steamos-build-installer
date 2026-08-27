@@ -129,19 +129,26 @@ finalize() {
   log "  /usr/lib/modules: $(du -shx "$MNT/usr/lib/modules" 2>/dev/null | cut -f1)"
   log "  /usr/share:  $(du -shx "$MNT/usr/share" 2>/dev/null | cut -f1)"
 
-  # Per-package apparent size — this is what WE added to the original SteamOS.
-  # Directories excluded (du on /usr/ would recursively count everything).
-  if [[ ${#NEW_PKGS[@]} -gt 0 ]]; then
-    log "  Per-package additions (apparent, files only):"
+  # Per-package apparent size — only files that actually landed in the
+  # overlay upper dir.  For upgraded packages (e.g. linux-firmware) this
+  # avoids counting the entire package contents that were already in the
+  # base image.
+  if [[ ${#NEW_PKGS[@]} -gt 0 && -d "${UPPER:-}" ]]; then
+    log "  Per-package additions (apparent, overlay upper only):"
     local pkg total_payload_kb=0
     for pkg in "${NEW_PKGS[@]}"; do
       local pkg_usage
-      pkg_usage="$(pacman -Qlq --dbpath "$MNT/usr/lib/holo/pacmandb" "$pkg" 2>/dev/null \
-        | while IFS= read -r f; do
-          [[ -f "$MNT$f" || -L "$MNT$f" ]] && printf '%s\0' "$MNT$f"
-        done \
-        | xargs -0 du -c --apparent-size --no-dereference 2>/dev/null \
-        | tail -1 | cut -f1)" || true
+      # Guard: run sizing in a function to avoid shell-fragment expansion issues.
+      _compute_pkg_usage() {
+        pacman -Qlq --dbpath "$MNT/usr/lib/holo/pacmandb" "$1" 2>/dev/null \
+          | while IFS="" read -r f; do
+              [[ -f "$UPPER$f" || -L "$UPPER$f" ]] && printf '%s\0' "$UPPER$f"
+            done \
+          | xargs -0 du -c --apparent-size --no-dereference 2>/dev/null \
+          | tail -1 | cut -f1
+      }
+      pkg_usage="$(_compute_pkg_usage "$pkg")" || pkg_usage=""
+      unset -f _compute_pkg_usage
       pkg_usage="${pkg_usage:-0}"
       log "    $pkg: ${pkg_usage} KiB"
       total_payload_kb=$((total_payload_kb + pkg_usage))
@@ -151,7 +158,7 @@ finalize() {
 
   # Top-level /usr breakdown for quick triage.
   log "  /usr top-level:"
-  du -xhd1 "$MNT/usr" 2>/dev/null | sort -h | tail -10 | while IFS= read -r line; do
+  du -xhd1 "$MNT/usr" 2>/dev/null | sort -h | tail -10 | while IFS="" read -r line; do
     log "    $line"
   done
 
@@ -175,25 +182,45 @@ finalize() {
   sync -f "$HOMEMNT"
   sync -f "$EFIMNT"
 
-  # Unmount/detach everything.  This must succeed before we publish the image
-  # so that a cleanup failure never coexists with a .build-complete marker.
-  log "Unmounting"
-  cleanup
-  trap - EXIT
-
-  # Publish: rename .building to final output, then atomically mark complete.
-  # The wrapper uses a temp name so a failed build doesn't destroy a previous
-  # successful image.
+  # Publish: rename .building to final output BEFORE tearing down mounts.
+  # When WORKDIR is in RAM (/dev/shm), OUT lives inside WORKDIR, so
+  # cleanup() would delete the image before we can move it otherwise.
   if [[ -n "${OUT_FINAL:-}" && "$OUT" != "$OUT_FINAL" ]]; then
-    mv "$OUT" "$OUT_FINAL"
+    mv -- "$OUT" "$OUT_FINAL" \
+      || die "Failed to publish completed image: mv $OUT -> $OUT_FINAL"
     mv "${OUT}.src-fingerprint" "${OUT_FINAL}.src-fingerprint" 2>/dev/null || true
     OUT="$OUT_FINAL"
   fi
 
+  [[ -s "$OUT_FINAL" ]] \
+    || die "Published image is missing or empty: $OUT_FINAL"
+
+  # ── Final image verification ───────────────────────────────────────────
+  # Log image details and assert expected size if configured.
+  log "Final image details:"
+  stat -c '  %n
+  size:     %s bytes
+  modified: %y' "$OUT_FINAL" | while IFS="" read -r line; do log "$line"; done
+
+  if [[ -n "${EXPECTED_IMAGE_SIZE:-}" ]]; then
+    local actual_size
+    actual_size="$(stat -c '%s' "$OUT_FINAL")"
+    if [[ "$actual_size" != "$EXPECTED_IMAGE_SIZE" ]]; then
+      die "Image size mismatch: expected $EXPECTED_IMAGE_SIZE bytes, got $actual_size bytes"
+    fi
+    log "  size assertion passed: $EXPECTED_IMAGE_SIZE bytes"
+  fi
+
   # Mark the build as complete — setup_copy_image and flash_image_is_complete
-  # check this before reusing a cached image.  Written last so a failed
-  # teardown never produces a false-positive marker.
+  # check this before reusing a cached image.
   touch "${OUT}.build-complete"
+
+  # Unmount/detach everything.  This must succeed before we declare victory
+  # so that a cleanup failure never coexists with a DONE message.
+  log "Unmounting"
+  cleanup
+  _cleanup_done=1
+  trap - EXIT
 
   # Clean up temporary build artifacts from WORKDIR.
   # Keep the final image, package cache, and build manifest.
@@ -247,23 +274,36 @@ finalize() {
   fi
 
   log "DONE — $OUT"
-  cat <<EOF
 
-  Driver:  nvidia-open (DKMS) for kernel $KVER
-$(case $UPDATE_MODE in
-    selfheal) echo "  Updates: SELF-HEALING — updating from within Steam works; the
+  local update_text install_text
+  case "$UPDATE_MODE" in
+    selfheal)
+      update_text="  Updates: SELF-HEALING — updating from within Steam works; the
            driver is rebuilt for each new OS version automatically
            (adds 10-20 min per update; failed rebuilds cancel the update,
            system stays working). For a NEWER driver later: rerun this
-           script and reinstall from the fresh USB image." ;;
-    hold) echo "  Updates: OS updates HELD (atomupd + OOBE migration masked, CLIs stubbed)." ;;
-    stock) echo "  Updates: STOCK behaviour — an OS update will REMOVE the NVIDIA driver!" ;;
-  esac)
-$([[ $ADD_INSTALLER -eq 1 ]] && echo "  Install: boot the USB → double-click \"Install SteamOS (NVIDIA) to
-           Hard Drive\" → pick disk → machine powers off → remove USB, boot.")
+           script and reinstall from the fresh USB image."
+      ;;
+    hold)
+      update_text="  Updates: OS updates HELD (atomupd + OOBE migration masked, CLIs stubbed)."
+      ;;
+    stock)
+      update_text="  Updates: STOCK behaviour — an OS update will REMOVE the NVIDIA driver!"
+      ;;
+  esac
+
+  if (( ADD_INSTALLER == 1 )); then
+    install_text='  Install: boot the USB → double-click "Install SteamOS (NVIDIA) to
+           Hard Drive" → pick disk → machine powers off → remove USB, boot.'
+  fi
+
+  cat <<EOF
+
+  Driver:  nvidia-open (DKMS) for kernel $KVER
+$update_text
+$install_text
 
   Flash:   sudo dd if="$OUT" of=/dev/sdX bs=4M status=progress conv=fsync
   Needs:   UEFI + Secure Boot off; RTX 20xx or newer (nvidia-open = Turing+).
-  Cache:   $WORKDIR (speeds up reruns; safe to delete)
 EOF
 }
