@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/finalize.sh
+# steamos-build-installer — lib/finalize.sh
 # Stage 7: sanity-check the patched image, flush writes, restore the btrfs RO
 # property, tear everything down, and print the summary.
 # Sourced by the wrapper — do not run directly.
@@ -71,6 +71,8 @@ finalize() {
   log "  NVIDIA kernel module: $module_ver for $KVER"
 
   # HID module checks (always applied)
+  log "  Checking HID modules at: $MNT/usr/lib/modules/$KVER/updates/logitech/"
+  ls -la "$MNT/usr/lib/modules/$KVER/updates/logitech/" 2>/dev/null || log "  HID module directory does not exist"
   compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
     || die "hid-logitech-dj.ko missing from image"
   compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" >/dev/null \
@@ -99,12 +101,12 @@ finalize() {
   if [[ $UPDATE_MODE == selfheal ]]; then
     grep -q 'self-healing' "$MNT/usr/bin/steamos-update" || die "update wrapper missing"
     [[ -f "$MNT/usr/bin/steamos-update.orig" ]] || die "original steamos-update not preserved"
-    grep -q 'repatch' "$MNT/usr/lib/steamos-nvidia/repatch.sh" || die "repatch tool missing"
-    [[ -f "$MNT/usr/lib/steamos-nvidia/overlay.sh" ]] || die "overlay helper missing"
-    [[ -f "$HOMEMNT/.steamos-nvidia/build.conf" ]] || die "build.conf missing"
+    grep -q 'repatch' "$MNT/usr/lib/steamos-build/repatch.sh" || die "repatch tool missing"
+    [[ -f "$MNT/usr/lib/steamos-build/overlay.sh" ]] || die "overlay helper missing"
+    [[ -f "$HOMEMNT/.steamos-build/build.conf" ]] || die "build.conf missing"
     # Verify HID source bundle for self-heal (always applied)
     for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
-      [[ -f "$MNT/usr/lib/steamos-nvidia/hid/$f" ]] \
+      [[ -f "$MNT/usr/lib/steamos-build/hid/$f" ]] \
         || die "self-heal HID source missing: $f"
     done
     # Check that atomupd isn't masked — a symlink to /dev/null specifically
@@ -129,20 +131,18 @@ finalize() {
   log "  /usr/lib/modules: $(du -shx "$MNT/usr/lib/modules" 2>/dev/null | cut -f1)"
   log "  /usr/share:  $(du -shx "$MNT/usr/share" 2>/dev/null | cut -f1)"
 
-  # Per-package apparent size — only files that actually landed in the
-  # overlay upper dir.  For upgraded packages (e.g. linux-firmware) this
-  # avoids counting the entire package contents that were already in the
-  # base image.
-  if [[ ${#NEW_PKGS[@]} -gt 0 && -d "${UPPER:-}" ]]; then
-    log "  Per-package additions (apparent, overlay upper only):"
+  # Per-package apparent size — files that landed in the image rootfs.
+  # Check against $MNT (where install_payload rsynced to), not $UPPER
+  # (overlay upper), because the overlay may be unmounted by now.
+  if [[ ${#NEW_PKGS[@]} -gt 0 ]]; then
+    log "  Per-package additions (apparent, in image rootfs):"
     local pkg total_payload_kb=0
     for pkg in "${NEW_PKGS[@]}"; do
       local pkg_usage
-      # Guard: run sizing in a function to avoid shell-fragment expansion issues.
       _compute_pkg_usage() {
         pacman -Qlq --dbpath "$MNT/usr/lib/holo/pacmandb" "$1" 2>/dev/null \
           | while IFS="" read -r f; do
-              [[ -f "$UPPER$f" || -L "$UPPER$f" ]] && printf '%s\0' "$UPPER$f"
+              [[ -f "$MNT$f" || -L "$MNT$f" ]] && printf '%s\0' "$MNT$f"
             done \
           | xargs -0 du -c --apparent-size --no-dereference 2>/dev/null \
           | tail -1 | cut -f1
@@ -173,6 +173,78 @@ finalize() {
   # writable, but verify nothing broke that.
   touch "$MNT/.final-rw-test" || die "Rootfs became read-only during build"
   rm -f "$MNT/.final-rw-test"
+
+  # ── System config verification ─────────────────────────────────────────
+  # Verify that variant and update-branch are correctly stamped in the image.
+  # These must be checked on the raw rootfs ($MNT) AFTER all modifications
+  # (overlay chroot, install_payload, customizations) but BEFORE sync/unmount.
+  # This catches cases where a write appeared to succeed but didn't persist
+  # (e.g. os-release written through an overlay upper that was later discarded).
+  #
+  # Each location is checked individually.  Failures are collected and reported
+  # together; we don't die until every check has run so the log shows the full
+  # picture.
+  log "Verifying system configuration in final image"
+  local _variant="${TARGET_VARIANT:-steamdeck}"
+  local _branch="${UPDATE_BRANCH:-stable}"
+  local _verify_failures=0
+
+  # ── Variant: manifest.json (both lib paths) ───────────────────────────
+  local _manifest_path
+  for _manifest_path in /usr/lib/steamos-atomupd/manifest.json /usr/lib64/steamos-atomupd/manifest.json; do
+    local _manifest="$MNT$_manifest_path"
+    if [[ -f "$_manifest" ]] && grep -q "\"variant\"[[:space:]]*:[[:space:]]*\"$_variant\"" "$_manifest"; then
+      log "  OK $_manifest_path variant=$_variant"
+    else
+      warn "  VERIFY FAILED: $_manifest_path variant != $_variant"
+      ((_verify_failures++)) || true
+    fi
+  done
+
+  # ── Variant: os-release VARIANT_ID ────────────────────────────────────
+  local _os_release="$MNT/etc/os-release"
+  if [[ -f "$_os_release" ]] && grep -q "^VARIANT_ID=$_variant$" "$_os_release"; then
+    log "  OK /etc/os-release VARIANT_ID=$_variant"
+  else
+    warn "  VERIFY FAILED: /etc/os-release VARIANT_ID != $_variant"
+    ((_verify_failures++)) || true
+  fi
+
+  # ── Variant: OOBE neutralization ──────────────────────────────────────
+  if [[ "$_variant" == "steamdeck" ]]; then
+    if verify_optimization "oobe" "neutralize-oobe" "chroot" "$MNT"; then
+      log "  OK OOBE neutralization applied"
+    else
+      warn "  VERIFY FAILED: OOBE neutralization not applied"
+      ((_verify_failures++)) || true
+    fi
+  fi
+
+  # ── Update branch: manifest.json (both lib paths) ─────────────────────
+  for _manifest_path in /usr/lib/steamos-atomupd/manifest.json /usr/lib64/steamos-atomupd/manifest.json; do
+    local _manifest="$_manifest_path"  # reuse from loop above is fine; reassign
+    _manifest="$MNT$_manifest_path"
+    if [[ -f "$_manifest" ]] && grep -q "\"default_update_branch\"[[:space:]]*:[[:space:]]*\"$_branch\"" "$_manifest"; then
+      log "  OK $_manifest_path default_update_branch=$_branch"
+    else
+      warn "  VERIFY FAILED: $_manifest_path default_update_branch != $_branch"
+      ((_verify_failures++)) || true
+    fi
+  done
+
+  # ── Update branch: os-release STEAMOS_DEFAULT_UPDATE_BRANCH ───────────
+  if [[ -f "$_os_release" ]] && grep -q "^STEAMOS_DEFAULT_UPDATE_BRANCH=$_branch$" "$_os_release"; then
+    log "  OK /etc/os-release STEAMOS_DEFAULT_UPDATE_BRANCH=$_branch"
+  else
+    warn "  VERIFY FAILED: /etc/os-release STEAMOS_DEFAULT_UPDATE_BRANCH != $_branch"
+    ((_verify_failures++)) || true
+  fi
+
+  # ── Verdict ───────────────────────────────────────────────────────────
+  if [[ "$_verify_failures" -gt 0 ]]; then
+    die "System configuration verification failed — $_verify_failures check(s) failed, see warnings above"
+  fi
+  log "System configuration verified: variant=$_variant branch=$_branch"
 
   # Flush all pending writes BEFORE flipping the subvolume read-only —
   # flipping with delalloc data still queued can silently produce 0-byte files.
@@ -240,9 +312,56 @@ finalize() {
       rm -f "$WORKDIR"/*-nvidia-usbinstall.img.conf
     fi
 
-    rm -f "$WORKDIR"/overlay-work.img
-    rm -f "$WORKDIR"/.steamos-nvidia-overlay-cache-key
-    rm -rf "$WORKDIR"/overlay-mnt
+    # Clean up overlay backing files.  If loop devices are still attached
+    # (e.g. jbd2 held the superblock past the cleanup timeout), attempt to
+    # detach them first.  If detach fails, do NOT delete the backing file —
+    # that would leave the loop in a "(deleted)" state with no way to cleanly
+    # release later.  Warn the user that a reboot may be required.
+    local _overlay_loops
+    _overlay_loops="$(loops_for_file "$WORKDIR/overlay-work.img")"
+    if [[ -n "$_overlay_loops" ]]; then
+      warn "Overlay loop(s) still attached after cleanup: $_overlay_loops"
+      warn "  This is typically caused by the kernel's jbd2 journal thread"
+      warn "  holding an ext4 superblock reference after unmount."
+      warn "  Attempting detach..."
+      local _detached=0
+      while IFS="" read -r _loop; do
+        [[ -n "$_loop" ]] || continue
+        local _backing
+        _backing="$(losetup -l -O BACK-FILE "$_loop" 2>/dev/null | tail -1 | tr -d ' ')"
+        if losetup -d "$_loop" 2>/dev/null; then
+          log "  Detached $_loop (${_backing:-unknown})"
+          ((_detached++)) || true
+        else
+          warn "  Could not detach $_loop (${_backing:-unknown})"
+        fi
+      done <<<"$_overlay_loops"
+
+      # Re-check after detach attempts.
+      _overlay_loops="$(loops_for_file "$WORKDIR/overlay-work.img")"
+      if [[ -n "$_overlay_loops" ]]; then
+        warn "WARNING: Overlay loop(s) still attached after detach attempts: $_overlay_loops"
+        warn "  Backing file will NOT be deleted to avoid orphaned loop state."
+        warn "  A reboot is required to fully release these resources."
+      else
+        log "  All overlay loops detached"
+        rm -f "$WORKDIR"/overlay-work.img
+      fi
+    else
+      rm -f "$WORKDIR"/overlay-work.img
+    fi
+    rm -f "$WORKDIR"/.steamos-build-overlay-cache-key
+    if mountpoint -q "$WORKDIR/overlay-mnt" 2>/dev/null; then
+      warn "overlay-mnt is still mounted — attempting unmount"
+      if umount "$WORKDIR/overlay-mnt" 2>/dev/null; then
+        rm -rf "$WORKDIR"/overlay-mnt
+      else
+        warn "WARNING: Could not unmount overlay-mnt"
+        warn "  A reboot is required to release this mount."
+      fi
+    else
+      rm -rf "$WORKDIR"/overlay-mnt
+    fi
     rm -rf "$WORKDIR"/merged
     rm -rf "$WORKDIR"/upper
     rm -rf "$WORKDIR"/ovlwork
@@ -275,7 +394,7 @@ finalize() {
 
   log "DONE — $OUT"
 
-  local update_text install_text
+  local update_text="" install_text=""
   case "$UPDATE_MODE" in
     selfheal)
       update_text="  Updates: SELF-HEALING — updating from within Steam works; the

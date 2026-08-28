@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/builds/dlss_updater.sh
+# steamos-build-installer — lib/builds/dlss_updater.sh
 # DLSS Updater flatpak module.
 # Downloads and installs the DLSS Updater flatpak from GitHub.
 #
@@ -35,7 +35,7 @@ register_build "$DLSS_UPDATER_NAME" "$DLSS_UPDATER_DESC"
 
 # Get the stamp file path.
 _get_dlss_stamp_file() {
-  echo "/var/lib/steamos-nvidia/builds/dlss-updater/build.stamp"
+  echo "/var/lib/steamos-build/builds/dlss-updater/build.stamp"
 }
 
 # Read a value from the stamp file.
@@ -166,7 +166,7 @@ install_dlss_updater() {
 
   # Build/rebuild: stage for first-boot installation
   log "  Build environment detected — staging Flatpak for first boot"
-  local stage_dir="$root/usr/share/steamos-nvidia/flatpaks"
+  local stage_dir="$root/usr/share/steamos-build/flatpaks"
   mkdir -p "$stage_dir"
   cp "$tmp" "$stage_dir/dlss-updater.flatpak"
 
@@ -176,18 +176,18 @@ install_dlss_updater() {
   mkdir -p "$wants_dir"
 
   # Install service file
-  if [[ -f "$SCRIPT_DIR/lib/configs/steamos-nvidia-flatpak-install.service" ]]; then
-    cp "$SCRIPT_DIR/lib/configs/steamos-nvidia-flatpak-install.service" "$service_dir/"
+  if [[ -f "$SCRIPT_DIR/lib/configs/steamos-build-flatpak-install.service" ]]; then
+    cp "$SCRIPT_DIR/lib/configs/steamos-build-flatpak-install.service" "$service_dir/"
   fi
 
   # Install installer script
   if [[ -f "$SCRIPT_DIR/lib/configs/install-staged-flatpaks.sh" ]]; then
-    install -m 755 "$SCRIPT_DIR/lib/configs/install-staged-flatpaks.sh" "$root/usr/lib/steamos-nvidia/install-staged-flatpaks"
+    install -m 755 "$SCRIPT_DIR/lib/configs/install-staged-flatpaks.sh" "$root/usr/lib/steamos-build/install-staged-flatpaks"
   fi
 
   # Enable service
-  ln -sf /etc/systemd/user/steamos-nvidia-flatpak-install.service \
-    "$wants_dir/steamos-nvidia-flatpak-install.service"
+  ln -sf /etc/systemd/user/steamos-build-flatpak-install.service \
+    "$wants_dir/steamos-build-flatpak-install.service"
 
   _write_dlss_stamp "$version" "$installed_sha"
   rm -f "$tmp"
@@ -198,14 +198,6 @@ install_dlss_updater() {
 # ---------------------------------------------------------------------------
 # High-Level Interface
 # ---------------------------------------------------------------------------
-
-# Apply DLSS Updater (build-time).
-# Args: $1 = root path (optional, defaults to $MNT)
-# Returns 0 on success, 1 on failure
-apply_dlss_updater_build() {
-  local root="${1:-${MNT:-/}}"
-  install_dlss_updater "$root"
-}
 
 # Apply DLSS Updater (rebuild/self-heal).
 # Args: $1 = root path (optional, defaults to $NEWROOT)

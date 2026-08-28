@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/build/backends/arch-devtools.sh
+# steamos-build-installer — lib/build/backends/arch-devtools.sh
 # Build backend using Arch devtools (mkarchroot/makechrootpkg).
 #
 # Sourced by engine.sh — do not run directly.

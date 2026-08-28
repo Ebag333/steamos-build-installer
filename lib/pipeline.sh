@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/pipeline.sh
+# steamos-build-installer — lib/pipeline.sh
 # Workflow pipeline execution engine.
 # Provides a framework for defining and executing workflows as a series of phases.
 #

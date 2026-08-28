@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STAGE_DIR="/usr/share/steamos-nvidia/flatpaks"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-nvidia/flatpaks"
+STAGE_DIR="/usr/share/steamos-build/flatpaks"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-build/flatpaks"
 
 mkdir -p "$STATE_DIR"
 

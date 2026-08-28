@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/installer.sh
+# steamos-build-installer — lib/installer.sh
 # Stage 6: inject boot log collector and (optionally) install the one-click
 # "Install SteamOS (NVIDIA)" desktop installer built around Valve's patched
 # repair_device.sh.
@@ -18,11 +18,11 @@ fi
 inject_log_collector() {
   log "Injecting boot log collector"
 
-  # Ensure the persistent .steamos-nvidia tree exists (logs + recovery).
-  ensure_steamos_nvidia_dirs "$HOMEMNT"
+  # Ensure the persistent .steamos-build tree exists (logs + recovery).
+  ensure_steamos_build_dirs "$HOMEMNT"
 
   # Marker file so the collector script can find the USB at runtime.
-  touch "$HOMEMNT/.steamos-nvidia/usb-marker"
+  touch "$HOMEMNT/.steamos-build/usb-marker"
 
   # Log output directory.
   mkdir -p "$HOMEMNT/deck/logs/boot"
@@ -41,7 +41,7 @@ USB_MOUNT=""
 find_usb() {
   # Already mounted (e.g. home partition automounted)?
   for mp in /run/media/*/home /media/*/home /home; do
-    if [[ -f "$mp/.steamos-nvidia/usb-marker" ]]; then
+    if [[ -f "$mp/.steamos-build/usb-marker" ]]; then
       LOG_DIR="$mp/deck/logs/boot"
       return 0
     fi
@@ -52,7 +52,7 @@ find_usb() {
     [[ -b "$dev" ]] || continue
     USB_MOUNT="$(mktemp -d /tmp/usb-home.XXXXXX)"
     if mount -o rw "$dev" "$USB_MOUNT" 2>/dev/null; then
-      if [[ -f "$USB_MOUNT/.steamos-nvidia/usb-marker" ]]; then
+      if [[ -f "$USB_MOUNT/.steamos-build/usb-marker" ]]; then
         LOG_DIR="$USB_MOUNT/deck/logs/boot"
         return 0
       fi

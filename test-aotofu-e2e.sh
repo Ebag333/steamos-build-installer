@@ -165,7 +165,7 @@ phase_build_aotofu() {
 
     # Build AoTofu
     build_recipe \
-        --recipe "$SCRIPT_DIR/recipes/aotofu-vaapi" \
+        --recipe "$SCRIPT_DIR/configs/build_recipes/aotofu-vaapi" \
         --profile "$WORKDIR/profile" \
         --output "$WORKDIR/packages" \
         --keep-failed
@@ -219,19 +219,19 @@ phase_install_artifact() {
 
     # Verify installation
     local installed_ver
-    installed_ver="$(pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" steamos-nvidia-aotofu-vaapi 2>/dev/null | awk '{print $2}')"
+    installed_ver="$(pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" steamos-build-aotofu-vaapi 2>/dev/null | awk '{print $2}')"
 
     if [[ -z "$installed_ver" ]]; then
         warn "FAIL: Package not installed"
         return 1
     fi
 
-    log "  ✓ Package installed: steamos-nvidia-aotofu-vaapi $installed_ver"
+    log "  ✓ Package installed: steamos-build-aotofu-vaapi $installed_ver"
 
     # Verify package ownership
     log ""
     log "Package file verification:"
-    pacman -Qkk --dbpath "$MNT/usr/lib/holo/pacmandb" steamos-nvidia-aotofu-vaapi 2>&1 | head -10 | while IFS= read -r line; do
+    pacman -Qkk --dbpath "$MNT/usr/lib/holo/pacmandb" steamos-build-aotofu-vaapi 2>&1 | head -10 | while IFS= read -r line; do
         log "  $line"
     done
 }

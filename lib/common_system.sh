@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/common_system.sh
+# steamos-build-installer — lib/common_system.sh
 # System helpers: chroot filesystem mounting, depmod, ldconfig, nvidia services.
 # Sourced by the wrapper — do not run directly.
 

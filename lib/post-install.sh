@@ -17,7 +17,7 @@
 set -uo pipefail
 
 TITLE="SteamOS NVIDIA Configuration"
-LOG="/var/log/steamos-nvidia-post-install.log"
+LOG="/var/log/steamos-build-post-install.log"
 SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "$SCRIPT")"
 
@@ -1082,18 +1082,18 @@ apply_actions() {
       warn "Creating first-boot service to regenerate initramfs"
       # Create a oneshot service that regenerates initramfs on first boot
       mkdir -p "$config_root/etc/systemd/system"
-      cat >"$config_root/etc/systemd/system/steamos-nvidia-initramfs.service" <<'SVCEOF'
+      cat >"$config_root/etc/systemd/system/steamos-build-initramfs.service" <<'SVCEOF'
 [Unit]
 Description=Regenerate initramfs with NVIDIA modules
 DefaultDependencies=no
 After=local-fs.target
 Before=display-manager.service
-ConditionPathExists=/etc/mkinitcpio.conf.d/99-steamos-nvidia.conf
+ConditionPathExists=/etc/mkinitcpio.conf.d/99-steamos-build.conf
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/mkinitcpio -P
-ExecStartPost=/bin/rm -f /etc/systemd/system/steamos-nvidia-initramfs.service
+ExecStartPost=/bin/rm -f /etc/systemd/system/steamos-build-initramfs.service
 RemainAfterExit=yes
 
 [Install]
@@ -1101,8 +1101,8 @@ WantedBy=multi-user.target
 SVCEOF
       # Enable the service (symlink in multi-user.target.wants)
       mkdir -p "$config_root/etc/systemd/system/multi-user.target.wants"
-      ln -sf ../steamos-nvidia-initramfs.service \
-        "$config_root/etc/systemd/system/multi-user.target.wants/steamos-nvidia-initramfs.service"
+      ln -sf ../steamos-build-initramfs.service \
+        "$config_root/etc/systemd/system/multi-user.target.wants/steamos-build-initramfs.service"
       log "First-boot initramfs service created"
     fi
   fi
@@ -1116,7 +1116,7 @@ SVCEOF
   fi
 
   # ---- Run user-provided custom script if present (fail open) ----
-  local _custom="$config_root/home/.steamos-nvidia/recovery/custom.sh"
+  local _custom="$config_root/home/.steamos-build/recovery/custom.sh"
   if [[ -x "$_custom" ]]; then
     log "Running custom script: $_custom"
     if bash "$_custom" 2>&1; then

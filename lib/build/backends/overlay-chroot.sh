@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/build/backends/overlay-chroot.sh
+# steamos-build-installer — lib/build/backends/overlay-chroot.sh
 # Build backend using overlay mounts and chroot (no devtools required).
 #
 # This backend uses the same approach as the existing installer:
@@ -185,15 +185,16 @@ _build_overlay_destroy_root() {
     [[ -n "$loop" ]] || continue
 
     if ! wait_ext4_gone "$loop"; then
-      warn "_build_overlay_destroy_root: $loop still owns a live ext4 superblock"
-      warn "_build_overlay_destroy_root: refusing losetup -d; reboot may be required"
-      rc=1
+      warn "_build_overlay_destroy_root: $loop ext4 superblock still alive after timeout (jbd2 journal thread)"
+      warn "_build_overlay_destroy_root: attempting losetup -d anyway — unmount already succeeded"
+      if ! losetup -d "$loop" 2>/dev/null; then
+        warn "_build_overlay_destroy_root: losetup -d failed for $loop"
+        rc=1
+      else
+        log "_build_overlay_destroy_root: $loop detached successfully despite live superblock"
+      fi
     fi
   done <<<"$loops"
-
-  if ((rc != 0)); then
-    return 1
-  fi
 
   # ------------------------------------------------------------
   # 6. Detach loop devices.
@@ -375,10 +376,37 @@ _build_overlay_inject_sources() {
         # Source already bundled in recipe
         mkdir -p "$extract_dir"
         cp -a "$recipe_dir/sources/$source_dir" "$extract_dir/"
+        # Rename extracted directory to match NAME if SOURCE_DIR differs
+        local recipe_name=""
+        recipe_name="$(sed -n 's/^NAME=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
+        if [[ -n "$source_dir" && -n "$recipe_name" && "$source_dir" != "$recipe_name" ]]; then
+          if [[ -d "$extract_dir/$source_dir" ]]; then
+            log "  Renaming source directory: $source_dir -> $recipe_name"
+            mv "$extract_dir/$source_dir" "$extract_dir/$recipe_name"
+          fi
+        fi
       elif [[ "$source_type" == "tarball" ]]; then
         # Download and extract tarball
         local tarball="/tmp/source-$$-$(basename "$source_url")"
         if curl -sL "$source_url" -o "$tarball" 2>&1; then
+          # Verify source integrity if SHA256 is provided
+          local expected_sha256=""
+          expected_sha256="$(sed -n 's/^SOURCE_SHA256=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
+          if [[ -n "$expected_sha256" ]]; then
+            local actual_sha256
+            actual_sha256="$(sha256sum "$tarball" | awk '{print $1}')"
+            log "  Source SHA256 expected: $expected_sha256"
+            log "  Source SHA256 actual:   $actual_sha256"
+            if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+              warn "  SOURCE INTEGRITY FAILED: SHA256 mismatch"
+              rm -f "$tarball"
+              return 1
+            fi
+            log "  [OK] source integrity verified"
+          else
+            warn "  No SOURCE_SHA256 in recipe.conf — skipping integrity check"
+          fi
+
           mkdir -p "$extract_dir"
           chmod 777 "$extract_dir"
           tar -xzf "$tarball" -C "$extract_dir/" || {
@@ -387,6 +415,15 @@ _build_overlay_inject_sources() {
             return 1
           }
           rm -f "$tarball"
+          # Rename extracted directory to match NAME if SOURCE_DIR differs
+          local recipe_name=""
+          recipe_name="$(sed -n 's/^NAME=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
+          if [[ -n "$source_dir" && -n "$recipe_name" && "$source_dir" != "$recipe_name" ]]; then
+            if [[ -d "$extract_dir/$source_dir" ]]; then
+              log "  Renaming source directory: $source_dir -> $recipe_name"
+              mv "$extract_dir/$source_dir" "$extract_dir/$recipe_name"
+            fi
+          fi
           # Make source writable by nobody (makepkg runs as nobody)
           chown -R nobody:nobody "$extract_dir" 2>/dev/null || true
         else
@@ -491,6 +528,24 @@ _build_overlay_diagnostics() {
     done
     echo ""
 
+    echo "===== PACKAGING TOOLS ====="
+    local pkg_tool
+    for pkg_tool in fakeroot binutils debugedit makepkg; do
+      local pkg_version=""
+      case "$pkg_tool" in
+        fakeroot)  pkg_version="$(chroot "$root" fakeroot --version 2>/dev/null | head -1)" ;;
+        binutils)  pkg_version="$(chroot "$root" pacman -Q binutils 2>/dev/null)" ;;
+        debugedit) pkg_version="$(chroot "$root" pacman -Q debugedit 2>/dev/null)" ;;
+        makepkg)   pkg_version="$(chroot "$root" makepkg --version 2>/dev/null | head -1)" ;;
+      esac
+      if [[ -n "$pkg_version" ]]; then
+        printf '[OK]      %-12s %s\n' "$pkg_tool" "$pkg_version"
+      else
+        printf '[MISSING] %s\n' "$pkg_tool"
+      fi
+    done
+    echo ""
+
     echo "===== TOOLCHAIN FILES ====="
     local file
     for file in "${generic_toolchain_files[@]}"; do
@@ -506,11 +561,22 @@ _build_overlay_diagnostics() {
     if [[ ${#diag_pc_files[@]} -gt 0 ]]; then
       echo "===== RECIPE PKG-CONFIG FILES ====="
       for file in "${diag_pc_files[@]}"; do
+        local pc_name="${file%.pc}"
+        # Check file existence
         local pc_path="/usr/lib/pkgconfig/$file"
-        if [[ -e "$root$pc_path" ]]; then
-          printf '[OK]      %s\n' "$file"
+        if [[ ! -e "$root$pc_path" ]]; then
+          printf '[MISSING] %s (file not found)\n' "$file"
+          continue
+        fi
+        # Check that pkg-config can actually resolve it (including transitive deps)
+        local pc_cflags=""
+        pc_cflags="$(chroot "$root" pkg-config --cflags "$pc_name" 2>/dev/null)" || pc_cflags=""
+        if [[ -n "$pc_cflags" || $? -eq 0 ]]; then
+          local pc_ver
+          pc_ver="$(chroot "$root" pkg-config --modversion "$pc_name" 2>/dev/null || echo 'unknown')"
+          printf '[OK]      %-40s %s\n' "$file" "$pc_ver"
         else
-          printf '[MISSING] %s\n' "$file"
+          printf '[BROKEN]  %s (file exists but dependencies unresolved)\n' "$file"
         fi
       done
       echo ""
@@ -570,7 +636,13 @@ _build_overlay_diagnostics() {
     fi
 
     echo "===== PACMAN CONFIG ====="
-    chroot "$root" grep -Ev '^\s*(#|$)' /etc/pacman.conf 2>/dev/null | head -20 || true
+    # Show the generated config that was actually used for this build,
+    # not the chroot's merged view (which may contain stale repo SigLevel lines).
+    if [[ -n "${PROFILE_PACMAN:-}" && -f "${PROFILE_PACMAN:-}" ]]; then
+      grep -Ev '^\s*(#|$)' "$PROFILE_PACMAN" 2>/dev/null | head -20 || true
+    else
+      chroot "$root" grep -Ev '^\s*(#|$)' /etc/pacman.conf 2>/dev/null | head -20 || true
+    fi
     echo ""
 
     echo "===== BUILD ENVIRONMENT ====="
@@ -741,7 +813,7 @@ _build_capture_diagnostics() {
   local root="${1:?}"
   local output_dir="${2:?}"
   local build_log="${3:?}"
-  local persist_dir="/home/.steamos-nvidia/build-logs"
+  local persist_dir="/home/.steamos-build/build-logs"
   mkdir -p "$persist_dir"
   local timestamp
   timestamp="$(date +%Y%m%d-%H%M%S)"

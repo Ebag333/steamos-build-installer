@@ -1,6 +1,6 @@
 # Build Framework
 
-Clean-room build framework for steamos-nvidia-installer.
+Clean-room build framework for steamos-build-installer.
 
 ## Core Principle
 

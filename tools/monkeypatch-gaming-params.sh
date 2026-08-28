@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # monkeypatch-gaming-params.sh — fix missing gaming kernel params on a running
-# steamos-nvidia system, and patch the self-heal repatch script so future
+# steamos-build system, and patch the self-heal repatch script so future
 # OS updates also get the fix.
 #
 # Run as root on the affected device:
@@ -96,8 +96,8 @@ done
 
 GRUB_DEFAULT="/etc/default/grub"
 GRUB_STEAMOS="/etc/default/grub-steamos"
-REPATCH="/usr/lib/steamos-nvidia/repatch.sh"
-DRIVER_CONF="/usr/lib/steamos-nvidia/driver.conf"
+REPATCH="/usr/lib/steamos-build/repatch.sh"
+DRIVER_CONF="/usr/lib/steamos-build/driver.conf"
 
 echo
 echo "Monkeypatching gaming kernel params"
@@ -176,7 +176,7 @@ if [[ -f "$GRUB_STEAMOS" ]]; then
 
   # Ensure atomic-update keep-list persists grub-steamos across A/B updates
   KEEP_DIR="/etc/atomic-update.conf.d"
-  KEEP_FILE="$KEEP_DIR/steamos-nvidia-installer.conf"
+  KEEP_FILE="$KEEP_DIR/steamos-build-installer.conf"
   if [[ -d "$KEEP_DIR" ]]; then
     if ! grep -q '/etc/default/grub-steamos' "$KEEP_FILE" 2>/dev/null; then
       mkdir -p "$KEEP_DIR"

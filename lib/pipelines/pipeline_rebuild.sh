@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/pipelines/pipeline_rebuild.sh
+# steamos-build-installer — lib/pipelines/pipeline_rebuild.sh
 # Rebuild (self-heal) workflow pipeline definition.
 # Defines the phases for re-applying NVIDIA patches after an OS update.
 #
@@ -219,10 +219,10 @@ phase_rebuild_discover() {
   log "Target kernel: $KVER"
 
   # Load persisted build selections from user's config
-  if [[ -r /home/.steamos-nvidia/build.conf ]]; then
-    source /home/.steamos-nvidia/build.conf
+  if [[ -r /home/.steamos-build/build.conf ]]; then
+    source /home/.steamos-build/build.conf
   else
-    die "Build config not found at /home/.steamos-nvidia/build.conf"
+    die "Build config not found at /home/.steamos-build/build.conf"
   fi
 
   : "${INITRAMFS_MODULES:=}"
@@ -236,10 +236,10 @@ phase_rebuild_discover() {
   fi
 
   # Set HID bundle location: prefer /home (latest), fall back to /usr
-  if [[ -d "/home/.steamos-nvidia/bundles/hid" ]]; then
-    HID_BUNDLE_DIR="/home/.steamos-nvidia/bundles/hid"
-  elif [[ -d "/usr/lib/steamos-nvidia/hid" ]]; then
-    HID_BUNDLE_DIR="/usr/lib/steamos-nvidia/hid"
+  if [[ -d "/home/.steamos-build/bundles/hid" ]]; then
+    HID_BUNDLE_DIR="/home/.steamos-build/bundles/hid"
+  elif [[ -d "/usr/lib/steamos-build/hid" ]]; then
+    HID_BUNDLE_DIR="/usr/lib/steamos-build/hid"
   else
     HID_BUNDLE_DIR="/home/.driver-packages/hid"
   fi
@@ -357,10 +357,10 @@ phase_rebuild_install() {
 
   # Add Thunderbolt support files: prefer /home (latest), fall back to /usr
   local thunderbolt_dir=""
-  if [[ -d "/home/.steamos-nvidia/bundles/thunderbolt" ]]; then
-    thunderbolt_dir="/home/.steamos-nvidia/bundles/thunderbolt"
-  elif [[ -d "/usr/lib/steamos-nvidia/thunderbolt" ]]; then
-    thunderbolt_dir="/usr/lib/steamos-nvidia/thunderbolt"
+  if [[ -d "/home/.steamos-build/bundles/thunderbolt" ]]; then
+    thunderbolt_dir="/home/.steamos-build/bundles/thunderbolt"
+  elif [[ -d "/usr/lib/steamos-build/thunderbolt" ]]; then
+    thunderbolt_dir="/usr/lib/steamos-build/thunderbolt"
   fi
   if [[ -n "$thunderbolt_dir" ]]; then
     log "Adding thunderbolt support"
@@ -421,12 +421,31 @@ phase_rebuild_install() {
   flatpaks="$(get_build_items "flatpak")"
   if [[ -n "$flatpaks" ]]; then
     for pkg in $flatpaks; do
-      case "$pkg" in
-        dlss-updater)
-          apply_dlss_updater_rebuild "$NEWROOT"
-          patch_record "DLSS Updater" "ok"
-          ;;
-      esac
+      local recipe_name
+      recipe_name="$(get_build_recipe "$pkg")" || recipe_name=""
+      local recipe_dir=""
+      if [[ -n "$recipe_name" ]]; then
+        recipe_dir="$SCRIPT_DIR/configs/build_recipes/$recipe_name"
+      fi
+
+      if [[ -d "$recipe_dir" ]]; then
+        local install_script="$recipe_dir/sources/install-${recipe_name}.sh"
+        if [[ -x "$install_script" ]]; then
+          log "Installing $pkg via recipe"
+          if bash "$install_script" "$NEWROOT"; then
+            patch_record "$pkg" "ok"
+          else
+            warn "FAILED: $pkg install failed"
+            patch_record "$pkg" "fail"
+          fi
+        else
+          warn "No install script found for $pkg at $install_script"
+          patch_record "$pkg" "fail"
+        fi
+      else
+        warn "No recipe found for $pkg"
+        patch_record "$pkg" "fail"
+      fi
     done
   fi
 
@@ -475,14 +494,14 @@ phase_rebuild_configure() {
 phase_rebuild_reconcile() {
   # Propagate self-healing scripts from /home (latest) or /usr (fallback).
   local nvidia_dir
-  nvidia_dir="$(resolve_nvidia_dir)" || die "Cannot find steamos-nvidia directory"
+  nvidia_dir="$(resolve_nvidia_dir)" || die "Cannot find steamos-build directory"
 
-  mkdir -p "$NEWROOT/usr/lib/steamos-nvidia"
+  mkdir -p "$NEWROOT/usr/lib/steamos-build"
 
   # Copy library subdirectories (lib/, pipelines/, diagnostics/)
   local d
   for d in lib pipelines diagnostics; do
-    [[ -d "$nvidia_dir/$d" ]] && cp -a "$nvidia_dir/$d" "$NEWROOT/usr/lib/steamos-nvidia/"
+    [[ -d "$nvidia_dir/$d" ]] && cp -a "$nvidia_dir/$d" "$NEWROOT/usr/lib/steamos-build/"
   done
 
   # Persist project files to /home for later re-run

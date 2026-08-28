@@ -24,7 +24,7 @@ build_aotofu_with_framework() {
   # Step 2: Build the recipe
   log "Building AoTofu VA-API driver"
   build_recipe \
-    --recipe "$SCRIPT_DIR/recipes/aotofu-vaapi" \
+    --recipe "$SCRIPT_DIR/configs/build_recipes/aotofu-vaapi" \
     --profile "$PROFILE_DIR" \
     --output "$workdir/packages" \
     --keep-failed

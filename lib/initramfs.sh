@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/initramfs.sh
+# steamos-build-installer — lib/initramfs.sh
 # Single source of truth for initramfs configuration and module management.
 # Handles: chroot (build/rebuild), live, verify.
 #
@@ -252,8 +252,8 @@ _write_dracut_config() {
 
   log "  Using dracut for initramfs"
   mkdir -p "$root/etc/dracut.conf.d"
-  cat >"$root/etc/dracut.conf.d/99-steamos-nvidia.conf" <<EOF
-# Added by steamos-nvidia-installer
+  cat >"$root/etc/dracut.conf.d/99-steamos-build.conf" <<EOF
+# Added by steamos-build-installer
 add_drivers+=" $modules "
 EOF
   log "  dracut modules: $modules"
@@ -277,8 +277,8 @@ _write_mkinitcpio_config() {
   fi
 
   mkdir -p "$root/etc/mkinitcpio.conf.d"
-  cat >"$root/etc/mkinitcpio.conf.d/99-steamos-nvidia.conf" <<EOF
-# Added by steamos-nvidia-installer
+  cat >"$root/etc/mkinitcpio.conf.d/99-steamos-build.conf" <<EOF
+# Added by steamos-build-installer
 MODULES=($merged_modules)
 EOF
   log "  MODULES=($merged_modules)"
@@ -418,8 +418,8 @@ verify_initramfs() {
   local kver="${3:-}"
 
   # Check for our config files
-  local dracut_conf="$root/etc/dracut.conf.d/99-steamos-nvidia.conf"
-  local mkinitcpio_conf="$root/etc/mkinitcpio.conf.d/99-steamos-nvidia.conf"
+  local dracut_conf="$root/etc/dracut.conf.d/99-steamos-build.conf"
+  local mkinitcpio_conf="$root/etc/mkinitcpio.conf.d/99-steamos-build.conf"
   local config_file=""
 
   if [[ -f "$dracut_conf" ]]; then

@@ -62,7 +62,7 @@ The `spec` field is passed directly to `pipx install` or `pipx inject`, so it su
 ## Use via CLI
 
 ```bash
-./steamos-nvidia.sh --action build \
+./steamos-build.sh --action build \
     --image ... \
     --pipx-items "linuxgamebench PySide6"
 ```

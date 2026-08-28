@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/diagnostics/boot.sh
+# steamos-build-installer — lib/diagnostics/boot.sh
 # Boot and partition diagnostics for SteamOS A/B slot system.
 # Provides functions to diagnose boot layout and state.
 #

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/customization.sh
+# steamos-build-installer — lib/customization.sh
 # Single entry point for applying customizations across all contexts.
 # Loops through requested customizations and applies each one.
 #
@@ -75,8 +75,8 @@ get_build_items() {
     return 1
   fi
 
-  local type name version default desc
-  while IFS='|' read -r type name version default desc; do
+  local type name version default desc recipe
+  while IFS='|' read -r type name version default desc recipe; do
     [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
     [[ -n "$type_filter" && "$type" != "$type_filter" ]] && continue
 
@@ -93,6 +93,29 @@ get_build_items() {
   done <"$conf"
 
   echo "${items# }"
+}
+
+# Get the recipe directory name for a build item.
+# Args: $1 = item name (e.g. "elFarto/nvidia-vaapi-driver")
+# Prints the RECIPE field from hw-packages-build.conf, or empty if not found.
+get_build_recipe() {
+  local item_name="${1:?get_build_recipe: missing item name}"
+  local conf="$CUSTOMIZATION_DIR/configs/hw-packages-build.conf"
+
+  if [[ ! -r "$conf" ]]; then
+    return 1
+  fi
+
+  local type name version default desc recipe
+  while IFS='|' read -r type name version default desc recipe; do
+    [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
+    if [[ "$name" == "$item_name" ]]; then
+      echo "$recipe"
+      return 0
+    fi
+  done <"$conf"
+
+  return 1
 }
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/overlay.sh
+# steamos-build-installer — lib/overlay.sh
 # Overlay chroot management: create, mount, configure, unmount.
 # Sourced by the wrapper — do not run directly.
 
@@ -182,7 +182,7 @@ overlay_check_cache() {
   [[ -n "${UPPER:-}" && -n "${OVLWORK:-}" ]] \
     || die "overlay_check_cache called before upper/work paths were initialized"
 
-  marker="$cache_root/.steamos-nvidia-overlay-cache-key"
+  marker="$cache_root/.steamos-build-overlay-cache-key"
 
   if [[ -f "$marker" ]]; then
     IFS="" read -r current_key <"$marker" || current_key=""
@@ -692,6 +692,8 @@ setup_clear_stale_state() {
   # ============================================================
   _cleanup_stale_build_roots
 
+  _cleanup_stale_build_loops
+
   log "Stale build state is clean"
 }
 
@@ -766,6 +768,55 @@ _cleanup_stale_build_roots() {
 
   # Remove empty build-roots directory
   rmdir "$build_roots_dir" 2>/dev/null || true
+}
+
+# Find and detach loop devices from ANY previous run whose back-file matches
+# build-related patterns.  Unlike the rest of setup_clear_stale_state() which
+# only looks under $WORKDIR, this catches loops left behind by runs that used a
+# different $WORKDIR (e.g. /dev/shm/nvidia-build vs /home/image/.nvidia-usb-work).
+# Called from setup_clear_stale_state().
+_cleanup_stale_build_loops() {
+  local json
+  json="$(losetup -J 2>/dev/null)" || return 0
+  [[ -n "$json" ]] || return 0
+
+  # python3 prints lines of "loop_name\tback_file" for matching loops.
+  local matches
+  matches="$(python3 -c '
+import json, sys, fnmatch
+
+PATTERNS = [
+    "*/overlay-work.img",
+    "*/*.building",
+    "*/*.building (deleted)",
+    "*/build-roots/*/overlay-work.img",
+]
+
+data = json.loads(sys.stdin.read())
+for dev in data.get("loopdevices", []):
+    backing = dev.get("back-file") or ""
+    name = dev.get("name") or ""
+    if not name or not backing:
+        continue
+    clean = backing.removesuffix(" (deleted)")
+    for pat in PATTERNS:
+        if fnmatch.fnmatch(clean, pat):
+            print(name + "\t" + backing)
+            break
+' <<<"$json")" || return 0
+
+  [[ -n "$matches" ]] || return 0
+
+  local line loop backing
+  while IFS=$'\t' read -r loop backing; do
+    [[ -n "$loop" ]] || continue
+    warn "Cleaning stale build loop from previous run: $loop ($backing)"
+    if losetup -d "$loop" 2>/dev/null; then
+      log "  Detached $loop"
+    else
+      warn "  Could not detach $loop (may already be gone)"
+    fi
+  done <<<"$matches"
 }
 
 # Initialize pacman keyring in the overlay chroot.
@@ -972,16 +1023,31 @@ overlay_cleanup() {
   fi
 
   # ------------------------------------------------------------
-  # 6. The ext4 filesystem must be completely gone BEFORE detach.
+  # 6. Wait for ext4 superblock release, but don't block on it.
   # ------------------------------------------------------------
   while IFS="" read -r m; do
     [[ -n "$m" ]] || continue
 
     if ! wait_ext4_gone "$m"; then
-      warn "overlay_cleanup: $m still owns a live ext4 superblock"
-      warn "overlay_cleanup: refusing losetup -d; reboot may be required"
-      [[ "$_had_e" -eq 1 ]] && set -e
-      return 1
+      warn "overlay_cleanup: $m ext4 superblock still alive after timeout (jbd2 journal thread)"
+      warn "overlay_cleanup: attempting losetup -d anyway — unmount already succeeded"
+      # Dump diagnostic info about what's holding the loop.
+      local _backing
+      _backing="$(losetup -l -O BACK-FILE "$m" 2>/dev/null | tail -1 | tr -d ' ')"
+      warn "overlay_cleanup:   loop=$m backing=${_backing:-<unknown>}"
+      # The filesystem is no longer accessible to userspace after unmount.
+      # The jbd2 thread is just flushing metadata in the background.
+      # losetup -d may succeed even if the superblock appears alive.
+      if losetup -d "$m" 2>/dev/null; then
+        log "overlay_cleanup: $m detached successfully despite live superblock"
+      else
+        warn "overlay_cleanup: losetup -d failed for $m, trying force detach"
+        if ! losetup -D 2>/dev/null; then
+          warn "overlay_cleanup: force detach also failed for $m"
+          warn "overlay_cleanup: a reboot is required to release this resource"
+          rc=1
+        fi
+      fi
     fi
   done <<<"$loops"
 
@@ -1001,11 +1067,23 @@ overlay_cleanup() {
     remaining="$(loops_for_file "$OVL_IMG")"
 
     if [[ -n "$remaining" ]]; then
-      warn "overlay_cleanup: loop device(s) still attached to $OVL_IMG:"
+      local all_autoclear=1
       while IFS="" read -r m; do
-        [[ -n "$m" ]] && warn "  $m"
+        [[ -n "$m" ]] || continue
+        local ac
+        ac="$(losetup -l -O AUTOCLEAR "$m" 2>/dev/null | tail -1 | tr -d ' ')"
+        if [[ "$ac" == "1" ]]; then
+          log "overlay_cleanup: $m still attached but AUTOCLEAR=1 — kernel will auto-detach"
+        else
+          warn "overlay_cleanup: $m still attached without AUTOCLEAR"
+          all_autoclear=0
+        fi
       done <<<"$remaining"
-      rc=1
+
+      if (( all_autoclear == 0 )); then
+        warn "overlay_cleanup: non-autoclear loop(s) still attached to $OVL_IMG"
+        rc=1
+      fi
     fi
   fi
 

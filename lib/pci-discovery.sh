@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/pci-discovery.sh
+# steamos-build-installer — lib/pci-discovery.sh
 # PCI hardware enumeration for initramfs module selection.
-# Sourced by steamos-nvidia.sh — do not run directly.
+# Sourced by steamos-build.sh — do not run directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "lib/pci-discovery.sh is a library — source it from the wrapper, not run directly." >&2

@@ -44,12 +44,12 @@ An OS update replaces the rootfs entirely. The repatch process re-applies:
 - Initramfs module configuration
 - GRUB configuration
 - Modprobe config (blacklist nouveau, enable KMS)
-- Custom script (`/home/.steamos-nvidia/recovery/custom.sh`)
+- Custom script (`/home/.steamos-build/recovery/custom.sh`)
 - Self-heal wrappers (propagated to the new slot)
 
 ## What lives on the installed system
 
-### `/usr/lib/steamos-nvidia/`
+### `/usr/lib/steamos-build/`
 
 | Path | Purpose |
 |---|---|
@@ -68,7 +68,7 @@ An OS update replaces the rootfs entirely. The repatch process re-applies:
 | `hid/` | Logitech HID module source (if logitech-hid was selected) |
 | `thunderbolt/` | Thunderbolt support files (if thunderbolt was selected) |
 
-### `/home/.steamos-nvidia/`
+### `/home/.steamos-build/`
 
 | Path | Purpose |
 |---|---|
@@ -82,10 +82,10 @@ An OS update replaces the rootfs entirely. The repatch process re-applies:
 
 ### Pin a driver version
 
-The package manifests at `/usr/lib/steamos-nvidia/configs/` control what gets installed during self-heal. To pin a specific NVIDIA driver version:
+The package manifests at `/usr/lib/steamos-build/configs/` control what gets installed during self-heal. To pin a specific NVIDIA driver version:
 
 ```bash
-sudo nano /usr/lib/steamos-nvidia/configs/hw-packages-arch.conf
+sudo nano /usr/lib/steamos-build/configs/hw-packages-arch.conf
 ```
 
 Change `latest` to a specific version:
@@ -103,8 +103,8 @@ The next OS update will use these pinned versions instead of resolving `latest`.
 Edit the manifests to add or remove packages from future self-heal cycles:
 
 ```bash
-sudo nano /usr/lib/steamos-nvidia/configs/hw-packages-arch.conf
-sudo nano /usr/lib/steamos-nvidia/configs/hw-packages-valve.conf
+sudo nano /usr/lib/steamos-build/configs/hw-packages-arch.conf
+sudo nano /usr/lib/steamos-build/configs/hw-packages-valve.conf
 ```
 
 Remove a line or set its default to `FALSE` to exclude it. Add a line to include a new package.
@@ -114,23 +114,23 @@ Remove a line or set its default to `FALSE` to exclude it. Add a line to include
 Edit `driver.conf` to change which tweaks are applied during the next self-heal:
 
 ```bash
-sudo nano /usr/lib/steamos-nvidia/driver.conf
+sudo nano /usr/lib/steamos-build/driver.conf
 ```
 
 The `GAMING_ITEMS` variable is a space-separated list of tweak names. Remove or add items as needed. See [System Tweaks](customization_system_tweaks.md) for the full list.
 
 ### Run a custom script on every update
 
-Place an executable script at `/home/.steamos-nvidia/recovery/custom.sh`:
+Place an executable script at `/home/.steamos-build/recovery/custom.sh`:
 
 ```bash
-mkdir -p /home/.steamos-nvidia/recovery
-cat > /home/.steamos-nvidia/recovery/custom.sh << 'EOF'
+mkdir -p /home/.steamos-build/recovery
+cat > /home/.steamos-build/recovery/custom.sh << 'EOF'
 #!/bin/bash
 # Runs during build and during every self-heal repatch
 pacman -S --noconfirm my-custom-package
 EOF
-chmod +x /home/.steamos-nvidia/recovery/custom.sh
+chmod +x /home/.steamos-build/recovery/custom.sh
 ```
 
 ### Tune boot-time performance hooks
@@ -154,7 +154,7 @@ You can also add custom hooks by placing executable scripts in `/etc/steam-perf/
 ### View the build manifest
 
 ```bash
-cat /usr/lib/steamos-nvidia/build.conf
+cat /usr/lib/steamos-build/build.conf
 ```
 
 This shows the original build flags, driver version, kernel version, and timestamp.
@@ -163,10 +163,10 @@ This shows the original build flags, driver version, kernel version, and timesta
 
 ```bash
 # Most recent
-cat /home/.steamos-nvidia/logs/atomupd-latest.log
+cat /home/.steamos-build/logs/atomupd-latest.log
 
 # All logs
-ls -la /home/.steamos-nvidia/logs/
+ls -la /home/.steamos-build/logs/
 ```
 
 ### Check if NVIDIA driver is loaded

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/build/profiles/steamos.sh
+# steamos-build-installer — lib/build/profiles/steamos.sh
 # SteamOS-specific profile handling.
 #
 # Sourced by engine.sh — do not run directly.

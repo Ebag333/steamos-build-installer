@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/steamos-nvidia-installer.iml" filepath="$PROJECT_DIR$/.idea/steamos-nvidia-installer.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/steamos-build-installer.iml" filepath="$PROJECT_DIR$/.idea/steamos-build-installer.iml" />
     </modules>
   </component>
 </project>

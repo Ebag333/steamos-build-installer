@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/drivers/aotofu-vaapi.sh
+# steamos-build-installer — lib/drivers/aotofu-vaapi.sh
 # AoTofu nvidia-vaapi-driver module.
 # Builds and installs the AoTofu VA-API driver for NVIDIA.
 #
@@ -59,10 +59,10 @@ AOTOFU_PC_DEPS=(
 )
 
 # State directory for tracking builds: prefer /home (latest), fall back to /usr
-if [[ -d "/home/.steamos-nvidia/bundles/aotofu-vaapi" ]]; then
-  AOTOFU_STATE_DIR="/home/.steamos-nvidia/bundles/aotofu-vaapi"
+if [[ -d "/home/.steamos-build/bundles/aotofu-vaapi" ]]; then
+  AOTOFU_STATE_DIR="/home/.steamos-build/bundles/aotofu-vaapi"
 else
-  AOTOFU_STATE_DIR="/usr/lib/steamos-nvidia/aotofu-vaapi"
+  AOTOFU_STATE_DIR="/usr/lib/steamos-build/aotofu-vaapi"
 fi
 
 # Source bundle directory (inside state dir) for self-heal
@@ -969,131 +969,6 @@ _require_host_git() {
   fi
 }
 
-# Apply AoTofu driver (build-time).
-# Args: $1 = work directory, $2 = root path (optional, defaults to MERGED)
-# Returns 0 on success, 1 on failure
-apply_aotofu_vaapi_build() {
-  local workdir="${1:?apply_aotofu_vaapi_build: missing work directory}"
-  local root="${2:-${MERGED:-/}}"
-
-  log "Building AoTofu VA-API driver"
-
-  _require_host_git || return 1
-
-  local src_dir="$workdir/aotofu-src"
-
-  # Install dependencies with snapshot tracking
-  _aotofu_prepare_build_environment "$workdir" "$root" || {
-    _aotofu_record_build_only_delta "$workdir" "$root"
-    return 1
-  }
-
-  # Fetch source
-  _fetch_aotofu_source "$src_dir" || {
-    _aotofu_record_build_only_delta "$workdir" "$root"
-    return 1
-  }
-  local commit="$AOTOFU_FETCHED_COMMIT"
-  log "  Source commit: $commit"
-
-  # Check if rebuild is needed — use chroot's pkg-config for driver path
-  local driver_dir
-  if [[ "$root" == "/" ]]; then
-    driver_dir="$(pkg-config --variable=driverdir libva 2>/dev/null || true)"
-  else
-    driver_dir="$(chroot "$root" pkg-config --variable=driverdir libva 2>/dev/null || true)"
-  fi
-  if [[ -z "$driver_dir" || "$driver_dir" != /* ]]; then
-    warn "Invalid libva driverdir: '${driver_dir:-<empty>}'"
-    _aotofu_record_build_only_delta "$workdir" "$root"
-    return 1
-  fi
-  local target_driver_chroot="$driver_dir/nvidia_drv_video.so"
-  local target_driver_host="$root$target_driver_chroot"
-
-  if ! _aotofu_needs_rebuild "$commit" "$target_driver_host" "$root"; then
-    log "  AoTofu driver is current — skipping rebuild"
-    _aotofu_record_build_only_delta "$workdir" "$root"
-    return 0
-  fi
-
-  # Build inside the target root
-  _build_aotofu_driver "$root" "$src_dir" "$workdir" || {
-    _aotofu_record_build_only_delta "$workdir" "$root"
-    return 1
-  }
-  local built_driver="$AOTOFU_BUILT_DRIVER"
-
-  # ── Verify VP9 codecparser support is linked ──
-  local needed
-  needed="$(readelf -d "$built_driver" 2>/dev/null | grep NEEDED || true)"
-  log "  Driver NEEDED: $(echo "$needed" | awk '{print $NF}' | tr '\n' ' ')"
-
-  if ! grep -q 'libgstcodecparsers' <<<"$needed"; then
-    warn "AoTofu built without VP9 codecparser support — gst-plugins-bad-libs not linked"
-    _aotofu_record_build_only_delta "$workdir" "$root"
-    return 1
-  fi
-  log "  VP9 codec support: enabled"
-
-  # Backup existing driver (host path)
-  if [[ -f "$target_driver_host" ]]; then
-    local current_sha
-    current_sha="$(sha256sum "$target_driver_host" | awk '{print $1}')"
-    local backup_dir="$root$AOTOFU_STATE_DIR/backups"
-    local backup_path="$backup_dir/nvidia_drv_video.so.$current_sha"
-    if [[ ! -e "$backup_path" ]]; then
-      mkdir -p "$backup_dir"
-      cp -a "$target_driver_host" "$backup_path"
-      log "  Backed up existing driver to $backup_path"
-    fi
-  fi
-
-  # Install (host path for file operations)
-  local installed_sha
-  installed_sha="$(_install_aotofu_driver "$built_driver" "$target_driver_host")" || {
-    _aotofu_record_build_only_delta "$workdir" "$root"
-    return 1
-  }
-
-  # ── Verify runtime dependencies resolve in target root ──
-  if [[ "$root" != "/" ]]; then
-    if chroot "$root" ldd "$target_driver_chroot" 2>&1 | grep -q 'not found'; then
-      warn "AoTofu driver has unresolved runtime dependencies:"
-      chroot "$root" ldd "$target_driver_chroot" 2>&1 | grep 'not found' >&2
-      _aotofu_record_build_only_delta "$workdir" "$root"
-      return 1
-    fi
-    log "  Runtime dependency check: all resolved"
-  fi
-
-  # Copy to state directory (root-aware)
-  mkdir -p "$root$AOTOFU_STATE_DIR/driver"
-  install -m0755 "$built_driver" "$root$AOTOFU_STATE_DIR/driver/nvidia_drv_video.so"
-
-  # Write stamp (root-aware)
-  local fingerprint
-  fingerprint="$(_compute_aotofu_fingerprint "$src_dir" "$commit" "$root")"
-  _write_aotofu_stamp "$commit" "$fingerprint" "$installed_sha" "$root"
-
-  # Register custom payload files (not owned by any pacman package)
-  register_custom_payload_file "$target_driver_chroot"
-  register_custom_payload_file "$AOTOFU_STATE_DIR/build.stamp"
-  register_custom_payload_file "$AOTOFU_STATE_DIR/driver/nvidia_drv_video.so"
-
-  # Create bundle for self-heal
-  local bundle_dir="$MNT$AOTOFU_BUNDLE_DIR"
-  if ! create_driver_bundle "$src_dir" "$bundle_dir"; then
-    warn "Failed to create AoTofu source bundle for self-heal"
-  fi
-
-  # ── Record build-only delta for compute_payload ──
-  _aotofu_record_build_only_delta "$workdir" "$root"
-
-  log "AoTofu VA-API driver built and installed"
-  return 0
-}
-
 # Apply AoTofu driver (rebuild/self-heal).
 # Args: none (uses AOTOFU_BUNDLE_DIR relative to MERGED)
 # Returns 0 on success, 1 on failure
@@ -1102,6 +977,49 @@ apply_aotofu_vaapi_rebuild() {
   local workdir="$MERGED/tmp/aotofu-rebuild"
   local bundle_dir="$root$AOTOFU_BUNDLE_DIR"
 
+  # ── Check for persisted package from initial build ─────────────────────
+  # If a pre-built pacman package exists from the initial build and the ABI
+  # hasn't changed, reinstall it instead of rebuilding from source.
+  local persisted_pkg=""
+  local _pkg_dir="/home/.steamos-build/bundles/aotofu-vaapi"
+  if [[ -d "$_pkg_dir" ]]; then
+    persisted_pkg="$(ls -t "$_pkg_dir"/steamos-build-aotofu-vaapi-*.pkg.tar.zst 2>/dev/null | head -1)"
+  fi
+
+  if [[ -n "$persisted_pkg" && -f "$persisted_pkg" ]]; then
+    # Check if ABI is still compatible by comparing fingerprint
+    local _stamp_file="/home/.steamos-build/bundles/aotofu-vaapi/build.stamp"
+    local _old_fingerprint=""
+    if [[ -f "$_stamp_file" ]]; then
+      _old_fingerprint="$(sed -n 's/^fingerprint=//p' "$_stamp_file" | tail -1)"
+    fi
+
+    # Compute current fingerprint from target root's ABI packages
+    local _current_fingerprint=""
+    local _pkg_hash=""
+    local _pc
+    for _pc in "${AOTOFU_PC_DEPS[@]}"; do
+      _pkg_hash+="$(chroot "$root" pkg-config --modversion "$_pc" 2>/dev/null || printf 'missing')"
+    done
+    local _installed_hash
+    _installed_hash="$(chroot "$root" pacman -Q 2>/dev/null \
+      | grep -E '^(libva|libdrm|libglvnd|ffnvcodec-headers|gst-plugins-bad-libs|nvidia|nvidia-open-dkms|nvidia-utils) ' \
+      | sort | sha256sum | awk '{print $1}')"
+    _current_fingerprint="$(printf '%s%s' "$_pkg_hash" "$_installed_hash" | sha256sum | awk '{print $1}')"
+
+    if [[ -n "$_old_fingerprint" && "$_old_fingerprint" == "$_current_fingerprint" ]]; then
+      log "AoTofu VA-API: ABI unchanged, reinstalling persisted package"
+      chroot "$root" pacman -U --noconfirm --overwrite '*' "$persisted_pkg" 2>&1 | tail -5 || {
+        warn "Persisted package install failed, falling back to rebuild"
+      }
+      patch_record "AoTofu VA-API (persisted)" "ok"
+      return 0
+    else
+      log "AoTofu VA-API: ABI changed, rebuilding from source"
+    fi
+  fi
+
+  # ── Rebuild from source (original path) ────────────────────────────────
   log "Rebuilding AoTofu VA-API driver from bundle"
 
   _require_host_git || return 1

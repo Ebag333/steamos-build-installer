@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/builds/common.sh
+# steamos-build-installer — lib/builds/common.sh
 # Shared utilities for custom build modules.
 # Provides common functions for fetching, building, and installing packages.
 #
@@ -290,7 +290,7 @@ install_flatpak_from_github() {
 
   # Build/rebuild: stage for first-boot installation
   log "  Build environment detected — staging Flatpak for first boot"
-  local stage_dir="$root/usr/share/steamos-nvidia/flatpaks"
+  local stage_dir="$root/usr/share/steamos-build/flatpaks"
   mkdir -p "$stage_dir"
 
   # Use stable filename based on repo name
@@ -304,18 +304,18 @@ install_flatpak_from_github() {
   mkdir -p "$wants_dir"
 
   # Install service file
-  if [[ -f "$BUILDS_DIR/../configs/steamos-nvidia-flatpak-install.service" ]]; then
-    cp "$BUILDS_DIR/../configs/steamos-nvidia-flatpak-install.service" "$service_dir/"
+  if [[ -f "$BUILDS_DIR/../configs/steamos-build-flatpak-install.service" ]]; then
+    cp "$BUILDS_DIR/../configs/steamos-build-flatpak-install.service" "$service_dir/"
   fi
 
   # Install installer script
   if [[ -f "$BUILDS_DIR/../configs/install-staged-flatpaks.sh" ]]; then
-    install -m 755 "$BUILDS_DIR/../configs/install-staged-flatpaks.sh" "$root/usr/lib/steamos-nvidia/install-staged-flatpaks"
+    install -m 755 "$BUILDS_DIR/../configs/install-staged-flatpaks.sh" "$root/usr/lib/steamos-build/install-staged-flatpaks"
   fi
 
   # Enable service
-  ln -sf /etc/systemd/user/steamos-nvidia-flatpak-install.service \
-    "$wants_dir/steamos-nvidia-flatpak-install.service"
+  ln -sf /etc/systemd/user/steamos-build-flatpak-install.service \
+    "$wants_dir/steamos-build-flatpak-install.service"
 
   rm -f "$tmp"
   log "  Flatpak staged: $repo"

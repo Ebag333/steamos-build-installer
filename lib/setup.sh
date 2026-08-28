@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/setup.sh
+# steamos-build-installer — lib/setup.sh
 # Stage 1: create build dirs, copy the image, set up the loop device and the
 # rootfs/efi/home mounts, and discover the image's kernel + headers.
 # Sourced by the wrapper — do not run directly.
@@ -142,7 +142,7 @@ setup_udev_guard() {
   local loop_name="${LOOPDEV#/dev/}"
 
   cat >"$UDEV_RULE" <<EOF
-# steamos-nvidia build-loop quarantine.
+# steamos-build build-loop quarantine.
 #
 # SteamOS recovery images contain the same GPT PARTUUIDs as the running
 # recovery environment.  Never allow partitions belonging to our build loop
@@ -346,7 +346,7 @@ setup_mount_partitions() {
   log "Rootfs mount options: $(findmnt -no OPTIONS "$MNT")"
 
   # Don't continue unless an actual write succeeds.
-  local rw_test="$MNT/.steamos-nvidia-rw-test"
+  local rw_test="$MNT/.steamos-build-rw-test"
   if ! touch "$rw_test"; then
     warn "Rootfs source: $(findmnt -no SOURCE "$MNT")"
     warn "Rootfs filesystem: $(findmnt -no FSTYPE "$MNT")"

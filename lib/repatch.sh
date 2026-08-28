@@ -1,5 +1,5 @@
 #!/bin/bash
-# steamos-nvidia repatch — reconcile the NVIDIA driver + boot config into
+# steamos-build repatch — reconcile the NVIDIA driver + boot config into
 # another partition set (normally "other", right after an OS update).
 # Run as root.  Reconciles the configured Valve/Arch package manifests,
 # rebuilds target-kernel modules as needed, and always runs
@@ -7,7 +7,7 @@
 # (the update wrapper redirects).
 set -Eeuo pipefail
 
-PERSIST_LOG_DIR="/home/.steamos-nvidia/logs"
+PERSIST_LOG_DIR="/home/.steamos-build/logs"
 mkdir -p "$PERSIST_LOG_DIR"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -21,10 +21,10 @@ ln -sfn "$(basename "$RUN_LOG")" \
 exec > >(tee -a "$RUN_LOG") 2>&1
 
 # Resolve script directory: prefer /home (writable, latest), fall back to /usr
-if [[ -d "/home/.steamos-nvidia/lib" ]]; then
-  SCRIPT_DIR="/home/.steamos-nvidia/lib"
-elif [[ -d "/usr/lib/steamos-nvidia" ]]; then
-  SCRIPT_DIR="/usr/lib/steamos-nvidia"
+if [[ -d "/home/.steamos-build/lib" ]]; then
+  SCRIPT_DIR="/home/.steamos-build/lib"
+elif [[ -d "/usr/lib/steamos-build" ]]; then
+  SCRIPT_DIR="/usr/lib/steamos-build"
 else
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 fi
@@ -32,7 +32,7 @@ fi
 # Use the shared common.sh logging/failure framework with repatch-specific
 # presentation and diagnostics.
 LOG_TAG="repatch"
-LOGGER_TAG="steamos-nvidia-repatch"
+LOGGER_TAG="steamos-build-repatch"
 LOG_COLOR=0
 CURRENT_STEP="startup"
 FAILURE_REPORTED=0
@@ -164,9 +164,9 @@ if [[ ! -r "$SCRIPT_DIR/common.sh" ]]; then
 fi
 source "$SCRIPT_DIR/common.sh"
 
-# Ensure the full .steamos-nvidia tree exists (logs already created above;
+# Ensure the full .steamos-build tree exists (logs already created above;
 # this also creates recovery/ with world-writable perms).
-ensure_steamos_nvidia_dirs
+ensure_steamos_build_dirs
 
 # Source library loader, pipeline, and workflow common functions
 [[ -r "$SCRIPT_DIR/library-loader.sh" ]] \
@@ -217,7 +217,7 @@ NEWROOT="$(mktemp -d /tmp/repatch-root.XXXXXX)"
 # SteamOS /home is ext4 with casefold enabled, which OverlayFS rejects as an
 # upperdir.  Build inside a temporary plain-ext4 loopback filesystem stored on
 # /home, where there is enough space for DKMS/toolchain work.
-WORKIMG=/home/.steamos-nvidia-work.img
+WORKIMG=/home/.steamos-build-work.img
 WORK="$(mktemp -d /tmp/repatch-work.XXXXXX)"
 WORK_LOOPDEV=""
 

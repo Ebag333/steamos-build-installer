@@ -1,8 +1,8 @@
-# steamos-nvidia-installer
+# steamos-build-installer
 
 **Install real SteamOS on any PC with an NVIDIA RTX graphics card.**
 
-[![steamos-nvidia-installer demo](https://img.youtube.com/vi/S3PcLhEXTK4/maxresdefault.jpg)](https://youtu.be/S3PcLhEXTK4)
+[![steamos-build-installer demo](https://img.youtube.com/vi/S3PcLhEXTK4/maxresdefault.jpg)](https://youtu.be/S3PcLhEXTK4)
 
 Valve's SteamOS recovery image only ships drivers for AMD hardware. This
 script takes the official recovery image and produces a bootable USB
@@ -40,15 +40,15 @@ from Valve is redistributed here.
 Clone the repo:
 
 ```bash
-git clone https://github.com/28allday/steamos-nvidia-installer.git
-cd steamos-nvidia-installer
+git clone https://github.com/28allday/steamos-build-installer.git
+cd steamos-build-installer
 ```
 
 Or download just the one script:
 
 ```bash
-curl -O https://raw.githubusercontent.com/28allday/steamos-nvidia-installer/main/steamos-nvidia-installer.sh
-chmod +x steamos-nvidia-installer.sh
+curl -O https://raw.githubusercontent.com/28allday/steamos-build-installer/main/steamos-build-installer.sh
+chmod +x steamos-build-installer.sh
 ```
 
 ## Step 1 — Download the official SteamOS recovery image
@@ -69,7 +69,7 @@ Put the `.img` next to the script and run it (with no argument it
 auto-detects a single recovery image sitting beside it):
 
 ```bash
-sudo ./steamos-nvidia-installer.sh steamdeck-<version>.img
+sudo ./steamos-build-installer.sh steamdeck-<version>.img
 ```
 
 This copies the image (**the original is never modified**), resolves the

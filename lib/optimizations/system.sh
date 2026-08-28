@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/system.sh
+# steamos-build-installer — lib/optimizations/system.sh
 # System configuration optimizations.
 # Handles: gamemode, disable-autologin
 #

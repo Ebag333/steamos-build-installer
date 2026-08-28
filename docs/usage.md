@@ -5,7 +5,7 @@
 Run with no arguments to launch the YAD-based graphical interface:
 
 ```bash
-./steamos-nvidia.sh
+./steamos-build.sh
 ```
 
 The tool will prompt for your password when root is needed (build, flash, etc.). It tries `sudo` first, then falls back to `pkexec`. If you haven't set a sudo password yet, do that first:
@@ -68,15 +68,15 @@ Selecting **Flashless** installs directly to the inactive A/B slot without needi
 Pass named arguments (no positional parameters). Root is requested automatically when needed — you don't need to run with `sudo`.
 
 ```bash
-./steamos-nvidia.sh --action build --image FILE [build options]
-./steamos-nvidia.sh --action flash --image FILE --device /dev/sdX
-./steamos-nvidia.sh --action flashless --image FILE
-./steamos-nvidia.sh --action configure
-./steamos-nvidia.sh --action reboot
-./steamos-nvidia.sh --action list-images
-./steamos-nvidia.sh --action list-devices
-./steamos-nvidia.sh --action is-system-disk --device /dev/sdX
-./steamos-nvidia.sh --action preflight --image FILE --device /dev/sdX
+./steamos-build.sh --action build --image FILE [build options]
+./steamos-build.sh --action flash --image FILE --device /dev/sdX
+./steamos-build.sh --action flashless --image FILE
+./steamos-build.sh --action configure
+./steamos-build.sh --action reboot
+./steamos-build.sh --action list-images
+./steamos-build.sh --action list-devices
+./steamos-build.sh --action is-system-disk --device /dev/sdX
+./steamos-build.sh --action preflight --image FILE --device /dev/sdX
 ```
 
 > **Note:** If you haven't set a sudo password yet, run `passwd` first. Without a password, the tool can't elevate to root for build/flash operations.
@@ -86,7 +86,7 @@ Pass named arguments (no positional parameters). Root is requested automatically
 Install host dependencies (Arch/SteamOS only):
 
 ```bash
-./steamos-nvidia.sh --setup
+./steamos-build.sh --setup
 ```
 
 ### Named arguments
@@ -113,16 +113,16 @@ the full list.
 
 ```bash
 # Build with config file
-./steamos-nvidia.sh --action build \
+./steamos-build.sh --action build \
     --image /path/to/steamdeck-repair.img \
     --config my-build.conf
 
 # Flash to USB
-./steamos-nvidia.sh --action flash \
+./steamos-build.sh --action flash \
     --image /path/to/steamdeck-repair-nvidia-usbinstall.img \
     --device /dev/sda
 
 # Flashless install
-./steamos-nvidia.sh --action flashless \
+./steamos-build.sh --action flashless \
     --image /path/to/steamdeck-repair-nvidia-usbinstall.img
 ```

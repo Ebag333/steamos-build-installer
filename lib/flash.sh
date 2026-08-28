@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/flash.sh
+# steamos-build-installer — lib/flash.sh
 # Flash a SteamOS image to a USB stick.  Provides device scanning, validation,
 # and the actual dd flash.  UI-agnostic — callers handle dialogs/prompts.
 # Sourced by the wrapper — do not run directly.

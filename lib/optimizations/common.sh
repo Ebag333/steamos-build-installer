@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/common.sh
+# steamos-build-installer — lib/optimizations/common.sh
 # Shared utilities for optimization modules.
 # Provides mode detection and common helpers for applying optimizations
 # across different contexts: chroot (build or rebuild) or live system.

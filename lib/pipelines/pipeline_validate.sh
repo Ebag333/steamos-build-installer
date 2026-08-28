@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/pipelines/pipeline_validate.sh
+# steamos-build-installer — lib/pipelines/pipeline_validate.sh
 # Validation pipeline definition.
 # Validates configuration and system state.
 #
@@ -82,9 +82,9 @@ phase_validate_discover() {
     log "Loading config: $VALIDATE_CONFIG"
     # shellcheck disable=SC1090
     source "$VALIDATE_CONFIG"
-  elif [[ -f "/home/.steamos-nvidia/build.conf" ]]; then
-    log "Loading persisted config: /home/.steamos-nvidia/build.conf"
-    source "/home/.steamos-nvidia/build.conf"
+  elif [[ -f "/home/.steamos-build/build.conf" ]]; then
+    log "Loading persisted config: /home/.steamos-build/build.conf"
+    source "/home/.steamos-build/build.conf"
   else
     log "No config found — will validate system state only"
   fi

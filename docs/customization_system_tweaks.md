@@ -169,7 +169,7 @@ GAMING_ITEMS="gamemode pci-realloc resize-bar scx-lavd vm-tunables cpu-performan
 If you need additional tweaks beyond what the checkboxes provide, place an executable script at:
 
 ```
-/home/.steamos-nvidia/recovery/custom.sh
+/home/.steamos-build/recovery/custom.sh
 ```
 
 This script runs during the build and during each self-heal repatch. It receives no arguments and runs as root inside the chroot.

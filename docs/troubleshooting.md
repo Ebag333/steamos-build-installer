@@ -73,7 +73,7 @@ If the directory is empty, the DKMS build may have failed during install. Rebuil
 Check the self-heal logs:
 
 ```bash
-cat /home/.steamos-nvidia/logs/atomupd-latest.log
+cat /home/.steamos-build/logs/atomupd-latest.log
 ```
 
 Look for errors from `repatch.sh`. Common issues:
@@ -149,19 +149,19 @@ If `scx_lavd` is not installed, the `scx-scheds` package may not have been in th
 
 | Path | Contents |
 |---|---|
-| `/home/.steamos-nvidia/logs/atomupd-latest.log` | Symlink → most recent atomupd wrapper log |
-| `/home/.steamos-nvidia/logs/atomupd-*.log` | All atomupd wrapper logs (timestamped) |
-| `/home/.steamos-nvidia/logs/repatch-latest.log` | Symlink → most recent repatch log (driver/module rebuild output) |
-| `/home/.steamos-nvidia/logs/repatch-*.log` | All repatch logs (timestamped) |
-| `/home/.steamos-nvidia/logs/update-latest.log` | Symlink → most recent steamos-update wrapper log |
-| `/home/.steamos-nvidia/logs/update-*.log` | All steamos-update wrapper logs (timestamped) |
+| `/home/.steamos-build/logs/atomupd-latest.log` | Symlink → most recent atomupd wrapper log |
+| `/home/.steamos-build/logs/atomupd-*.log` | All atomupd wrapper logs (timestamped) |
+| `/home/.steamos-build/logs/repatch-latest.log` | Symlink → most recent repatch log (driver/module rebuild output) |
+| `/home/.steamos-build/logs/repatch-*.log` | All repatch logs (timestamped) |
+| `/home/.steamos-build/logs/update-latest.log` | Symlink → most recent steamos-update wrapper log |
+| `/home/.steamos-build/logs/update-*.log` | All steamos-update wrapper logs (timestamped) |
 
 ### Installed system — post-install and config
 
 | Path | Contents |
 |---|---|
-| `/var/log/steamos-nvidia-post-install.log` | Post-install configuration utility log |
-| `/usr/lib/steamos-nvidia/build.conf` | Build manifest (flags, driver version, kernel version, timestamp) |
+| `/var/log/steamos-build-post-install.log` | Post-install configuration utility log |
+| `/usr/lib/steamos-build/build.conf` | Build manifest (flags, driver version, kernel version, timestamp) |
 
 ### Installed system — boot logs (USB collector)
 
@@ -178,10 +178,10 @@ Each archive contains: `init.log` (initramfs), `dmesg.txt`, `dmesg-warnings.txt`
 All components log to the systemd journal with dedicated tags. Filter with:
 
 ```bash
-journalctl -t steamos-nvidia-atomupd -b    # atomupd wrapper
-journalctl -t steamos-nvidia-repatch -b    # repatch (driver rebuild)
-journalctl -t steamos-nvidia-update -b     # steamos-update wrapper
-journalctl -t steamos-nvidia-build -b      # build steps (if journal was available)
+journalctl -t steamos-build-atomupd -b    # atomupd wrapper
+journalctl -t steamos-build-repatch -b    # repatch (driver rebuild)
+journalctl -t steamos-build-update -b     # steamos-update wrapper
+journalctl -t steamos-build-build -b      # build steps (if journal was available)
 ```
 
 If you enabled `debug-boot` during the build, the kernel command line includes `rd.debug rd.log=all` for verbose initramfs logging:
@@ -196,12 +196,12 @@ The GUI shows the log path when the build completes. Logs are in a temporary dir
 
 | Path | Contents |
 |---|---|
-| `/tmp/steamos-nvidia.XXXXXX/backend.log` | Full build backend output (stdout + stderr) |
+| `/tmp/steamos-build.XXXXXX/backend.log` | Full build backend output (stdout + stderr) |
 
 The `XXXXXX` suffix is random; the GUI prints the exact path to stderr. To find it:
 
 ```bash
-ls -lt /tmp/steamos-nvidia.*/backend.log | head -1
+ls -lt /tmp/steamos-build.*/backend.log | head -1
 ```
 
 ## Diagnostics
@@ -229,7 +229,7 @@ This creates a `.tar.gz` in the current directory with system state snapshots, b
 Check what was installed and how:
 
 ```bash
-cat /usr/lib/steamos-nvidia/build.conf
+cat /usr/lib/steamos-build/build.conf
 ```
 
 This shows the exact build flags, driver version, kernel version, and timestamp.

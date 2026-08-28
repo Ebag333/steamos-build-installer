@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/build-tools.sh
+# steamos-build-installer — lib/optimizations/build-tools.sh
 # Build-time optimizations and configuration flags.
 # Handles: trim-cuda, fix-keyring, skip-sigcheck, debug-boot
 #

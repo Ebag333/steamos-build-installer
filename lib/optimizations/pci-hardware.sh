@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/pci-hardware.sh
+# steamos-build-installer — lib/optimizations/pci-hardware.sh
 # PCI and hardware-related optimizations.
 # Handles: pci-realloc, tb-host-reset, thunderbolt
 #
@@ -123,7 +123,7 @@ _apply_thunderbolt() {
   enable_service "bolt.service"
 
   # Bundle source files for self-heal (repatch.sh can restore them)
-  local bundle="${root}/usr/lib/steamos-nvidia/thunderbolt"
+  local bundle="${root}/usr/lib/steamos-build/thunderbolt"
   mkdir -p "$bundle"
   cp "$configs_dir/thunderbolt-rescan.sh" "$bundle/"
   cp "$configs_dir/98-thunderbolt-rescan.rules" "$bundle/"

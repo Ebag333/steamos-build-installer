@@ -5,7 +5,7 @@ This document covers the build pipeline internals and library structure. It's ai
 ## Directory structure
 
 ```
-steamos-nvidia.sh              # Frontend: CLI arg parsing + YAD GUI
+steamos-build.sh              # Frontend: CLI arg parsing + YAD GUI
 lib/
 ├── backend.sh                 # Build/flash policy & orchestration
 ├── common.sh                  # Logging, failure reporting, loop/mount primitives
@@ -91,7 +91,7 @@ The build is orchestrated by `lib/backend.sh` (`backend_build()`), which calls l
 - Install Thunderbolt support (udev rule + bolt service)
 - Configure update channel (variant + branch, OOBE suppression)
 - Install pipx packages
-- Run custom script if present at `/home/.steamos-nvidia/recovery/custom.sh`
+- Run custom script if present at `/home/.steamos-build/recovery/custom.sh`
 
 ### Stage 6: Payload & Installer (`lib/installer.sh`)
 
@@ -139,7 +139,7 @@ The wrapper propagates itself into the new slot so the next update is also inter
 
 ### Build manifest
 
-A manifest is written to `/usr/lib/steamos-nvidia/build.conf` inside the image. It records:
+A manifest is written to `/usr/lib/steamos-build/build.conf` inside the image. It records:
 - Build timestamp
 - NVIDIA driver version
 - Kernel version
@@ -152,15 +152,15 @@ This manifest is used by the flashless installer to verify the image is an NVIDI
 
 ### Build-time (host machine)
 
-Logs are written to a temporary directory under `/tmp/steamos-nvidia.XXXXXX/`. The GUI shows the log path when the build completes.
+Logs are written to a temporary directory under `/tmp/steamos-build.XXXXXX/`. The GUI shows the log path when the build completes.
 
 ### Runtime (installed system)
 
 | Path | Contents |
 |---|---|
-| `/home/.steamos-nvidia/logs/atomupd-*.log` | Self-heal atomupd wrapper logs |
-| `/home/.steamos-nvidia/logs/atomupd-latest.log` | Symlink to most recent atomupd log |
-| `/home/.steamos-nvidia/logs/update-*.log` | steamos-update wrapper logs |
-| `/home/.steamos-nvidia/logs/update-latest.log` | Symlink to most recent update log |
-| `/home/.steamos-nvidia/recovery/custom.sh` | User custom script (runs during build + repatch) |
-| `/usr/lib/steamos-nvidia/build.conf` | Build manifest |
+| `/home/.steamos-build/logs/atomupd-*.log` | Self-heal atomupd wrapper logs |
+| `/home/.steamos-build/logs/atomupd-latest.log` | Symlink to most recent atomupd log |
+| `/home/.steamos-build/logs/update-*.log` | steamos-update wrapper logs |
+| `/home/.steamos-build/logs/update-latest.log` | Symlink to most recent update log |
+| `/home/.steamos-build/recovery/custom.sh` | User custom script (runs during build + repatch) |
+| `/usr/lib/steamos-build/build.conf` | Build manifest |

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# check-deps.sh — verify host has all required tools for steamos-nvidia-installer.
+# check-deps.sh — verify host has all required tools for steamos-build-installer.
 # Run this before building to catch missing dependencies early.
 #
 # Usage:
@@ -60,7 +60,7 @@ declare -A OPTIONAL=(
 
 # ---- check phase ----
 echo ""
-echo -e "${CYAN}=== steamos-nvidia-installer dependency check ===${NC}"
+echo -e "${CYAN}=== steamos-build-installer dependency check ===${NC}"
 
 # ---- WSL detection ----
 if grep -qi microsoft /proc/version 2>/dev/null; then

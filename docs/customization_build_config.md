@@ -8,7 +8,7 @@ Build settings can be controlled through three layers, in order of precedence:
 
 ## defaults.conf
 
-`lib/configs/defaults.conf` is the single source of truth for all build flag defaults. It's sourced at startup by `steamos-nvidia.sh`. If the file is missing, all flags start blank/zero.
+`lib/configs/defaults.conf` is the single source of truth for all build flag defaults. It's sourced at startup by `steamos-build.sh`. If the file is missing, all flags start blank/zero.
 
 See [defaults.conf](../lib/configs/defaults.conf) for the full list of variables and their defaults.
 
@@ -17,13 +17,13 @@ See [defaults.conf](../lib/configs/defaults.conf) for the full list of variables
 A config file is a bash file that sets variables. Pass it via `--config`:
 
 ```bash
-./steamos-nvidia.sh --action build --config my-build.conf --image ...
+./steamos-build.sh --action build --config my-build.conf --image ...
 ```
 
 ### Example config
 
 ```bash
-# steamos-nvidia.conf — copy and edit as needed
+# steamos-build.conf — copy and edit as needed
 
 # Source image
 IMG="/path/to/steamdeck-repair.img.bz2"
@@ -55,7 +55,7 @@ FIX_KEYRING=1
 SKIP_SIG=0
 ```
 
-See [steamos-nvidia.example.conf](../steamos-nvidia.example.conf) for a full annotated example.
+See [steamos-build.example.conf](../steamos-build.example.conf) for a full annotated example.
 
 ## Generate Config (GUI)
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/common_modules.sh
+# steamos-build-installer — lib/common_modules.sh
 # Module helpers: kernel discovery, module verification, and initramfs reconciliation.
 # Sourced by the wrapper — do not run directly.
 

@@ -132,19 +132,19 @@ else
     echo ""
 
     compare_file "etc/mkinitcpio.conf"
-    compare_file "etc/mkinitcpio.conf.d/99-steamos-nvidia.conf"
+    compare_file "etc/mkinitcpio.conf.d/99-steamos-build.conf"
     compare_file "etc/mkinitcpio.conf.d/20-steamdeck.conf"
     compare_file "etc/modprobe.d/99-nvidia-patch.conf"
-    compare_file "etc/modprobe.d/steamos-nvidia.conf"
-    compare_file "etc/dracut.conf.d/99-steamos-nvidia.conf"
+    compare_file "etc/modprobe.d/steamos-build.conf"
+    compare_file "etc/dracut.conf.d/99-steamos-build.conf"
     compare_file "etc/dracut.conf.d/steamos-image-recipes.conf"
     compare_file "etc/default/grub"
     compare_file "etc/pacman.conf"
     compare_file "etc/pacman.d/mirrorlist"
     compare_file "etc/udev/rules.d/98-thunderbolt-rescan.rules"
     compare_file "etc/udev/rules.d/99-steamos-tb-autoauth.rules"
-    compare_file "usr/lib/steamos-nvidia/driver.conf"
-    compare_file "usr/lib/steamos-nvidia/repatch.sh"
+    compare_file "usr/lib/steamos-build/driver.conf"
+    compare_file "usr/lib/steamos-build/repatch.sh"
     compare_file "usr/bin/steamos-update"
     compare_file "etc/systemd/system/multi-user.target.wants/bolt.service"
     compare_file "home/deck/.config/steamos-manager/state.toml"
@@ -154,9 +154,9 @@ else
     # Count differences
     total=0 diffs=0
     echo -e "${CYAN}Summary:${NC}"
-    for f in etc/mkinitcpio.conf etc/mkinitcpio.conf.d/99-steamos-nvidia.conf \
-             etc/modprobe.d/99-nvidia-patch.conf etc/dracut.conf.d/99-steamos-nvidia.conf \
-             usr/lib/steamos-nvidia/driver.conf; do
+    for f in etc/mkinitcpio.conf etc/mkinitcpio.conf.d/99-steamos-build.conf \
+             etc/modprobe.d/99-nvidia-patch.conf etc/dracut.conf.d/99-steamos-build.conf \
+             usr/lib/steamos-build/driver.conf; do
         ((total++))
         if [[ -f "$ROOTFS_A/$f" && -f "$ROOTFS_B/$f" ]]; then
             if ! diff -q "$ROOTFS_A/$f" "$ROOTFS_B/$f" >/dev/null 2>&1; then

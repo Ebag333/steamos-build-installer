@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/build/repository.sh
+# steamos-build-installer — lib/build/repository.sh
 # Repository policy enforcement.
 #
 # Sourced by engine.sh — do not run directly.

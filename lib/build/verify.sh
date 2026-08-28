@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/build/verify.sh
+# steamos-build-installer — lib/build/verify.sh
 # Package verification utilities.
 #
 # Sourced by engine.sh — do not run directly.

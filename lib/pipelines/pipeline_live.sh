@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/pipelines/pipeline_live.sh
+# steamos-build-installer — lib/pipelines/pipeline_live.sh
 # Live (post-install) workflow pipeline definition.
 # Defines the phases for configuring a running SteamOS system.
 #

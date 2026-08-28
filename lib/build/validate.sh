@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/build/validate.sh
+# steamos-build-installer — lib/build/validate.sh
 # Validation matrix for the build framework.
 #
 # Run this to verify the framework handles failure modes correctly.
@@ -45,7 +45,7 @@ _validate_clean_build() {
 
   # Build
   build_recipe \
-    --recipe "$SCRIPT_DIR_VALIDATE/recipes/aotofu-vaapi" \
+    --recipe "$SCRIPT_DIR_VALIDATE/configs/build_recipes/aotofu-vaapi" \
     --profile "$PROFILE_DIR" \
     --output "$workdir/test1-output" || {
     warn "FAIL: Build failed"
@@ -129,7 +129,7 @@ _validate_build_failure_preserves() {
 
   # Try to build a non-existent recipe (should fail)
   build_recipe \
-    --recipe "$SCRIPT_DIR_VALIDATE/recipes/nonexistent" \
+    --recipe "$SCRIPT_DIR_VALIDATE/configs/build_recipes/nonexistent" \
     --profile "$workdir/test1-profile" \
     --output "$workdir/test4-output" \
     --keep-failed 2>/dev/null || true

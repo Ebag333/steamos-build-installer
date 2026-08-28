@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/cpu-performance.sh
+# steamos-build-installer — lib/optimizations/cpu-performance.sh
 # CPU and scheduler performance optimizations.
 # Handles: cpu-performance, scx-lavd, vm-tunables
 #

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/flashless.sh
+# steamos-build-installer — lib/flashless.sh
 # Flashless install: write the built NVIDIA image directly to the inactive
 # A/B slot without a USB stick.  Sourced by the wrapper — do not run directly.
 #
@@ -174,10 +174,10 @@ flashless_extract_image() {
   # Create udev guard BEFORE the loop device exists so udisks2 never sees
   # the partitions as mountable.  Use a broad loop-partition pattern first;
   # the rule is removed on cleanup regardless of which loop device was used.
-  local _flashless_udev_rule="/run/udev/rules.d/89-steamos-nvidia-flashless.rules"
+  local _flashless_udev_rule="/run/udev/rules.d/89-steamos-build-flashless.rules"
   mkdir -p /run/udev/rules.d
   cat >"$_flashless_udev_rule" <<'EOF'
-# steamos-nvidia flashless-loop quarantine.
+# steamos-build flashless-loop quarantine.
 SUBSYSTEM=="block", KERNEL=="loop[0-9]*p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0"
 EOF
   udevadm control --reload-rules 2>/dev/null || true
@@ -222,11 +222,21 @@ EOF
   fi
 
   # Check NVIDIA payload is present (repatch.sh is installed by update-strategy).
-  if [[ ! -f "$verify_mnt/usr/lib/steamos-nvidia/repatch.sh" ]]; then
+  if [[ ! -f "$verify_mnt/usr/lib/steamos-build/repatch.sh" ]]; then
     die "Source rootfs-A is not an NVIDIA-patched build (repatch.sh missing)"
   fi
 
-  log "  Source verified: variant=${TARGET_VARIANT:-steamdeck}, NVIDIA payload present"
+  # Capture the source image's update branch so flashless_restore_etc can
+  # preserve it instead of falling back to the hardcoded default.
+  local _src_manifest="$verify_mnt/usr/lib/steamos-atomupd/manifest.json"
+  FL_SOURCE_BRANCH=""
+  if [[ -f "$_src_manifest" ]]; then
+    FL_SOURCE_BRANCH="$(
+      python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('default_update_branch',''))" \
+        "$_src_manifest" 2>/dev/null || true
+    )"
+  fi
+  log "  Source verified: variant=${TARGET_VARIANT:-steamdeck}, branch=${FL_SOURCE_BRANCH:-<not set>}, NVIDIA payload present"
 
   umount "$verify_mnt" 2>/dev/null || umount -l "$verify_mnt" 2>/dev/null
   flashless_unregister_mount "$verify_mnt"
@@ -439,6 +449,15 @@ flashless_restore_etc() {
 
   local _saved_mnt="${MNT:-}"
   MNT="$target_mnt"
+
+  # Preserve the source image's update branch instead of falling back to
+  # the hardcoded default (stable).  FL_SOURCE_BRANCH was captured from the
+  # source manifest during flashless_extract_image.
+  if [[ -n "${FL_SOURCE_BRANCH:-}" ]]; then
+    UPDATE_BRANCH="$FL_SOURCE_BRANCH"
+    log "  Preserving source branch: $UPDATE_BRANCH"
+  fi
+
   configure_update_channel
   MNT="$_saved_mnt"
 

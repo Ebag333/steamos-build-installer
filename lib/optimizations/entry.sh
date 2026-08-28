@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/entry.sh
+# steamos-build-installer — lib/optimizations/entry.sh
 # Central router for all optimization modules.
 # External callers use this as the single entry point.
 #

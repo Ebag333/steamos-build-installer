@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/video.sh
+# steamos-build-installer — lib/optimizations/video.sh
 # Video/GPU related optimizations.
 # Handles: unset-libva-driver, gpu-power-limit, resize-bar
 #

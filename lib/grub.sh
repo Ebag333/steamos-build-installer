@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/grub.sh
+# steamos-build-installer — lib/grub.sh
 # Centralized GRUB/kernel command line management.
 #
 # All kernel parameters that need to land on the boot command line are
@@ -258,7 +258,7 @@ patch_persistent_defaults() {
 # Idempotent: safe to call every time regardless of whether params changed.
 _ensure_grub_steamos_keep_list() {
   local keep_dir="$MNT/etc/atomic-update.conf.d"
-  local keep_file="$keep_dir/steamos-nvidia-installer.conf"
+  local keep_file="$keep_dir/steamos-build-installer.conf"
   if [[ -d "$keep_dir" ]]; then
     if ! grep -q '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
       mkdir -p "$keep_dir"
@@ -389,7 +389,7 @@ finalize_grub() {
     done
 
     # Validate atomic-update keep-list
-    local keep_file="$MNT/etc/atomic-update.conf.d/steamos-nvidia-installer.conf"
+    local keep_file="$MNT/etc/atomic-update.conf.d/steamos-build-installer.conf"
     if [[ -d "$MNT/etc/atomic-update.conf.d" ]]; then
       if ! grep -q '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
         warn "  MISSING: grub-steamos not in atomic-update keep-list"

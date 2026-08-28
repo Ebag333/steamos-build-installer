@@ -1,5 +1,5 @@
 #!/bin/bash
-# steamos-atomupd-client wrapper (steamos-nvidia self-healing updates).
+# steamos-atomupd-client wrapper (steamos-build self-healing updates).
 #
 # This is the authoritative OS-update interception point. Both Steam/Game Mode
 # and KDE Discover ultimately reach steamos-atomupd-client through atomupd.
@@ -13,29 +13,29 @@ REAL=/usr/bin/steamos-atomupd-client.orig
 
 # Resolve script directory: prefer /home (writable, latest), fall back to /usr
 _NVIDIA_DIR=""
-if [[ -d "/home/.steamos-nvidia/lib" ]]; then
-  _NVIDIA_DIR="/home/.steamos-nvidia"
-elif [[ -d "/usr/lib/steamos-nvidia" ]]; then
-  _NVIDIA_DIR="/usr/lib/steamos-nvidia"
+if [[ -d "/home/.steamos-build/lib" ]]; then
+  _NVIDIA_DIR="/home/.steamos-build"
+elif [[ -d "/usr/lib/steamos-build" ]]; then
+  _NVIDIA_DIR="/usr/lib/steamos-build"
 fi
 
 REPATCH="$_NVIDIA_DIR/lib/repatch.sh"
 SELF_BUNDLE="$_NVIDIA_DIR/lib/atomupd-wrapper.sh"
 
 if [[ $EUID -eq 0 ]]; then
-  LOGDIR=/home/.steamos-nvidia/logs
+  LOGDIR=/home/.steamos-build/logs
 else
-  LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-nvidia/logs"
+  LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-build/logs"
 fi
-mkdir -p "$LOGDIR" /home/.steamos-nvidia/recovery
-chmod 777 /home/.steamos-nvidia/recovery 2>/dev/null || true
+mkdir -p "$LOGDIR" /home/.steamos-build/recovery
+chmod 777 /home/.steamos-build/recovery 2>/dev/null || true
 
 LOG="$LOGDIR/atomupd-$(date +%Y%m%d-%H%M%S)-$$.log"
 ln -sfn "$(basename "$LOG")" "$LOGDIR/atomupd-latest.log"
 
 alog() {
-  echo "[steamos-nvidia-atomupd] $*" | tee -a "$LOG" >&2
-  logger -t steamos-nvidia-atomupd -- "$*" 2>/dev/null || true
+  echo "[steamos-build-atomupd] $*" | tee -a "$LOG" >&2
+  logger -t steamos-build-atomupd -- "$*" 2>/dev/null || true
 }
 
 slot_other() {
@@ -98,7 +98,7 @@ read_slot_build_id() {
   # normal Valve-client behaviour; they simply cannot trigger self-heal.
   ((EUID == 0)) || return 1
 
-  mnt="$(mktemp -d /tmp/steamos-nvidia-slot.XXXXXX)" || return 1
+  mnt="$(mktemp -d /tmp/steamos-build-slot.XXXXXX)" || return 1
   if mount -o ro "$dev" "$mnt" 2>/dev/null; then
     if value="$(read_build_id_from_root "$mnt")"; then
       printf '%s\n' "$value"
@@ -204,7 +204,7 @@ install_self_into_target() {
     return 1
   }
 
-  mnt="$(mktemp -d /tmp/steamos-nvidia-propagate.XXXXXX)" || return 1
+  mnt="$(mktemp -d /tmp/steamos-build-propagate.XXXXXX)" || return 1
   if ! mount "$dev" "$mnt" 2>/dev/null; then
     alog "ERROR: could not mount $slot rootfs to propagate atomupd wrapper"
     rmdir "$mnt" 2>/dev/null || true
@@ -349,8 +349,8 @@ fi
 
 # atomupd normally serializes updates, but guard against a concurrent helper
 # invocation observing the same just-staged slot.
-mkdir -p /run/steamos-nvidia
-exec 9>/run/steamos-nvidia/repatch.lock
+mkdir -p /run/steamos-build
+exec 9>/run/steamos-build/repatch.lock
 if command -v flock >/dev/null 2>&1; then
   flock -x 9
 fi
@@ -385,7 +385,7 @@ elif [[ $repatch_rc -ne 0 ]]; then
   exit 1
 fi
 
-# repatch copies /usr/lib/steamos-nvidia into the new slot. Activate this lower
+# repatch copies /usr/lib/steamos-build into the new slot. Activate this lower
 # wrapper there too, so the next OS update is intercepted even after reboot.
 if ! install_self_into_target "$other_after"; then
   alog "ERROR: repatch succeeded but atomupd wrapper could not be propagated."

@@ -1,5 +1,5 @@
 #!/bin/bash
-# steamos-update compatibility wrapper (steamos-nvidia self-healing updates).
+# steamos-update compatibility wrapper (steamos-build self-healing updates).
 #
 # The authoritative repatch hook now lives at steamos-atomupd-client, which is
 # shared by Steam/Game Mode and KDE Discover. This wrapper only preserves the
@@ -8,19 +8,19 @@
 REAL=/usr/bin/steamos-update.orig
 
 if [[ $EUID -eq 0 ]]; then
-  LOGDIR=/home/.steamos-nvidia/logs
+  LOGDIR=/home/.steamos-build/logs
 else
-  LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-nvidia/logs"
+  LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-build/logs"
 fi
-mkdir -p "$LOGDIR" /home/.steamos-nvidia/recovery
-chmod 777 /home/.steamos-nvidia/recovery 2>/dev/null || true
+mkdir -p "$LOGDIR" /home/.steamos-build/recovery
+chmod 777 /home/.steamos-build/recovery 2>/dev/null || true
 
 LOG="$LOGDIR/update-$(date +%Y%m%d-%H%M%S)-$$.log"
 ln -sfn "$(basename "$LOG")" "$LOGDIR/update-latest.log"
 
 ulog() {
-  echo "[steamos-nvidia-update] $*" | tee -a "$LOG" >&2
-  logger -t steamos-nvidia-update -- "$*" 2>/dev/null || true
+  echo "[steamos-build-update] $*" | tee -a "$LOG" >&2
+  logger -t steamos-build-update -- "$*" 2>/dev/null || true
 }
 
 [[ -x "$REAL" ]] || {

@@ -18,13 +18,13 @@ OS updates work normally. When Valve stages a new OS version on the inactive A/B
 **Files installed:**
 - `/usr/bin/steamos-atomupd-client` (wrapper around Valve's original)
 - `/usr/bin/steamos-update` (wrapper around Valve's original, logging only)
-- `/usr/lib/steamos-nvidia/repatch.sh` (the actual repatch logic)
-- `/usr/lib/steamos-nvidia/build.conf` (build manifest)
+- `/usr/lib/steamos-build/repatch.sh` (the actual repatch logic)
+- `/usr/lib/steamos-build/build.conf` (build manifest)
 
 **Log files:**
-- `/home/.steamos-nvidia/logs/atomupd-*.log` (atomupd wrapper logs)
-- `/home/.steamos-nvidia/logs/atomupd-latest.log` (symlink to most recent)
-- `/home/.steamos-nvidia/logs/update-*.log` (steamos-update wrapper logs)
+- `/home/.steamos-build/logs/atomupd-*.log` (atomupd wrapper logs)
+- `/home/.steamos-build/logs/atomupd-latest.log` (symlink to most recent)
+- `/home/.steamos-build/logs/update-*.log` (steamos-update wrapper logs)
 
 ## hold
 
@@ -81,7 +81,7 @@ If the repatch fails for any reason:
 1. The staged update slot is marked `image-invalid=1`
 2. `boot-attempts` and `boot-requested-at` are reset to 0
 3. The machine continues booting the current working system
-4. Details are logged to `/home/.steamos-nvidia/logs/atomupd-latest.log`
+4. Details are logged to `/home/.steamos-build/logs/atomupd-latest.log`
 
 This is a **fail-safe** design — a failed update never leaves the machine unbootable.
 

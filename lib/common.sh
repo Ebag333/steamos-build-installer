@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/common.sh
+# steamos-build-installer — lib/common.sh
 # Shared helpers: logging/failure reporting, loop/mount primitives, and
 # builder cleanup/payload helpers. Sourced by the build backend and repatch.
 # Do not run it directly.
@@ -12,7 +12,7 @@ fi
 
 # Shared logging/failure framework.  Callers may set these before sourcing:
 #   LOG_TAG      short human-readable prefix (default: nvidia-usb)
-#   LOGGER_TAG   systemd-journal tag (default: steamos-nvidia-build)
+#   LOGGER_TAG   systemd-journal tag (default: steamos-build)
 #   LOG_COLOR    1 for colored terminal prefixes, 0 for plain text
 #   RUN_LOG      optional persistent log path included in failure headlines
 #
@@ -20,7 +20,7 @@ fi
 #   failure_journal_context  -> prints compact caller-specific journal context
 #   failure_snapshot_extra   -> emits caller-specific diagnostic sections
 : "${LOG_TAG:=nvidia-usb}"
-: "${LOGGER_TAG:=steamos-nvidia-build}"
+: "${LOGGER_TAG:=steamos-build}"
 : "${LOG_COLOR:=1}"
 : "${CURRENT_STEP:=startup}"
 : "${FAILURE_REPORTED:=0}"
@@ -151,13 +151,13 @@ die() {
 set -E
 trap on_err ERR
 
-# ensure_steamos_nvidia_dirs [BASE_PATH]
-#   Create the persistent /home/.steamos-nvidia tree (logs + recovery).
+# ensure_steamos_build_dirs [BASE_PATH]
+#   Create the persistent /home/.steamos-build tree (logs + recovery).
 #   Idempotent — safe to call repeatedly; never stomps existing dirs.
 #   BASE_PATH defaults to /home; pass $HOMEMNT during image construction.
-ensure_steamos_nvidia_dirs() {
+ensure_steamos_build_dirs() {
   local base="${1:-/home}"
-  local root="$base/.steamos-nvidia"
+  local root="$base/.steamos-build"
 
   mkdir -p "$root/logs" "$root/recovery"
   chmod 777 "$root/recovery"
@@ -166,9 +166,9 @@ ensure_steamos_nvidia_dirs() {
 # ---------------------------------------------------------------------------
 # Script Directory Resolution
 # ---------------------------------------------------------------------------
-# Resolve the steamos-nvidia script directory.
-# Prefers /home/.steamos-nvidia (writable, latest scripts),
-# falls back to /usr/lib/steamos-nvidia (immutable, build-time).
+# Resolve the steamos-build script directory.
+# Prefers /home/.steamos-build (writable, latest scripts),
+# falls back to /usr/lib/steamos-build (immutable, build-time).
 #
 # Args: $1 = (optional) explicit path to check first
 # Output: path to the script directory
@@ -182,13 +182,13 @@ resolve_nvidia_dir() {
     return 0
   fi
 
-  if [[ -d "/home/.steamos-nvidia/lib" ]]; then
-    echo "/home/.steamos-nvidia"
+  if [[ -d "/home/.steamos-build/lib" ]]; then
+    echo "/home/.steamos-build"
     return 0
   fi
 
-  if [[ -d "/usr/lib/steamos-nvidia" ]]; then
-    echo "/usr/lib/steamos-nvidia"
+  if [[ -d "/usr/lib/steamos-build" ]]; then
+    echo "/usr/lib/steamos-build"
     return 0
   fi
 
@@ -198,7 +198,7 @@ resolve_nvidia_dir() {
 # ---------------------------------------------------------------------------
 # Project Persistence (Self-Heal)
 # ---------------------------------------------------------------------------
-# Persist a copy of the project into /home/.steamos-nvidia/ so users can
+# Persist a copy of the project into /home/.steamos-build/ so users can
 # re-run from the device without caching the original scripts.
 #
 # Self-heal semantics:
@@ -219,7 +219,7 @@ _get_project_version() {
 
   # Fallback: hash of key files that change with releases
   local hash_input=""
-  for f in "$src/steamos-nvidia.sh" "$src/lib/common.sh" "$src/lib/backend.sh" \
+  for f in "$src/steamos-build.sh" "$src/lib/common.sh" "$src/lib/backend.sh" \
     "$src/lib/library-loader.sh" "$src/lib/configs/customizations.conf"; do
     [[ -f "$f" ]] && hash_input+="$(cat "$f")"
   done
@@ -231,16 +231,16 @@ _get_project_version() {
   fi
 }
 
-# Persist project files into /home/.steamos-nvidia/ with self-heal.
+# Persist project files into /home/.steamos-build/ with self-heal.
 # Args: $1 = source dir (project root), $2 = (optional) target base (default /home)
 #
-# Copies: steamos-nvidia.sh, lib/, tools/, recipes/, build.conf, LICENSE
+# Copies: steamos-build.sh, lib/, tools/, configs/, build.conf, LICENSE
 # Skips: .git/, .idea/, test-*.sh, docs/, __pycache__/
 # Preserves: logs/, recovery/, .version
 persist_project_files() {
   local src="${1:?persist_project_files: missing source dir}"
   local base="${2:-/home}"
-  local dest="$base/.steamos-nvidia"
+  local dest="$base/.steamos-build"
   local version_file="$dest/.version"
 
   # Compute current version
@@ -296,18 +296,18 @@ _persist_project_files_cp() {
 
   # Copy top-level files
   local f
-  for f in steamos-nvidia.sh steamos-recovery-update-diagnostics.sh build.conf LICENSE README.md; do
+  for f in steamos-build.sh steamos-recovery-update-diagnostics.sh build.conf LICENSE README.md; do
     [[ -f "$src/$f" ]] && cp -f "$src/$f" "$dest/$f"
   done
 
   # Copy directories
   local d
-  for d in lib tools recipes; do
+  for d in lib tools configs; do
     [[ -d "$src/$d" ]] && cp -a "$src/$d" "$dest/$d"
   done
 }
 
-# Ensure the project is persisted to /home/.steamos-nvidia/.
+# Ensure the project is persisted to /home/.steamos-build/.
 # Entry point for all pipelines — handles source detection and calls persist.
 # Args: $1 = (optional) source dir (default: $SCRIPT_DIR)
 #        $2 = (optional) target base (default: /home)
@@ -320,7 +320,7 @@ ensure_project_persisted() {
     return 0
   fi
 
-  ensure_steamos_nvidia_dirs "$base"
+  ensure_steamos_build_dirs "$base"
   persist_project_files "$src" "$base"
 }
 
@@ -571,6 +571,16 @@ strict_detach_loop() {
     sleep 0.1
   done
 
+  # Loop is still attached after losetup -d.  If AUTOCLEAR is set, the
+  # kernel will auto-detach when the last reference (e.g. jbd2 journal
+  # thread) releases — this is not a failure.
+  local autoclear
+  autoclear="$(losetup -l -O AUTOCLEAR "$loop" 2>/dev/null | tail -1 | tr -d ' ')"
+  if [[ "$autoclear" == "1" ]]; then
+    log "$loop still attached but AUTOCLEAR=1 — kernel will auto-detach"
+    return 0
+  fi
+
   warn "$loop is still attached after losetup -d"
   losetup -l -O NAME,AUTOCLEAR,RO,BACK-FILE "$loop" >&2 2>/dev/null || true
   return 1
@@ -604,6 +614,9 @@ cleanup() {
   if ! overlay_cleanup; then
     warn "cleanup: overlay teardown incomplete"
     warn "cleanup: refusing to unmount main image filesystems underneath it"
+    warn "cleanup: this is typically caused by the kernel's jbd2 journal thread"
+    warn "cleanup: holding an ext4 superblock after unmount. A reboot will"
+    warn "cleanup: release all resources cleanly."
     rc=1
   else
     log "cleanup: overlay teardown complete"
@@ -683,6 +696,7 @@ cleanup() {
     && losetup "$LOOPDEV" >/dev/null 2>&1; then
     warn "cleanup: main image loop still attached: $LOOPDEV"
     losetup "$LOOPDEV" >&2 2>/dev/null || true
+    warn "cleanup: a reboot may be required to release this loop device"
     rc=1
   fi
 
@@ -780,7 +794,7 @@ snapshot_system_state() {
     losetup -J 2>/dev/null || echo '{"loopdevices":[]}'
     echo ""
     echo "=== MOUNTS ==="
-    findmnt --real -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
+    findmnt --real --raw -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
     echo ""
     echo "=== EXT4 SUPERBLOCKS ==="
     local sys
@@ -805,29 +819,33 @@ compare_system_state() {
 
   local rc=0
 
-  # Extract loop device names from JSON
+  # Extract loop device names from JSON section
   local loops_before loops_after
-  loops_before="$(python3 -c '
+  loops_before="$(sed -n '/^=== LOOP DEVICES ===$/,/^===/{/^===/d;p}' "$before" \
+    | python3 -c '
 import json, sys
 try:
-    data = json.load(open(sys.argv[1]))
+    data = json.load(sys.stdin)
     for d in data.get("loopdevices", []):
         print(d.get("name",""))
 except: pass
-' "$before" 2>/dev/null | sort)"
-  loops_after="$(python3 -c '
+' 2>/dev/null | sort)"
+  loops_after="$(sed -n '/^=== LOOP DEVICES ===$/,/^===/{/^===/d;p}' "$after" \
+    | python3 -c '
 import json, sys
 try:
-    data = json.load(open(sys.argv[1]))
+    data = json.load(sys.stdin)
     for d in data.get("loopdevices", []):
         print(d.get("name",""))
 except: pass
-' "$after" 2>/dev/null | sort)"
+' 2>/dev/null | sort)"
 
-  # Extract mount targets
+  # Extract mount targets from MOUNTS section (skip header line)
   local mounts_before mounts_after
-  mounts_before="$(awk 'NR>1 {print $1}' "$before" 2>/dev/null | sort)"
-  mounts_after="$(awk 'NR>1 {print $1}' "$after" 2>/dev/null | sort)"
+  mounts_before="$(sed -n '/^=== MOUNTS ===$/,/^===/{/^===/d;/^TARGET/d;p}' "$before" \
+    | awk '{print $1}' | sort)"
+  mounts_after="$(sed -n '/^=== MOUNTS ===$/,/^===/{/^===/d;/^TARGET/d;p}' "$after" \
+    | awk '{print $1}' | sort)"
 
   # Extract ext4 superblocks
   local ext4_before ext4_after

@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# backend.sh — shared non-UI backend for steamos-nvidia.sh
+# backend.sh — shared non-UI backend for steamos-build.sh
 #
 # This file owns build/flash policy and orchestration.  Frontends should call
 # it with named arguments only; do not add user-facing positional parameters.
 #
-# Normally invoked via steamos-nvidia.sh; can also be called directly:
+# Normally invoked via steamos-build.sh; can also be called directly:
 #   sudo ./lib/backend.sh --action build --image /home/image/steamdeck-repair.img.bz2
 #   sudo ./lib/backend.sh --action flash --image /home/image/foo-nvidia-usbinstall.img \
 #        --device /dev/sda --confirm
@@ -49,7 +49,7 @@ OUT_FINAL=""
 IMG_BASE=""
 LOOPDEV=""
 # shellcheck disable=SC2034
-UDEV_RULE=/run/udev/rules.d/89-steamos-nvidia-installer.rules
+UDEV_RULE=/run/udev/rules.d/89-steamos-build-installer.rules
 UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 
 backend_usage() {
@@ -96,7 +96,7 @@ if [[ -n "$CONFIG_FILE" ]]; then
     echo "Config file not found: $CONFIG_FILE" >&2
     exit 2
   }
-  # shellcheck source=steamos-nvidia.example.conf
+  # shellcheck source=steamos-build.example.conf
   source "$CONFIG_FILE"
 fi
 
@@ -263,7 +263,7 @@ backend_flash() {
 }
 
 # ---------------------------------------------------------------------------
-# Shared build backend.  This is the former steamos-nvidia-installer.sh build
+# Shared build backend.  This is the former steamos-build-installer.sh build
 # orchestration moved out of the frontend.
 # ---------------------------------------------------------------------------
 load_build_libs() {
@@ -409,7 +409,7 @@ backend_build() {
   log "Build mount namespace: $(readlink /proc/self/ns/mnt 2>/dev/null || echo '<unknown>')"
   log "Root mount propagation: $(findmnt -no PROPAGATION / 2>/dev/null || echo '<unknown>')"
 
-  log "Starting steamos-nvidia build (rootfs=${ROOTFS_SIZE:-5120}M)"
+  log "Starting steamos-build build (rootfs=${ROOTFS_SIZE:-5120}M)"
 
   # Register and run the build pipeline
   register_build_pipeline

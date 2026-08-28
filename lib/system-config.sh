@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/system-config.sh
+# steamos-build-installer — lib/system-config.sh
 # System configuration stamping.
 # Handles: variant, update-branch, default-session
 #

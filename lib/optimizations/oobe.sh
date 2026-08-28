@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/optimizations/oobe.sh
+# steamos-build-installer — lib/optimizations/oobe.sh
 # OOBE (Out-of-Box Experience) optimizations.
 # Handles: neutralize-oobe
 #
@@ -92,8 +92,8 @@ _apply_neutralize_oobe() {
   log "Patching steam-jupiter to remove OOBE data wipe"
 
   # Handle both argument orderings seen across SteamOS versions
-  sed -i 's/rm -rf --one-file-system "\$STEAM_DIR" "\$STEAM_LINKS"/: # neutralized by steamos-nvidia-installer/' "$jupiter"
-  sed -i 's/rm -rf --one-file-system "\$STEAM_LINKS" "\$STEAM_DIR"/: # neutralized by steamos-nvidia-installer/' "$jupiter"
+  sed -i 's/rm -rf --one-file-system "\$STEAM_DIR" "\$STEAM_LINKS"/: # neutralized by steamos-build-installer/' "$jupiter"
+  sed -i 's/rm -rf --one-file-system "\$STEAM_LINKS" "\$STEAM_DIR"/: # neutralized by steamos-build-installer/' "$jupiter"
 
   # Fail closed: if the destructive line survived (whitespace change,
   # restructure), return failure rather than shipping a silently

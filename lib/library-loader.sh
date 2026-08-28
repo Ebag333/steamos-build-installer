@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/library-loader.sh
+# steamos-build-installer — lib/library-loader.sh
 # Unified library loading for all workflows.
 # Provides a single function to source libraries by workflow type.
 #

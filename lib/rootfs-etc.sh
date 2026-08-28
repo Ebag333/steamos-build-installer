@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/rootfs-etc.sh
+# steamos-build-installer — lib/rootfs-etc.sh
 # Btrfs rootfs rebuild and /etc overlay management.
 #
 # Handles two interchangeable writable-rootfs strategies: a native in-place
@@ -609,7 +609,7 @@ prepare_writable_rootfs_native() {
 
   # A property report alone is not enough.  Prove a real create+unlink works
   # through the same top-level tree that the finished image will use.
-  write_test="$mnt/.steamos-nvidia-native-rw-test.$$"
+  write_test="$mnt/.steamos-build-native-rw-test.$$"
   if ! touch "$write_test" 2>/dev/null; then
     log "Native rootfs mount after failed write test:"
     findmnt -T "$mnt" -o TARGET,SOURCE,FSTYPE,OPTIONS >&2 || true

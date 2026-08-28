@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/update-strategy.sh
+# steamos-build-installer — lib/update-strategy.sh
 # Stage 5: apply the chosen OS-update behaviour — self-healing (default),
 # hold-updates, or stock. In selfheal mode this installs the on-device
 # repatch tool plus wrappers for steamos-update and steamos-atomupd-client.
@@ -28,7 +28,7 @@ apply_update_strategy() {
       mv "$MNT/usr/bin/$bin" "$MNT/usr/bin/$bin.orig"
       cat >"$MNT/usr/bin/$bin" <<'EOF'
 #!/bin/bash
-# Stubbed by steamos-nvidia-installer: an OS update would replace the rootfs
+# Stubbed by steamos-build-installer: an OS update would replace the rootfs
 # and remove the NVIDIA driver. Original saved as $0.orig.
 echo "OS updates are held on this system (NVIDIA-patched image)." >&2
 # 7 = "no update available" to keep the Steam UI happy
@@ -40,7 +40,7 @@ EOF
 
   if [[ $UPDATE_MODE == selfheal ]]; then
     log "Installing self-healing update machinery"
-    mkdir -p "$MNT/usr/lib/steamos-nvidia"
+    mkdir -p "$MNT/usr/lib/steamos-build"
 
     # HID source bundle is now created by the builds system (logitech-hid.sh)
     # No need to copy from DRIVER_SRC_DIR here
@@ -64,7 +64,7 @@ EOF
       atomupd-wrapper; do
       install -m 755 \
         "$SCRIPT_DIR/lib/$helper.sh" \
-        "$MNT/usr/lib/steamos-nvidia/$helper.sh"
+        "$MNT/usr/lib/steamos-build/$helper.sh"
     done
 
     # ---- compatibility wrapper around steamos-update

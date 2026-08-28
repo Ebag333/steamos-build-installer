@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/install-hw-libs.sh
+# steamos-build-installer — lib/install-hw-libs.sh
 # Install driver/hardware-support packages into the overlay build chroot.
 # Sourced by the wrapper — do not run directly.
 
@@ -609,9 +609,9 @@ install_hw_libs() {
     arch_conf="$SCRIPT_DIR/lib/configs/hw-packages-arch.conf"
     legacy_conf="$SCRIPT_DIR/lib/configs/hw-packages.conf"
   else
-    valve_conf="/usr/lib/steamos-nvidia/configs/hw-packages-valve.conf"
-    arch_conf="/usr/lib/steamos-nvidia/configs/hw-packages-arch.conf"
-    legacy_conf="/usr/lib/steamos-nvidia/configs/hw-packages.conf"
+    valve_conf="/usr/lib/steamos-build/configs/hw-packages-valve.conf"
+    arch_conf="/usr/lib/steamos-build/configs/hw-packages-arch.conf"
+    legacy_conf="/usr/lib/steamos-build/configs/hw-packages.conf"
   fi
   local valve_pacconf="${PACCONF:?install_hw_libs: PACCONF is not set}"
 

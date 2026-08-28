@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/workflow-common.sh
+# steamos-build-installer — lib/workflow-common.sh
 # Shared functions used by multiple workflows.
 # Extracted to avoid duplication between build, repatch, and live workflows.
 #
@@ -38,9 +38,9 @@ configure_desktop_session() {
 # Returns 0 on success or script not found, 1 on script failure
 run_custom_script() {
   local root="${1:-/}"
-  local custom="$root/home/.steamos-nvidia/recovery/custom.sh"
+  local custom="$root/home/.steamos-build/recovery/custom.sh"
 
-  if [[ -x "$custom" ]]; then
+  if [[ -f "$custom" ]]; then
     log "Running custom script: $custom"
     if bash "$custom" 2>&1; then
       log "Custom script completed successfully"
@@ -226,7 +226,7 @@ install_nvidia_modprobe_conf() {
 
   mkdir -p "$conf_dir"
   cat >"$conf_dir/99-nvidia-patch.conf" <<'EOF'
-# Added by steamos-nvidia-installer
+# Added by steamos-build-installer
 blacklist nouveau
 options nouveau modeset=0
 options nvidia-drm modeset=1 fbdev=1

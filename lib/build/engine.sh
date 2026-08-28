@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/build/engine.sh
+# steamos-build-installer — lib/build/engine.sh
 # Clean-room build engine.  Nothing compiles in the target OS.
 # Every build happens in a disposable root and produces a pacman package.
 #
@@ -174,6 +174,13 @@ build_recipe() {
   local name="${NAME:?recipe.conf must set NAME}"
   local pkgbuild="$recipe_dir/PKGBUILD"
 
+  # Extract pkgname from PKGBUILD (may differ from NAME in recipe.conf)
+  local pkgname=""
+  if [[ -f "$pkgbuild" ]]; then
+    pkgname="$(sed -n 's/^pkgname=//p' "$pkgbuild" | tr -d '"' | head -1)"
+  fi
+  PKGNAME="${pkgname:-$name}"
+
   # Check for direct install mode (INSTALL_CMD in recipe.conf)
   local install_cmd=""
   install_cmd="$(sed -n 's/^INSTALL_CMD=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
@@ -303,6 +310,158 @@ install_build_artifact() {
   fi
 
   log "Installed $(basename "$pkg") successfully"
+}
+
+# Validate a build artifact after installation.
+#
+# Three-stage validation:
+#   1. Package contents — verify expected files exist in the archive
+#   2. Target installation — verify files landed and pass integrity check
+#   3. Runtime linkage — verify all shared libraries resolve in the target
+#
+# Args: $1 = root path, $2 = package file, $3 = expected artifact path (chroot-relative, e.g. /usr/lib/dri/nvidia_drv_video.so)
+# Returns 0 on success, 1 on failure
+validate_build_artifact() {
+  local root="${1:?validate_build_artifact: missing root}"
+  local pkg="${2:?validate_build_artifact: missing package}"
+  local artifact="${3:?validate_build_artifact: missing artifact path}"
+  local rc=0
+
+  local pkg_basename
+  pkg_basename="$(basename "$pkg")"
+
+  # Extract package metadata once
+  local pkg_name="" pkg_ver=""
+  if command -v bsdtar >/dev/null 2>&1; then
+    local pkginfo
+    pkginfo="$(bsdtar -xOf "$pkg" .PKGINFO 2>/dev/null)" || pkginfo=""
+    if [[ -n "$pkginfo" ]]; then
+      pkg_name="$(echo "$pkginfo" | sed -n 's/^pkgname = //p' | head -1)"
+      pkg_ver="$(echo "$pkginfo" | sed -n 's/^pkgver = //p' | head -1)"
+    fi
+  fi
+
+  log ""
+  log "===== ARTIFACT VALIDATION ====="
+  log "Package: $pkg_basename"
+  [[ -n "$pkg_name" ]] && log "  pkgname: $pkg_name"
+  [[ -n "$pkg_ver" ]] && log "  pkgver:  $pkg_ver"
+
+  # ── Stage 1: Package contents ──────────────────────────────────────────
+  if ! command -v bsdtar >/dev/null 2>&1; then
+    warn "  bsdtar not available — skipping package content validation"
+  else
+    local artifact_no_slash="${artifact#/}"
+    if bsdtar -tf "$pkg" 2>/dev/null | grep -qxF "$artifact_no_slash"; then
+      log "  [OK] $artifact"
+    else
+      warn "  [FAILED] $artifact not found in package"
+      rc=1
+    fi
+
+    # Identify the binary type if it's an ELF
+    if [[ -f "$root$artifact" ]]; then
+      local file_type
+      file_type="$(file "$root$artifact" 2>/dev/null | sed 's/.*: //')"
+      log "  [OK] $file_type"
+    fi
+
+    # Verify .PKGINFO has required fields
+    if [[ -n "$pkginfo" ]]; then
+      local _field
+      for _field in pkgname pkgver arch; do
+        if echo "$pkginfo" | grep -q "^${_field} = "; then
+          :
+        else
+          warn "  [FAILED] .PKGINFO missing $_field"
+          rc=1
+        fi
+      done
+    else
+      warn "  [FAILED] could not read .PKGINFO from package"
+      rc=1
+    fi
+  fi
+
+  # ── Stage 2: Target installation ───────────────────────────────────────
+  local target_file="$root$artifact"
+  if [[ -s "$target_file" ]]; then
+    log "  [OK] installed ($(stat -c '%s' "$target_file") bytes)"
+  else
+    warn "  [FAILED] $artifact missing or empty in target"
+    rc=1
+  fi
+
+  # Package integrity check
+  if [[ -n "$pkg_name" ]]; then
+    local qkk_output
+    qkk_output="$(chroot "$root" pacman -Qkk "$pkg_name" 2>&1)" || qkk_output=""
+    if echo "$qkk_output" | grep -q '0 altered files'; then
+      log "  [OK] pacman integrity: 0 altered files"
+    else
+      local altered
+      altered="$(echo "$qkk_output" | grep -oE '[0-9]+ altered files' | head -1)"
+      warn "  [WARN] pacman integrity: ${altered:-unknown} (may be normal for first install)"
+    fi
+  fi
+
+  # ── Stage 3: ELF dependency resolution ─────────────────────────────────
+  if [[ "$artifact" == *.so || "$artifact" == *.so.* ]]; then
+    log ""
+    log "===== ELF DEPENDENCIES ====="
+    log "Artifact: $artifact"
+
+    local ldd_output
+    ldd_output="$(chroot "$root" ldd "$artifact" 2>&1)" || ldd_output=""
+
+    if [[ -z "$ldd_output" ]]; then
+      warn "  ldd produced no output"
+    else
+      local dep_failed=0
+      local dep_ok=0
+      local line
+      while IFS="" read -r line; do
+        if [[ "$line" == *"not found"* ]]; then
+          local lib_name
+          lib_name="$(echo "$line" | awk '{print $1}')"
+          warn "  [FAILED] $lib_name"
+          dep_failed=1
+          rc=1
+        elif [[ "$line" =~ ^[[:space:]]([^[:space:]]+\.so[^[:space:]]*) ]]; then
+          local lib_name="${BASH_REMATCH[1]}"
+          ((dep_ok++)) || true
+        fi
+      done <<<"$ldd_output"
+
+      # List resolved NEEDED libraries from readelf for clarity
+      local needed_libs
+      needed_libs="$(readelf -d "$root$artifact" 2>/dev/null | grep NEEDED | awk '{print $5}' | tr -d '[]')" || needed_libs=""
+      if [[ -n "$needed_libs" ]]; then
+        while IFS="" read -r lib; do
+          [[ -n "$lib" ]] || continue
+          if echo "$ldd_output" | grep -q "$lib.*not found"; then
+            warn "  [FAILED] $lib"
+          else
+            log "  [OK] $lib"
+          fi
+        done <<<"$needed_libs"
+      fi
+
+      if ((dep_failed == 0)); then
+        log "  [OK] All NEEDED libraries resolvable in target"
+      else
+        warn "  [FAILED] Unresolved dependencies detected"
+      fi
+    fi
+  fi
+
+  log ""
+  if ((rc == 0)); then
+    log "Artifact validation passed: $pkg_basename"
+  else
+    warn "Artifact validation FAILED: $pkg_basename"
+  fi
+  return "$rc"
 }
 
 # Derive a build profile from an existing root filesystem.
@@ -493,11 +652,55 @@ _build_collect_artifact() {
   local output_dir="${1:?}"
   local name="${2:?}"
 
-  local pkg
-  pkg="$(find "$output_dir" -maxdepth 1 -name '*.pkg.tar.*' -type f | sort -V | tail -1)"
-  [[ -n "$pkg" ]] || return 1
+  # Find all built packages
+  local -a pkgs=()
+  mapfile -t pkgs < <(find "$output_dir" -maxdepth 1 -name '*.pkg.tar.*' -type f 2>/dev/null)
+  ((${#pkgs[@]})) || return 1
 
-  echo "$pkg"
+  # If only one package, use it
+  if ((${#pkgs[@]} == 1)); then
+    echo "${pkgs[0]}"
+    return 0
+  fi
+
+  # Multiple packages — select the one whose .PKGINFO pkgname matches the
+  # recipe's expected pkgname.  This avoids picking a -debug package over
+  # the actual artifact.
+  local expected_pkgname=""
+  if [[ -n "${PKGNAME:-}" ]]; then
+    expected_pkgname="$PKGNAME"
+  elif [[ -n "${name:-}" ]]; then
+    # Fall back: try to read pkgname from the PKGBUILD in the output dir
+    expected_pkgname="$name"
+  fi
+
+  local pkg
+  for pkg in "${pkgs[@]}"; do
+    local pkginfo_name
+    pkginfo_name="$(bsdtar -xOf "$pkg" .PKGINFO 2>/dev/null | sed -n 's/^pkgname = //p' | head -1)" || pkginfo_name=""
+    if [[ -n "$expected_pkgname" && "$pkginfo_name" == "$expected_pkgname" ]]; then
+      echo "$pkg"
+      return 0
+    fi
+  done
+
+  # Fallback: exclude -debug packages, then pick newest
+  local -a non_debug=()
+  for pkg in "${pkgs[@]}"; do
+    local pkginfo_name
+    pkginfo_name="$(bsdtar -xOf "$pkg" .PKGINFO 2>/dev/null | sed -n 's/^pkgname = //p' | head -1)" || pkginfo_name=""
+    if [[ "$pkginfo_name" != *-debug ]]; then
+      non_debug+=("$pkg")
+    fi
+  done
+
+  if ((${#non_debug[@]} > 0)); then
+    printf '%s\n' "${non_debug[@]}" | sort -V | tail -1
+    return 0
+  fi
+
+  # Last resort: newest package
+  printf '%s\n' "${pkgs[@]}" | sort -V | tail -1
 }
 
 # Verify a built artifact against a profile.
@@ -587,7 +790,7 @@ PKGDEST=/tmp/build-output
 SRCDEST=/tmp/build-src
 SRCPKGDEST=/tmp/build-srcpkg
 LOGDEST=/tmp/build-logs
-PACKAGER="steamos-nvidia-installer <noreply@steamos-nvidia>"
+PACKAGER="steamos-build-installer <noreply@steamos-build>"
 EOF
 }
 

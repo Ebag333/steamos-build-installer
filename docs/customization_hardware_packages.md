@@ -94,4 +94,4 @@ HW_SUPPORT_ITEMS="linux-firmware nvidia-open-dkms nvidia-utils lib32-nvidia-util
 
 ## Post-install tweaking
 
-The manifest files are copied into the installed system at `/usr/lib/steamos-nvidia/configs/`. During self-heal updates, repatch reads from these files to determine what to install. You can edit them on the installed system to pin versions or change the package set — see [OS Updates](os_updates.md) for details.
+The manifest files are copied into the installed system at `/usr/lib/steamos-build/configs/`. During self-heal updates, repatch reads from these files to determine what to install. You can edit them on the installed system to pin versions or change the package set — see [OS Updates](os_updates.md) for details.

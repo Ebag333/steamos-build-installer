@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# steamos-nvidia-installer — lib/drivers/logitech-hid.sh
+# steamos-build-installer — lib/drivers/logitech-hid.sh
 # Logitech HID++ driver module.
 # Builds upstream Logitech receiver and HID++ kernel modules.
 #
@@ -38,7 +38,7 @@ LOGITECH_HID_MODULES="hid-logitech-dj hid-logitech-hidpp"
 LOGITECH_HID_UPSTREAM_BASE="https://raw.githubusercontent.com/torvalds/linux/${UPSTREAM_DRIVER_REF:-master}/drivers/hid"
 
 # State directory for tracking builds
-LOGITECH_HID_STATE_DIR="/var/lib/steamos-nvidia/drivers/logitech-hid"
+LOGITECH_HID_STATE_DIR="/var/lib/steamos-build/drivers/logitech-hid"
 
 # Register this driver
 register_build "$LOGITECH_HID_DRIVER_NAME" "$LOGITECH_HID_DRIVER_DESC"
@@ -426,7 +426,7 @@ apply_logitech_hid_build() {
   fi
 
   # Create bundle for self-heal
-  local bundle_dir="$MNT/usr/lib/steamos-nvidia/hid"
+  local bundle_dir="$MNT/usr/lib/steamos-build/hid"
   if ! create_driver_bundle "$src_dir" "$bundle_dir"; then
     warn "Failed to create HID source bundle for self-heal"
     return 1
