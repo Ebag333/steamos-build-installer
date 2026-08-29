@@ -142,8 +142,8 @@ finalize() {
       _compute_pkg_usage() {
         pacman -Qlq --dbpath "$MNT/usr/lib/holo/pacmandb" "$1" 2>/dev/null \
           | while IFS="" read -r f; do
-              [[ -f "$MNT$f" || -L "$MNT$f" ]] && printf '%s\0' "$MNT$f"
-            done \
+            [[ -f "$MNT$f" || -L "$MNT$f" ]] && printf '%s\0' "$MNT$f"
+          done \
           | xargs -0 du -c --apparent-size --no-dereference 2>/dev/null \
           | tail -1 | cut -f1
       }
@@ -222,7 +222,7 @@ finalize() {
 
   # ── Update branch: manifest.json (both lib paths) ─────────────────────
   for _manifest_path in /usr/lib/steamos-atomupd/manifest.json /usr/lib64/steamos-atomupd/manifest.json; do
-    local _manifest="$_manifest_path"  # reuse from loop above is fine; reassign
+    local _manifest="$_manifest_path" # reuse from loop above is fine; reassign
     _manifest="$MNT$_manifest_path"
     if [[ -f "$_manifest" ]] && grep -q "\"default_update_branch\"[[:space:]]*:[[:space:]]*\"$_branch\"" "$_manifest"; then
       log "  OK $_manifest_path default_update_branch=$_branch"
@@ -411,7 +411,7 @@ finalize() {
       ;;
   esac
 
-  if (( ADD_INSTALLER == 1 )); then
+  if ((ADD_INSTALLER == 1)); then
     install_text='  Install: boot the USB → double-click "Install SteamOS (NVIDIA) to
            Hard Drive" → pick disk → machine powers off → remove USB, boot.'
   fi

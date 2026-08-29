@@ -519,9 +519,9 @@ _build_overlay_diagnostics() {
     for tool in gcc meson ninja pkgconf; do
       local version=""
       case "$tool" in
-        gcc)    version="$(chroot "$root" gcc --version 2>/dev/null | head -1)" ;;
-        meson)  version="$(chroot "$root" meson --version 2>/dev/null)" ;;
-        ninja)  version="$(chroot "$root" ninja --version 2>/dev/null)" ;;
+        gcc) version="$(chroot "$root" gcc --version 2>/dev/null | head -1)" ;;
+        meson) version="$(chroot "$root" meson --version 2>/dev/null)" ;;
+        ninja) version="$(chroot "$root" ninja --version 2>/dev/null)" ;;
         pkgconf) version="$(chroot "$root" pkg-config --version 2>/dev/null)" ;;
       esac
       if [[ -n "$version" ]]; then
@@ -537,10 +537,10 @@ _build_overlay_diagnostics() {
     for pkg_tool in fakeroot binutils debugedit makepkg; do
       local pkg_version=""
       case "$pkg_tool" in
-        fakeroot)  pkg_version="$(chroot "$root" fakeroot --version 2>/dev/null | head -1)" ;;
-        binutils)  pkg_version="$(chroot "$root" pacman -Q binutils 2>/dev/null)" ;;
+        fakeroot) pkg_version="$(chroot "$root" fakeroot --version 2>/dev/null | head -1)" ;;
+        binutils) pkg_version="$(chroot "$root" pacman -Q binutils 2>/dev/null)" ;;
         debugedit) pkg_version="$(chroot "$root" pacman -Q debugedit 2>/dev/null)" ;;
-        makepkg)   pkg_version="$(chroot "$root" makepkg --version 2>/dev/null | head -1)" ;;
+        makepkg) pkg_version="$(chroot "$root" makepkg --version 2>/dev/null | head -1)" ;;
       esac
       if [[ -n "$pkg_version" ]]; then
         printf '[OK]      %-12s %s\n' "$pkg_tool" "$pkg_version"

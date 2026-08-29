@@ -2176,9 +2176,9 @@ _check_persisted_sync() {
         local only_dir="${line#Only in }"
         only_dir="${only_dir%%:*}"
         if [[ "$only_dir" == "$current"* ]]; then
-          ((count_missing++)) || true  # exists in current, missing from cache
+          ((count_missing++)) || true # exists in current, missing from cache
         else
-          ((count_extra++)) || true    # exists in cache, not in current
+          ((count_extra++)) || true # exists in cache, not in current
         fi
         continue
       fi
@@ -2190,9 +2190,9 @@ _check_persisted_sync() {
       [[ -f "$current/lib/$relpath" ]] && cur_mtime="$(stat -c '%Y' "$current/lib/$relpath" 2>/dev/null)"
       [[ -f "$persisted/lib/$relpath" ]] && per_mtime="$(stat -c '%Y' "$persisted/lib/$relpath" 2>/dev/null)"
       if [[ -n "$cur_mtime" && -n "$per_mtime" ]]; then
-        if (( cur_mtime > per_mtime )); then
+        if ((cur_mtime > per_mtime)); then
           ((count_newer++)) || true
-        elif (( cur_mtime < per_mtime )); then
+        elif ((cur_mtime < per_mtime)); then
           ((count_older++)) || true
         else
           ((count_same++)) || true
@@ -2201,19 +2201,19 @@ _check_persisted_sync() {
     done <<<"$diff_detail"
 
     diff_lines="$diff_count file(s) differ:"
-    if (( count_newer > 0 )); then
+    if ((count_newer > 0)); then
       diff_lines+=$'\n'"  $count_newer cache file(s) are out of date"
     fi
-    if (( count_older > 0 )); then
+    if ((count_older > 0)); then
       diff_lines+=$'\n'"  $count_older local file(s) are older than cache"
     fi
-    if (( count_same > 0 )); then
+    if ((count_same > 0)); then
       diff_lines+=$'\n'"  $count_same file(s) differ in contents only"
     fi
-    if (( count_missing > 0 )); then
+    if ((count_missing > 0)); then
       diff_lines+=$'\n'"  $count_missing file(s) missing from cache"
     fi
-    if (( count_extra > 0 )); then
+    if ((count_extra > 0)); then
       diff_lines+=$'\n'"  $count_extra file(s) only in cache"
     fi
   else

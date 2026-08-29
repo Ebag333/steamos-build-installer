@@ -95,18 +95,23 @@ verify_package_abi_compat() {
     local mismatch=0
     case "$dep_op" in
       '>=')
-        (( cmp < 0 )) && mismatch=1 ;;
+        ((cmp < 0)) && mismatch=1
+        ;;
       '<=')
-        (( cmp > 0 )) && mismatch=1 ;;
+        ((cmp > 0)) && mismatch=1
+        ;;
       '>')
-        (( cmp <= 0 )) && mismatch=1 ;;
+        ((cmp <= 0)) && mismatch=1
+        ;;
       '<')
-        (( cmp >= 0 )) && mismatch=1 ;;
+        ((cmp >= 0)) && mismatch=1
+        ;;
       '=')
-        (( cmp != 0 )) && mismatch=1 ;;
+        ((cmp != 0)) && mismatch=1
+        ;;
     esac
 
-    if (( mismatch )); then
+    if ((mismatch)); then
       warn "ABI mismatch: $dep_name requires $dep_op$dep_ver but profile has $locked_ver"
       return 1
     fi

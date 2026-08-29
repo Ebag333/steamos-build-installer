@@ -1080,7 +1080,7 @@ overlay_cleanup() {
         fi
       done <<<"$remaining"
 
-      if (( all_autoclear == 0 )); then
+      if ((all_autoclear == 0)); then
         warn "overlay_cleanup: non-autoclear loop(s) still attached to $OVL_IMG"
         rc=1
       fi

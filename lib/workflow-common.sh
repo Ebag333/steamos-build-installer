@@ -250,21 +250,39 @@ init_pacman_keyring() {
   case "$keyring" in
     archlinux)
       chroot "$root" pacman-key --init 2>/dev/null \
-        || { warn "pacman-key --init failed"; return 1; }
+        || {
+          warn "pacman-key --init failed"
+          return 1
+        }
       chroot "$root" pacman-key --populate archlinux 2>/dev/null \
-        || { warn "pacman-key --populate archlinux failed"; return 1; }
+        || {
+          warn "pacman-key --populate archlinux failed"
+          return 1
+        }
       ;;
     holo)
       chroot "$root" pacman-key --init 2>/dev/null \
-        || { warn "pacman-key --init failed"; return 1; }
+        || {
+          warn "pacman-key --init failed"
+          return 1
+        }
       chroot "$root" pacman-key --populate holo 2>/dev/null \
-        || { warn "pacman-key --populate holo failed"; return 1; }
+        || {
+          warn "pacman-key --populate holo failed"
+          return 1
+        }
       ;;
     both)
       chroot "$root" pacman-key --init 2>/dev/null \
-        || { warn "pacman-key --init failed"; return 1; }
+        || {
+          warn "pacman-key --init failed"
+          return 1
+        }
       chroot "$root" pacman-key --populate archlinux holo 2>/dev/null \
-        || { warn "pacman-key --populate failed"; return 1; }
+        || {
+          warn "pacman-key --populate failed"
+          return 1
+        }
       ;;
     *)
       warn "Unknown keyring type: $keyring"
@@ -357,8 +375,8 @@ enable_nvidia_power_services() {
     if [[ -f "$root/usr/lib/systemd/system/${service}.service" ]]; then
       case "$service" in
         nvidia-hibernate) target="systemd-hibernate.target" ;;
-        nvidia-suspend)   target="systemd-suspend.target" ;;
-        nvidia-resume)    target="systemd-resume.target" ;;
+        nvidia-suspend) target="systemd-suspend.target" ;;
+        nvidia-resume) target="systemd-resume.target" ;;
       esac
       mkdir -p "$root/etc/systemd/system/${target}.wants"
       ln -sf "/usr/lib/systemd/system/${service}.service" \

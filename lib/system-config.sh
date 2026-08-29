@@ -219,9 +219,9 @@ _apply_default_session() {
   # Determine sddm session name from DEFAULT_SESSION
   local sddm_session
   case "$session" in
-    game)    sddm_session="gamescope-wayland.desktop" ;;
+    game) sddm_session="gamescope-wayland.desktop" ;;
     desktop) sddm_session="plasma.desktop" ;;
-    *)       sddm_session="plasma.desktop" ;;
+    *) sddm_session="plasma.desktop" ;;
   esac
 
   # Live mode: configure steamosctl and state.toml
@@ -272,8 +272,8 @@ _verify_default_session() {
   fi
 
   case "$expected" in
-    game)    grep -q '^Session=gamescope' "$sddm_conf" ;;
+    game) grep -q '^Session=gamescope' "$sddm_conf" ;;
     desktop) grep -q '^Session=plasma' "$sddm_conf" ;;
-    *)       return 1 ;;
+    *) return 1 ;;
   esac
 }

@@ -21,62 +21,62 @@ exec 3>&1
 log() { printf '[diag] %s\n' "$*" >&3; }
 
 run() {
-    local name="$1"
-    shift
-    {
-        echo "\$ $*"
-        echo
-        "$@"
-        rc=$?
-        echo
-        echo "[exit=$rc]"
-    } >"$BASE/$name.txt" 2>&1 || true
+  local name="$1"
+  shift
+  {
+    echo "\$ $*"
+    echo
+    "$@"
+    rc=$?
+    echo
+    echo "[exit=$rc]"
+  } >"$BASE/$name.txt" 2>&1 || true
 }
 
 run_sh() {
-    local name="$1"
-    shift
-    {
-        echo "\$ $*"
-        echo
-        bash -lc "$*"
-        rc=$?
-        echo
-        echo "[exit=$rc]"
-    } >"$BASE/$name.txt" 2>&1 || true
+  local name="$1"
+  shift
+  {
+    echo "\$ $*"
+    echo
+    bash -lc "$*"
+    rc=$?
+    echo
+    echo "[exit=$rc]"
+  } >"$BASE/$name.txt" 2>&1 || true
 }
 
 sudo_run() {
-    local name="$1"
-    shift
-    {
-        echo "\$ sudo $*"
-        echo
-        sudo "$@"
-        rc=$?
-        echo
-        echo "[exit=$rc]"
-    } >"$BASE/$name.txt" 2>&1 || true
+  local name="$1"
+  shift
+  {
+    echo "\$ sudo $*"
+    echo
+    sudo "$@"
+    rc=$?
+    echo
+    echo "[exit=$rc]"
+  } >"$BASE/$name.txt" 2>&1 || true
 }
 
 sudo_sh() {
-    local name="$1"
-    shift
-    {
-        echo "\$ sudo bash -lc '$*'"
-        echo
-        sudo bash -lc "$*"
-        rc=$?
-        echo
-        echo "[exit=$rc]"
-    } >"$BASE/$name.txt" 2>&1 || true
+  local name="$1"
+  shift
+  {
+    echo "\$ sudo bash -lc '$*'"
+    echo
+    sudo bash -lc "$*"
+    rc=$?
+    echo
+    echo "[exit=$rc]"
+  } >"$BASE/$name.txt" 2>&1 || true
 }
 
 log "Collecting diagnostics into $BASE"
 
 # Prime sudo once so later commands don't interleave password prompts with output.
 if command -v sudo >/dev/null 2>&1; then
-    sudo -v || true
+  sudo -v || true
 fi
 
 ###############################################################################
@@ -442,20 +442,20 @@ find /tmp /var/tmp /var/log /home/deck \
 
 mkdir -p "$BASE/recent-logs"
 while IFS= read -r f; do
-    [[ -f "$f" ]] || continue
+  [[ -f "$f" ]] || continue
 
-    # Keep this intentionally narrow and size-limited.
-    size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
-    if [[ "$size" -le 5242880 ]]; then
-        safe="$(printf '%s' "$f" | sed 's#^/##; s#[/ ]#_#g')"
-        sudo cp -a "$f" "$BASE/recent-logs/$safe" 2>/dev/null || true
-        sudo chown "$(id -u):$(id -g)" "$BASE/recent-logs/$safe" 2>/dev/null || true
-    fi
+  # Keep this intentionally narrow and size-limited.
+  size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+  if [[ "$size" -le 5242880 ]]; then
+    safe="$(printf '%s' "$f" | sed 's#^/##; s#[/ ]#_#g')"
+    sudo cp -a "$f" "$BASE/recent-logs/$safe" 2>/dev/null || true
+    sudo chown "$(id -u):$(id -g)" "$BASE/recent-logs/$safe" 2>/dev/null || true
+  fi
 done < <(
-    sudo find /tmp /var/tmp /var/log /home/deck \
-      -xdev -maxdepth 5 -type f -mmin -360 \
-      \( -iname "*.log" -o -iname "*.txt" -o -iname "*.out" -o -iname "*.err" \) \
-      -print 2>/dev/null | head -300
+  sudo find /tmp /var/tmp /var/log /home/deck \
+    -xdev -maxdepth 5 -type f -mmin -360 \
+    \( -iname "*.log" -o -iname "*.txt" -o -iname "*.out" -o -iname "*.err" \) \
+    -print 2>/dev/null | head -300
 )
 
 ###############################################################################
@@ -463,32 +463,32 @@ done < <(
 ###############################################################################
 
 {
-    echo "SteamOS Recovery Update Diagnostics"
-    echo "Generated: $(date -Ins)"
-    echo
-    echo "=== OS ==="
-    grep -E '^(NAME|PRETTY_NAME|VERSION|VERSION_ID|BUILD_ID)=' /etc/os-release 2>/dev/null || true
-    echo
-    echo "=== Kernel ==="
-    uname -a
-    echo
-    echo "=== Cmdline ==="
-    cat /proc/cmdline
-    echo
-    echo "=== Failed units ==="
-    systemctl --failed --no-pager 2>&1 || true
-    echo
-    echo "=== Default route ==="
-    ip route show default 2>&1 || true
-    echo
-    echo "=== DNS ==="
-    resolvectl dns 2>&1 || true
-    echo
-    echo "=== SteamOS cloud lookup ==="
-    getent ahosts steamdeck-images.steamos.cloud 2>&1 || true
-    echo
-    echo "=== Mounted filesystems ==="
-    findmnt -A -o TARGET,SOURCE,FSTYPE,OPTIONS
+  echo "SteamOS Recovery Update Diagnostics"
+  echo "Generated: $(date -Ins)"
+  echo
+  echo "=== OS ==="
+  grep -E '^(NAME|PRETTY_NAME|VERSION|VERSION_ID|BUILD_ID)=' /etc/os-release 2>/dev/null || true
+  echo
+  echo "=== Kernel ==="
+  uname -a
+  echo
+  echo "=== Cmdline ==="
+  cat /proc/cmdline
+  echo
+  echo "=== Failed units ==="
+  systemctl --failed --no-pager 2>&1 || true
+  echo
+  echo "=== Default route ==="
+  ip route show default 2>&1 || true
+  echo
+  echo "=== DNS ==="
+  resolvectl dns 2>&1 || true
+  echo
+  echo "=== SteamOS cloud lookup ==="
+  getent ahosts steamdeck-images.steamos.cloud 2>&1 || true
+  echo
+  echo "=== Mounted filesystems ==="
+  findmnt -A -o TARGET,SOURCE,FSTYPE,OPTIONS
 } >"$BASE/SUMMARY.txt" 2>&1
 
 ###############################################################################
@@ -520,7 +520,7 @@ tar -C "$(dirname "$BASE")" -czf "$OUT" "$(basename "$BASE")"
 
 # Make sure the invoking user owns the result even if the script itself was run with sudo.
 if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
-    chown "$SUDO_UID:$SUDO_GID" "$OUT" 2>/dev/null || true
+  chown "$SUDO_UID:$SUDO_GID" "$OUT" 2>/dev/null || true
 fi
 
 log "Done."

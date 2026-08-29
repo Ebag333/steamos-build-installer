@@ -517,7 +517,7 @@ backend_reboot() {
     [[ -n "$slot_a" ]] && echo "  $((idx++))) Root A ($slot_a)"
     [[ -n "$slot_b" ]] && echo "  $((idx++))) Root B ($slot_b)"
     read -rp "Choice: " choice
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#slot_labels[@]} )); then
+    if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#slot_labels[@]})); then
       selected="${slot_labels[$((choice - 1))]}"
     else
       exit 0

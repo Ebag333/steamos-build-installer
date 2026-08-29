@@ -211,7 +211,7 @@ case "$PARTSET" in
       B) _target_slot=A ;;
     esac
     ;;
-  A|B) _target_slot="$PARTSET" ;;
+  A | B) _target_slot="$PARTSET" ;;
 esac
 
 if [[ -n "$_booted" && -n "$_target_slot" && "$_target_slot" == "$_booted" ]]; then
