@@ -11,12 +11,10 @@
 
 REAL=/usr/bin/steamos-atomupd-client.orig
 
-# Resolve script directory: prefer /home (writable, latest), fall back to /usr
+# Resolve script directory
 _NVIDIA_DIR=""
-if [[ -d "/home/.steamos-build/lib" ]]; then
-  _NVIDIA_DIR="/home/.steamos-build"
-elif [[ -d "/usr/lib/steamos-build" ]]; then
-  _NVIDIA_DIR="/usr/lib/steamos-build"
+if [[ -d "/home/.steamos-build/build_cache/lib" ]]; then
+  _NVIDIA_DIR="/home/.steamos-build/build_cache"
 fi
 
 REPATCH="$_NVIDIA_DIR/lib/repatch.sh"
@@ -385,8 +383,8 @@ elif [[ $repatch_rc -ne 0 ]]; then
   exit 1
 fi
 
-# repatch copies /usr/lib/steamos-build into the new slot. Activate this lower
-# wrapper there too, so the next OS update is intercepted even after reboot.
+# Propagate the atomupd wrapper into the new slot, so the next OS update
+# is intercepted even after reboot.
 if ! install_self_into_target "$other_after"; then
   alog "ERROR: repatch succeeded but atomupd wrapper could not be propagated."
   rollback_target "$other_after" || alog "ERROR: rollback verification failed"

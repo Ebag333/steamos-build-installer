@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=NVIDIA Setup
-Comment=Configure NVIDIA driver, thunderbolt, hardware scan, desktop mode
-Exec=/usr/local/bin/steamos-build-post-install
-Icon=preferences-system
-Terminal=true
-Type=Application
-StartupNotify=true

@@ -45,7 +45,7 @@ _validate_clean_build() {
 
   # Build
   build_recipe \
-    --recipe "$SCRIPT_DIR_VALIDATE/configs/build_recipes/aotofu-vaapi" \
+    --recipe "$SCRIPT_DIR_VALIDATE/lib/configs/build_recipes/aotofu-vaapi" \
     --profile "$PROFILE_DIR" \
     --output "$workdir/test1-output" || {
     warn "FAIL: Build failed"
@@ -129,8 +129,8 @@ _validate_build_failure_preserves() {
 
   # Try to build a non-existent recipe (should fail)
   build_recipe \
-    --recipe "$SCRIPT_DIR_VALIDATE/configs/build_recipes/nonexistent" \
-    --profile "$workdir/test1-profile" \
+    --recipe "$SCRIPT_DIR_VALIDATE/lib/configs/build_recipes/nonexistent" \
+    --profile "$workdir/test4-profile" \
     --output "$workdir/test4-output" \
     --keep-failed 2>/dev/null || true
 
@@ -224,12 +224,12 @@ run_validation_matrix() {
 
   local pass=0 fail=0
 
-  _validate_clean_build "$merged" "$workdir" && ((pass++)) || ((fail++))
-  _validate_abi_block "$merged" "$workdir" && ((pass++)) || ((fail++))
-  _validate_arch_fallback "$merged" "$workdir" && ((pass++)) || ((fail++))
-  _validate_build_failure_preserves "$merged" "$workdir" && ((pass++)) || ((fail++))
-  _validate_artifact_boundary "$merged" "$workdir" && ((pass++)) || ((fail++))
-  _validate_provenance_logging "$merged" "$workdir" && ((pass++)) || ((fail++))
+  _validate_clean_build "$merged" "$workdir" && ((++pass)) || ((++fail))
+  _validate_abi_block "$merged" "$workdir" && ((++pass)) || ((++fail))
+  _validate_arch_fallback "$merged" "$workdir" && ((++pass)) || ((++fail))
+  _validate_build_failure_preserves "$merged" "$workdir" && ((++pass)) || ((++fail))
+  _validate_artifact_boundary "$merged" "$workdir" && ((++pass)) || ((++fail))
+  _validate_provenance_logging "$merged" "$workdir" && ((++pass)) || ((++fail))
 
   log ""
   log "========================================"

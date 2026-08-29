@@ -143,8 +143,8 @@ else
     compare_file "etc/pacman.d/mirrorlist"
     compare_file "etc/udev/rules.d/98-thunderbolt-rescan.rules"
     compare_file "etc/udev/rules.d/99-steamos-tb-autoauth.rules"
-    compare_file "usr/lib/steamos-build/driver.conf"
-    compare_file "usr/lib/steamos-build/repatch.sh"
+    compare_file "home/.steamos-build/lib/driver.conf"
+    compare_file "home/.steamos-build/lib/repatch.sh"
     compare_file "usr/bin/steamos-update"
     compare_file "etc/systemd/system/multi-user.target.wants/bolt.service"
     compare_file "home/deck/.config/steamos-manager/state.toml"
@@ -156,14 +156,14 @@ else
     echo -e "${CYAN}Summary:${NC}"
     for f in etc/mkinitcpio.conf etc/mkinitcpio.conf.d/99-steamos-build.conf \
              etc/modprobe.d/99-nvidia-patch.conf etc/dracut.conf.d/99-steamos-build.conf \
-             usr/lib/steamos-build/driver.conf; do
-        ((total++))
+             home/.steamos-build/lib/driver.conf; do
+        total=$((total + 1))
         if [[ -f "$ROOTFS_A/$f" && -f "$ROOTFS_B/$f" ]]; then
             if ! diff -q "$ROOTFS_A/$f" "$ROOTFS_B/$f" >/dev/null 2>&1; then
-                ((diffs++))
+                diffs=$((diffs + 1))
             fi
         elif [[ -f "$ROOTFS_A/$f" || -f "$ROOTFS_B/$f" ]]; then
-            ((diffs++))
+            diffs=$((diffs + 1))
         fi
     done
 

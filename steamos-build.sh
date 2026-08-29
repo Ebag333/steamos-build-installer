@@ -25,6 +25,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND="$SCRIPT_DIR/lib/backend.sh"
 source "$SCRIPT_DIR/lib/pci-discovery.sh"
+# shellcheck source=lib/args.sh
+source "$SCRIPT_DIR/lib/args.sh"
 
 # Load build defaults.  If defaults.conf is missing, all flags start blank.
 DEFAULTS_CONF="$SCRIPT_DIR/lib/configs/defaults.conf"
@@ -53,7 +55,7 @@ Usage:
 
   steamos-build.sh --action build --image FILE --config FILE [options]
   steamos-build.sh --action flash --image FILE --device /dev/sdX
-  steamos-build.sh --action configure
+  steamos-build.sh --action live --config FILE
   steamos-build.sh --action validate [--config FILE]
   steamos-build.sh --action reboot
   steamos-build.sh --setup
@@ -62,7 +64,7 @@ Setup:
   --setup                  Install host dependencies required by this tool
 
 Named arguments:
-  --action ACTION          build | flash | configure | reboot
+  --action ACTION          build | flash | live | reboot
   --image FILE             Base SteamOS repair image
   --device DEVICE          Target flash device (flash only)
   --config FILE            Build config file (all build options go here)
@@ -267,38 +269,17 @@ if [[ $# -gt 0 ]]; then
 fi
 
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --action)
-      ACTION="${2:?--action requires a value}"
-      shift 2
-      ;;
-    --image)
-      IMG="${2:?--image requires a value}"
-      shift 2
-      ;;
-    --device)
-      TARGET_DEV="${2:?--device requires a value}"
-      shift 2
-      ;;
-    --config)
-      CONFIG_FILE="${2:?--config requires a value}"
-      shift 2
-      ;;
-    --output-dir)
-      OUTPUT_DIR="${2:?--output-dir requires a value}"
-      shift 2
-      ;;
+  if parse_common_arg "$1" "${2:-}"; then
+    shift "$_ARG_SHIFT"
+    continue
+  fi
 
-    --allow-system-disk)
-      ALLOW_SYSTEM_DISK=1
-      shift
-      ;;
+  case "$1" in
     --setup)
       SETUP_MODE=1
       CLI_MODE=1
       shift
       ;;
-
     -h | --help)
       usage
       exit 0
@@ -425,7 +406,7 @@ _feed_progress() {
 
   while [[ ! -f "$rcfile" ]]; do
     if IFS= read -r line < <(tail -c +$((offset + 1)) "$logfile" 2>/dev/null | head -n 1); then
-      offset=$((offset + ${#line} + 1))
+      offset=$((offset + $(printf '%s\n' "$line" | wc -c)))
       if [[ "$line" =~ @@PROGRESS:([0-9]+)@@ ]]; then
         printf '%s\n' "${BASH_REMATCH[1]}"
       elif [[ "$show_log" == "log" ]]; then
@@ -452,6 +433,47 @@ _feed_progress() {
   done
 
   printf '%s\n' 100
+}
+
+# Prompt for and cache the user's sudo password via yad.
+# Usage: _gui_cache_sudo_password <context_label> <prompt_text>
+#   context_label – "build" or "non-build" (used in debug messages)
+#   prompt_text   – the yad dialog prompt string
+# Returns 0 on success, 1 on cancellation or auth failure.
+# On failure, the caller's $tmpdir is cleaned up.
+_gui_cache_sudo_password() {
+  local ctx="$1" prompt="$2"
+
+  if ! sudo -n true 2>/dev/null; then
+    echo "[gui] sudo -n failed, prompting for password ($ctx)..." >&2
+    local pass
+    pass="$(yad --entry \
+      --title="Authentication required" \
+      --text="$prompt" \
+      --hide-text \
+      --button="Cancel":1 \
+      --button="OK":0 \
+      --center \
+      --width=400 \
+      2>/dev/null)" || {
+      rm -rf "$tmpdir"
+      return 1
+    }
+    printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
+      || {
+        ui_error "Authentication failed."
+        rm -rf "$tmpdir"
+        return 1
+      }
+    sudo -n true 2>/dev/null \
+      || {
+        ui_error "Authentication failed."
+        rm -rf "$tmpdir"
+        return 1
+      }
+  else
+    echo "[gui] sudo credentials cached, skipping password prompt ($ctx)" >&2
+  fi
 }
 
 run_backend_gui() {
@@ -485,36 +507,7 @@ run_backend_gui() {
       if command -v sudo >/dev/null 2>&1; then
         # Cache sudo credentials before launching — yad has no terminal
         # for sudo to read a password from.
-        if ! sudo -n true 2>/dev/null; then
-          echo "[gui] sudo -n failed, prompting for password (build)..." >&2
-          local pass
-          pass="$(yad --entry \
-            --title="Authentication required" \
-            --text="Enter your password to run the build as root:" \
-            --hide-text \
-            --button="Cancel":1 \
-            --button="OK":0 \
-            --center \
-            --width=400 \
-            2>/dev/null)" || {
-            rm -rf "$tmpdir"
-            return 1
-          }
-          printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
-            || {
-              ui_error "Authentication failed."
-              rm -rf "$tmpdir"
-              return 1
-            }
-          sudo -n true 2>/dev/null \
-            || {
-              ui_error "Authentication failed."
-              rm -rf "$tmpdir"
-              return 1
-            }
-        else
-          echo "[gui] sudo credentials cached, skipping password prompt (build)" >&2
-        fi
+        _gui_cache_sudo_password "build" "Enter your password to run the build as root:" || return 1
         launcher=(sudo
           unshare --mount --propagation private --
           bash "$BACKEND" "$@")
@@ -538,36 +531,7 @@ run_backend_gui() {
   elif [[ $EUID -ne 0 ]]; then
     # Non-build actions (flash, reboot, etc.) — no namespace isolation.
     if command -v sudo >/dev/null 2>&1; then
-      if ! sudo -n true 2>/dev/null; then
-        echo "[gui] sudo -n failed, prompting for password (non-build)..." >&2
-        local pass
-        pass="$(yad --entry \
-          --title="Authentication required" \
-          --text="Enter your password to run as root:" \
-          --hide-text \
-          --button="Cancel":1 \
-          --button="OK":0 \
-          --center \
-          --width=400 \
-          2>/dev/null)" || {
-          rm -rf "$tmpdir"
-          return 1
-        }
-        printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
-          || {
-            ui_error "Authentication failed."
-            rm -rf "$tmpdir"
-            return 1
-          }
-        sudo -n true 2>/dev/null \
-          || {
-            ui_error "Authentication failed."
-            rm -rf "$tmpdir"
-            return 1
-          }
-      else
-        echo "[gui] sudo credentials cached, skipping password prompt (non-build)" >&2
-      fi
+      _gui_cache_sudo_password "non-build" "Enter your password to run as root:" || return 1
       launcher=(sudo bash "$BACKEND" "$@")
       echo "[gui] using sudo for elevation" >&2
     elif command -v pkexec >/dev/null 2>&1; then
@@ -744,7 +708,8 @@ Full log: $logfile"
 # YAD GUI.
 # ---------------------------------------------------------------------------
 ui_select_action() {
-  yad --list \
+  local _result _rc=0
+  _result="$(yad --list \
     --title="SteamOS Custom Image" \
     --text="Choose an action:" \
     --column="Action" \
@@ -760,11 +725,15 @@ ui_select_action() {
     "Build" "Build a custom SteamOS image" \
     "Flash" "Flash a completed installer image to USB" \
     "Flashless" "Install a built image to inactive A/B slot (no USB)" \
-    "Configure" "Apply configuration to a live system" \
+    "Live OS" "Apply configuration to the running system" \
     "Validate" "Check configuration and system state" \
     "Diagnostics" "System diagnostics and reporting" \
     "Boot Selector" "Choose which A/B slot to boot into next" \
-    "Quit" "Exit"
+    "Quit" "Exit" \
+    2>/dev/null)" || _rc=$?
+
+  printf '%s' "$_result"
+  return "$_rc"
 }
 
 # Initramfs module selection dialog.
@@ -870,6 +839,33 @@ eGPU users: recommended not to select video/display drivers.</span>" \
   echo "$selected"
 }
 
+# Parse a hardware manifest file and append rows to the caller's 'rows' array.
+# Bad lines are appended to the caller's 'bad_lines' array.
+# Args: $1 = conf file path, $2 = source label (e.g. "valve" or "arch")
+_ui_parse_hw_manifest() {
+  local conf="$1"
+  local source="$2"
+  local line_num=0 line rest group pkg version default desc
+
+  while IFS= read -r line; do
+    ((++line_num))
+    [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
+      bad_lines+=("  $(basename "$conf"):$line_num: $line")
+      continue
+    fi
+    group="${line%%|*}"
+    rest="${line#*|}"
+    pkg="${rest%%|*}"
+    rest="${rest#*|}"
+    version="${rest%%|*}"
+    rest="${rest#*|}"
+    default="${rest%%|*}"
+    desc="${rest#*|}"
+    rows+=("$default" "$group" "$pkg" "$version" "$source" "$desc")
+  done <"$conf"
+}
+
 # Hardware support component selection dialog.
 # Prints space-separated item list to stdout; empty if cancelled.
 # Items: logitech-hid linux-firmware libfprint fprintd bolt
@@ -878,51 +874,12 @@ ui_select_hw_support() {
   local valve_conf="$SCRIPT_DIR/lib/configs/hw-packages-valve.conf"
   local -a rows=()
   local -a bad_lines=()
-  local line rest group pkg version default desc line_num
 
   # Read Valve manifest.
-  if [[ -f "$valve_conf" ]]; then
-    line_num=0
-    while IFS= read -r line; do
-      ((++line_num))
-      [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
-      if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
-        bad_lines+=("  $(basename "$valve_conf"):$line_num: $line")
-        continue
-      fi
-      group="${line%%|*}"
-      rest="${line#*|}"
-      pkg="${rest%%|*}"
-      rest="${rest#*|}"
-      version="${rest%%|*}"
-      rest="${rest#*|}"
-      default="${rest%%|*}"
-      desc="${rest#*|}"
-      rows+=("$default" "$group" "$pkg" "$version" "valve" "$desc")
-    done <"$valve_conf"
-  fi
+  [[ -f "$valve_conf" ]] && _ui_parse_hw_manifest "$valve_conf" "valve"
 
   # Read Arch manifest.
-  if [[ -f "$arch_conf" ]]; then
-    line_num=0
-    while IFS= read -r line; do
-      ((++line_num))
-      [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
-      if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
-        bad_lines+=("  $(basename "$arch_conf"):$line_num: $line")
-        continue
-      fi
-      group="${line%%|*}"
-      rest="${line#*|}"
-      pkg="${rest%%|*}"
-      rest="${rest#*|}"
-      version="${rest%%|*}"
-      rest="${rest#*|}"
-      default="${rest%%|*}"
-      desc="${rest#*|}"
-      rows+=("$default" "$group" "$pkg" "$version" "arch" "$desc")
-    done <"$arch_conf"
-  fi
+  [[ -f "$arch_conf" ]] && _ui_parse_hw_manifest "$arch_conf" "arch"
 
   if ((${#bad_lines[@]} > 0)); then
     ui_error "Malformed lines in hardware config:
@@ -1059,10 +1016,10 @@ ui_select_package_builds() {
   # Show dialog
   local selected
   selected="$(yad --list --checklist \
-    --title="Custom Drivers" \
-    --text="<b>Select custom drivers to build and install.</b>" \
+    --title="Custom Software and Drivers" \
+    --text="<b>Select software and drivers to build and install.</b>" \
     --column="Enable" \
-    --column="Driver" \
+    --column="Software/Driver" \
     --column="Description" \
     --separator=" " \
     --print-column=2 \
@@ -1079,11 +1036,46 @@ ui_select_package_builds() {
   echo "$selected"
 }
 
+# Common yad --field definitions and default values for the build settings form.
+# Populates _BF_FIELDS and _BF_DEFAULTS arrays for use by callers.
+_build_form_common_args() {
+  _BF_FIELDS=(
+    --field="Branch:CB"
+    --field="Rootfs size!Size in MiB, or use K/M/G suffixes"
+    --field="Default session:CB"
+    --field="Update mode:CB"
+    --field="Workspace location:CB"
+    --field="Working directory!Use automatic unless you want an explicit build directory"
+    --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK"
+    --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK"
+    --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK"
+    --field="Package & driver builds!Build and install custom drivers (Logitech HID, AoTofu VA-API, etc.):CHK"
+    --field="Add one-click installer!Adds desktop icon to install SteamOS to internal drive:CHK"
+    --button="Cancel":1
+    --button="OK":0
+  )
+  _BF_DEFAULTS=(
+    "^stable!beta!preview!rc!bc!pc!main"
+    "10240"
+    "^game!desktop"
+    "^selfheal!hold!stock"
+    "^auto!ram!disk"
+    "automatic"
+    "TRUE"
+    "FALSE"
+    "TRUE"
+    "TRUE"
+    "TRUE"
+  )
+}
+
 # Collect build configuration from the shared form + sub-dialogs.
 # Prints one arg per line to stdout.  Returns 1 if cancelled.
 ui_collect_build_args() {
   local sep=$'\x1f'
   local form
+  local -a _BF_FIELDS _BF_DEFAULTS
+  _build_form_common_args
 
   form="$(yad --form \
     --title="Build SteamOS NVIDIA Image" \
@@ -1100,31 +1092,9 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     --width=1000 \
     --height=600 \
     --field="Base image!Clean SteamOS repair image (.img or compressed):FL" \
-    --field="Branch:CB" \
-    --field="Rootfs size!Size in MiB, or use K/M/G suffixes" \
-    --field="Default session:CB" \
-    --field="Update mode:CB" \
-    --field="Workspace location:CB" \
-    --field="Working directory!Use automatic unless you want an explicit build directory" \
-    --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK" \
-    --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK" \
-    --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK" \
-    --field="Package & driver builds!Build and install custom drivers (Logitech HID, AoTofu VA-API, etc.):CHK" \
-    --field="Add one-click installer!Adds desktop icon to install SteamOS to internal drive:CHK" \
-    --button="Cancel":1 \
-    --button="OK":0 \
+    "${_BF_FIELDS[@]}" \
     "" \
-    "^stable!beta!preview!rc!bc!pc!main" \
-    "10240" \
-    "^game!desktop" \
-    "^selfheal!hold!stock" \
-    "^auto!ram!disk" \
-    "automatic" \
-    "TRUE" \
-    "FALSE" \
-    "TRUE" \
-    "TRUE" \
-    "TRUE" \
+    "${_BF_DEFAULTS[@]}" \
     2>/dev/null)" || return 1
 
   local base_image update_branch rootfs session update workspace workdir
@@ -1218,6 +1188,7 @@ EOF
   echo "HW_SUPPORT_ITEMS=\"$hw_items\"" >>"$conf_file"
   echo "GAMING_ITEMS=\"$gaming_items\"" >>"$conf_file"
   echo "CUSTOM_DRIVERS=\"$drivers\"" >>"$conf_file"
+  echo "CUSTOM_DRIVERS_SET=1" >>"$conf_file"
   echo "INITRAMFS_MODULES=\"$initramfs_mods\"" >>"$conf_file"
 
   [[ "${add_installer^^}" != "TRUE" ]] && echo "ADD_INSTALLER=0" >>"$conf_file"
@@ -1360,6 +1331,8 @@ $GUI_LAST_LOG"
 ui_generate_conf() {
   local sep=$'\x1f'
   local form
+  local -a _BF_FIELDS _BF_DEFAULTS
+  _build_form_common_args
 
   # Show settings form (without image selection)
   form="$(yad --form \
@@ -1375,30 +1348,8 @@ Configure the build options below. The image will be selected when you build." \
     --scroll \
     --width=900 \
     --height=500 \
-    --field="Branch:CB" \
-    --field="Rootfs size!Size in MiB, or use K/M/G suffixes" \
-    --field="Default session:CB" \
-    --field="Update mode:CB" \
-    --field="Workspace location:CB" \
-    --field="Working directory!Use automatic unless you want an explicit build directory" \
-    --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK" \
-    --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK" \
-    --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK" \
-    --field="Package & driver builds!Build and install custom drivers (Logitech HID, AoTofu VA-API, etc.):CHK" \
-    --field="Add one-click installer!Adds desktop icon to install SteamOS to internal drive:CHK" \
-    --button="Cancel":1 \
-    --button="OK":0 \
-    "^stable!beta!preview!rc!bc!pc!main" \
-    "10240" \
-    "^game!desktop" \
-    "^selfheal!hold!stock" \
-    "^auto!ram!disk" \
-    "automatic" \
-    "TRUE" \
-    "FALSE" \
-    "TRUE" \
-    "TRUE" \
-    "TRUE" \
+    "${_BF_FIELDS[@]}" \
+    "${_BF_DEFAULTS[@]}" \
     2>/dev/null)" || return 0
 
   local update_branch rootfs session update workspace workdir
@@ -1569,6 +1520,7 @@ Configure the build options below. The image will be selected when you build." \
   conf_content+="HW_SUPPORT_ITEMS=\"${hw_items:-}\"\n"
   conf_content+="GAMING_ITEMS=\"${gaming_items:-}\"\n"
   conf_content+="CUSTOM_DRIVERS=\"${drivers:-}\"\n"
+  conf_content+="CUSTOM_DRIVERS_SET=1\n"
   conf_content+="INITRAMFS_MODULES=\"${initramfs_mods:-}\"\n"
 
   # Show file save dialog
@@ -1919,6 +1871,93 @@ If it fails to boot, SteamOS will automatically fall back." \
   fi
 }
 
+ui_live() {
+  require_action_dependencies build || return 0
+
+  # Show action checklist
+  local selected
+  selected="$(yad --list --checklist \
+    --title="Live OS Configuration" \
+    --text="<b>Select configuration changes to apply to the running system.</b>
+
+These changes are applied directly to your current SteamOS installation.
+Requires administrator privileges." \
+    --column="Apply" \
+    --column="Action" \
+    --column="Description" \
+    --separator=" " \
+    --print-column=2 \
+    --center \
+    --width=600 \
+    --height=500 \
+    --button="Cancel":1 \
+    --button="Apply":0 \
+    TRUE resize "Expand root filesystems to fill partitions" \
+    TRUE thunderbolt "Configure Thunderbolt dock and hotplug support" \
+    TRUE desktop "Set Desktop Mode as default" \
+    TRUE gamemode "Add deck user to gamemode group" \
+    TRUE disable-autologin "Disable automatic login" \
+    TRUE scx-lavd "Enable scx_lavd scheduler (autopilot)" \
+    TRUE vm-tunables "Tune vm.swappiness for zram/disk swap" \
+    TRUE cpu-performance "Set CPU governor to performance" \
+    TRUE gpu-power-limit "Raise GPU power limit to vendor ceiling" \
+    FALSE initramfs "Configure initramfs modules" \
+    FALSE logitech-hid "Build Logitech HID++ kernel modules" \
+    TRUE keyring "Fix pacman keyring" \
+    FALSE password "Set user password" \
+    TRUE cleanup "Clean pacman cache, temp files, journal" \
+    2>/dev/null)" || return 0
+
+  # Clean selection - strip trailing separators
+  selected="$(echo "$selected" | tr -d '|' | xargs)"
+  [[ -n "$selected" ]] || return 0
+
+  # Write config file
+  local conf_file
+  conf_file="$(mktemp /tmp/steamos-live-XXXXXX.conf)"
+  cat >"$conf_file" <<EOF
+# steamos-build live configuration — generated $(date -Iseconds)
+LIVE_ACTIONS="$selected"
+EOF
+
+  # Run live pipeline
+  run_backend_gui "Applying live configuration..." --action live --config "$conf_file"
+  rm -f "$conf_file"
+}
+
+ui_validate() {
+  local result
+  result="$(yad --form \
+    --title="Validate Configuration" \
+    --text="<b>Select what to validate.</b>
+
+Config file: build configuration to validate against.
+Leave blank to validate all items as if everything were enabled.
+
+Image: SteamOS image to validate offline.
+Leave blank to validate against the live running system." \
+    --field="Config file:FL" \
+    --field="Image:FL" \
+    --file-filter="Config files (*.conf) | *.conf" \
+    --file-filter="Images (*.img) | *.img" \
+    --separator="|" \
+    --center \
+    --width=600 \
+    --button="Cancel":1 \
+    --button="Validate":0 \
+    2>/dev/null)" || return 0
+
+  local config_file image
+  config_file="$(echo "$result" | cut -d'|' -f1)"
+  image="$(echo "$result" | cut -d'|' -f2)"
+
+  local -a args=(--action validate)
+  [[ -z "$config_file" ]] || args+=(--config "$config_file")
+  [[ -z "$image" ]] || args+=(--image "$image")
+
+  run_backend_gui "Validating configuration..." "${args[@]}"
+}
+
 ui_diagnostics() {
   while true; do
     local choice rc
@@ -2033,8 +2072,257 @@ ui_diagnostics() {
   done
 }
 
+# Check if the persisted project in /home/.steamos-build/ differs from the
+# current run directory.  If so, offer to sync so repatch/live use latest code.
+_check_persisted_sync() {
+  local persisted="/home/.steamos-build/build_cache"
+  local current="$SCRIPT_DIR"
+
+  # If persisted copy doesn't exist, create it silently.
+  # This ensures repatch/live paths always have code to work with.
+  if [[ ! -d "$persisted/lib" ]]; then
+    mkdir -p "$persisted" 2>/dev/null || true
+    if ! touch "$persisted/.write-test" 2>/dev/null; then
+      return 0
+    fi
+    rm -f "$persisted/.write-test" 2>/dev/null
+    # Remove existing files first (may be owned by root from a previous build)
+    rm -f "$persisted/lib" 2>/dev/null || true
+    cp -a "$current/lib/." "$persisted/lib/" 2>/dev/null || true
+    if [[ -f "$current/steamos-build.sh" ]]; then
+      rm -f "$persisted/steamos-build.sh" 2>/dev/null || true
+      cp -f "$current/steamos-build.sh" "$persisted/"
+    fi
+    if [[ -f "$current/LICENSE" ]]; then
+      rm -f "$persisted/LICENSE" 2>/dev/null || true
+      cp -f "$current/LICENSE" "$persisted/"
+    fi
+    if [[ -f "$current/README.md" ]]; then
+      rm -f "$persisted/README.md" 2>/dev/null || true
+      cp -f "$current/README.md" "$persisted/"
+    fi
+    if [[ -f "$current/.version" ]]; then
+      cp -f "$current/.version" "$persisted/.version"
+    else
+      echo "initial-$(date +%Y%m%d-%H%M%S)" >"$persisted/.version"
+    fi
+    find "$persisted" -name '*.sh' -type f -exec chmod +x {} +
+    return 0
+  fi
+
+  # Only check if current also exists
+  if [[ ! -d "$current/lib" ]]; then
+    return 0
+  fi
+
+  # Compare version stamps
+  local persisted_ver="" current_ver=""
+  [[ -f "$persisted/.version" ]] && persisted_ver="$(cat "$persisted/.version")"
+  [[ -f "$current/.version" ]] && current_ver="$(cat "$current/.version")"
+
+  # If versions match, skip
+  if [[ -n "$persisted_ver" && -n "$current_ver" && "$persisted_ver" == "$current_ver" ]]; then
+    return 0
+  fi
+
+  # Count differing files between the synced subset (lib/, top-level files)
+  local diff_count=0
+  local diff_detail=""
+  if command -v diff >/dev/null 2>&1; then
+    # Only compare files that the sync actually touches
+    diff_detail="$(diff -rq \
+      "$current/lib" "$persisted/lib" 2>/dev/null | head -30)" || true
+    # Also check top-level files (exclude .version — it's a sync artifact)
+    for _f in steamos-build.sh LICENSE README.md; do
+      if [[ -f "$current/$_f" && -f "$persisted/$_f" ]]; then
+        if ! diff -q "$current/$_f" "$persisted/$_f" >/dev/null 2>&1; then
+          diff_detail+=$'\n'"Files $current/$_f and $persisted/$_f differ"
+        fi
+      elif [[ -f "$current/$_f" && ! -f "$persisted/$_f" ]]; then
+        diff_detail+=$'\n'"Only in $current: $_f"
+      elif [[ ! -f "$current/$_f" && -f "$persisted/$_f" ]]; then
+        diff_detail+=$'\n'"Only in $persisted: $_f"
+      fi
+    done
+    diff_count="$(echo "$diff_detail" | grep -c '^' || true)"
+    [[ -z "$diff_detail" ]] && diff_count=0
+  fi
+
+  # If mtime difference is less than 60 seconds and no diffs, skip
+  local persisted_mtime="" current_mtime=""
+  [[ -f "$persisted/lib/common.sh" ]] && persisted_mtime="$(stat -c '%Y' "$persisted/lib/common.sh" 2>/dev/null)"
+  [[ -f "$current/lib/common.sh" ]] && current_mtime="$(stat -c '%Y' "$current/lib/common.sh" 2>/dev/null)"
+  if [[ -n "$persisted_mtime" && -n "$current_mtime" && "$diff_count" -eq 0 ]]; then
+    local diff=$((current_mtime - persisted_mtime))
+    [[ "$diff" -lt 0 ]] && diff=$((-diff))
+    [[ "$diff" -lt 60 ]] && return 0
+  fi
+
+  # Files differ — build the dialog text
+  local persisted_label="$persisted_ver"
+  [[ -z "$persisted_label" ]] && persisted_label="<no version stamp>"
+  local current_label="$current_ver"
+  [[ -z "$current_label" ]] && current_label="<no version stamp>"
+
+  # Build diff summary — count direction per file
+  local diff_lines=""
+  if [[ "$diff_count" -gt 0 ]]; then
+    local count_newer=0 count_older=0 count_same=0 count_missing=0 count_extra=0
+    while IFS="" read -r line; do
+      [[ -n "$line" ]] || continue
+
+      # "Only in /path: file" — file exists in one tree but not the other
+      if [[ "$line" == "Only in "* ]]; then
+        local only_dir="${line#Only in }"
+        only_dir="${only_dir%%:*}"
+        if [[ "$only_dir" == "$current"* ]]; then
+          ((count_missing++)) || true  # exists in current, missing from cache
+        else
+          ((count_extra++)) || true    # exists in cache, not in current
+        fi
+        continue
+      fi
+
+      # "Files /path/a and /path/b differ" — both exist, compare mtimes
+      local relpath="${line#*"$current/lib/"}"
+      relpath="${relpath%% *}"
+      local cur_mtime="" per_mtime=""
+      [[ -f "$current/lib/$relpath" ]] && cur_mtime="$(stat -c '%Y' "$current/lib/$relpath" 2>/dev/null)"
+      [[ -f "$persisted/lib/$relpath" ]] && per_mtime="$(stat -c '%Y' "$persisted/lib/$relpath" 2>/dev/null)"
+      if [[ -n "$cur_mtime" && -n "$per_mtime" ]]; then
+        if (( cur_mtime > per_mtime )); then
+          ((count_newer++)) || true
+        elif (( cur_mtime < per_mtime )); then
+          ((count_older++)) || true
+        else
+          ((count_same++)) || true
+        fi
+      fi
+    done <<<"$diff_detail"
+
+    diff_lines="$diff_count file(s) differ:"
+    if (( count_newer > 0 )); then
+      diff_lines+=$'\n'"  $count_newer cache file(s) are out of date"
+    fi
+    if (( count_older > 0 )); then
+      diff_lines+=$'\n'"  $count_older local file(s) are older than cache"
+    fi
+    if (( count_same > 0 )); then
+      diff_lines+=$'\n'"  $count_same file(s) differ in contents only"
+    fi
+    if (( count_missing > 0 )); then
+      diff_lines+=$'\n'"  $count_missing file(s) missing from cache"
+    fi
+    if (( count_extra > 0 )); then
+      diff_lines+=$'\n'"  $count_extra file(s) only in cache"
+    fi
+  else
+    diff_lines="Version stamps differ (file-level diff unavailable)"
+  fi
+
+  # Build full dialog text
+  local dialog_text
+  printf -v dialog_text '%s\n\n%s\n%s\n\n%s\n%s\n\n%s\n%s' \
+    "PERSISTED PROJECT IS OUT OF DATE." \
+    "The on-device copy at $persisted ($persisted_label)" \
+    "differs from the current run directory ($current_label)." \
+    "Why this matters: Repatch (self-heal after OS updates) and live" \
+    "configuration use the persisted copy. If it's stale, those paths will run old code." \
+    "What changed:" \
+    "$diff_lines"
+
+  # Write dialog text to temp file — YAD --text doesn't handle embedded
+  # newlines in a variable reliably, but --text-info --filename does.
+  local _sync_tmp
+  _sync_tmp="$(mktemp /tmp/steamos-build-sync-XXXXXX.txt)"
+  printf '%s' "$dialog_text" >"$_sync_tmp"
+
+  local sync_choice _sync_rc=0
+  sync_choice="$(yad --text-info \
+    --title="Project Sync" \
+    --filename="$_sync_tmp" \
+    --button="Skip":1 \
+    --button="Sync":0 \
+    --center \
+    --width=700 \
+    --height=400 \
+    --wrap \
+    2>/dev/null)" || _sync_rc=$?
+  rm -f "$_sync_tmp"
+  if [[ $_sync_rc -ne 0 ]]; then
+    return 0
+  fi
+
+  # User chose Sync
+  # Ensure directory exists and files are writable (may be owned by root from a build)
+  mkdir -p "$persisted" 2>/dev/null || true
+
+  local _test_file="$persisted/.sync-write-test"
+  if ! touch "$_test_file" 2>/dev/null || ! echo "test" >"$_test_file" 2>/dev/null; then
+    sudo chown -R "$(id -u):$(id -g)" "$persisted" 2>/dev/null || true
+    if ! touch "$_test_file" 2>/dev/null || ! echo "test" >"$_test_file" 2>/dev/null; then
+      rm -f "$_test_file" 2>/dev/null
+      return 0
+    fi
+  fi
+  rm -f "$_test_file" 2>/dev/null
+
+  # lib/ — full sync with delete (removes stale files from cache)
+  local _sync_rc=0
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$current/lib/" "$persisted/lib/" 2>&1 || _sync_rc=$?
+  else
+    rm -rf "$persisted/lib" 2>&1 || true
+    cp -a "$current/lib" "$persisted/lib" 2>&1 || _sync_rc=$?
+  fi
+
+  # Clean stale top-level files/dirs from cache that don't exist in current project
+  local _entry
+  for _entry in "$persisted"/*; do
+    [[ -e "$_entry" ]] || continue
+    local _name
+    _name="$(basename "$_entry")"
+    # Skip hidden files (.version, .editorconfig, etc.) — they're managed separately
+    [[ "$_name" == .* ]] && continue
+    # If this entry doesn't exist in current, remove it from cache
+    if [[ ! -e "$current/$_name" ]]; then
+      rm -rf "$_entry" 2>&1 || true
+    fi
+  done
+
+  # Top-level files — only steamos-build.sh, LICENSE, and README
+  # Remove existing files first (may be owned by root from a previous build)
+  if [[ -f "$current/steamos-build.sh" ]]; then
+    rm -f "$persisted/steamos-build.sh" 2>/dev/null || true
+    cp -f "$current/steamos-build.sh" "$persisted/" 2>&1 || true
+  fi
+  if [[ -f "$current/LICENSE" ]]; then
+    rm -f "$persisted/LICENSE" 2>/dev/null || true
+    cp -f "$current/LICENSE" "$persisted/" 2>&1 || true
+  fi
+  if [[ -f "$current/README.md" ]]; then
+    rm -f "$persisted/README.md" 2>/dev/null || true
+    cp -f "$current/README.md" "$persisted/" 2>&1 || true
+  fi
+
+  # Update version stamp — remove existing file first (may be owned by root)
+  rm -f "$persisted/.version" 2>/dev/null || true
+  if [[ -f "$current/.version" ]]; then
+    cp -f "$current/.version" "$persisted/.version" 2>&1 || true
+  else
+    echo "manual-sync-$(date +%Y%m%d-%H%M%S)" >"$persisted/.version" 2>&1 || true
+  fi
+
+  # Ensure scripts are executable
+  find "$persisted" -name '*.sh' -type f -exec chmod +x {} + 2>&1 || true
+}
+
 ui_main() {
   ui_require_yad
+
+  # Check if persisted project in /home differs from the run directory.
+  # If so, offer to sync so repatch/live paths use the latest code.
+  _check_persisted_sync
 
   while true; do
     local choice rc
@@ -2042,8 +2330,6 @@ ui_main() {
     choice="$(ui_select_action)"
     rc=$?
     set -e
-
-    echo "[ui_main] selector rc=$rc choice='$choice'" >&2
 
     # yad exit codes: 0=OK, 1=Cancel, 70=window close, etc.
     [[ $rc -eq 0 ]] || exit 0
@@ -2067,15 +2353,14 @@ ui_main() {
       Flashless)
         ui_flashless
         ;;
+      "Live OS")
+        ui_live
+        ;;
       Diagnostics)
         ui_diagnostics
         ;;
-      Configure)
-        require_action_dependencies configure || continue
-        bash "$BACKEND" --action configure || ui_error "Post-install configuration failed."
-        ;;
       Validate)
-        run_backend_gui "Validating configuration..." --action validate
+        ui_validate
         ;;
       "Boot Selector")
         yad --question \
@@ -2143,8 +2428,12 @@ case "$ACTION" in
     fi
     exec bash "$BACKEND" "${BACKEND_ARGS[@]}"
     ;;
-  configure)
-    exec bash "$BACKEND" --action configure
+  live)
+    [[ -n "$CONFIG_FILE" ]] || {
+      echo "Live action requires --config FILE." >&2
+      exit 2
+    }
+    run_backend_cli
     ;;
   reboot)
     if [[ $EUID -ne 0 ]]; then

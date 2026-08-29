@@ -35,6 +35,14 @@ def normalize(lines):
     return out
 
 
+if not ORIG.exists():
+    sys.exit("verification requires steamos-nvidia-installer.sh.orig "
+             "(the pristine pre-refactor copy) next to this script")
+
+for f in NEW:
+    if not f.exists():
+        sys.exit(f"missing required file: {f}")
+
 orig_lines = normalize(ORIG.read_text(encoding="utf-8").splitlines(True))
 new_lines = []
 for f in NEW:
@@ -45,10 +53,6 @@ new_counter = collections.Counter(new_lines)
 
 missing = orig_counter - new_counter
 added = new_counter - orig_counter
-
-if not ORIG.exists():
-    sys.exit("verification requires steamos-nvidia-installer.sh.orig "
-             "(the pristine pre-refactor copy) next to this script")
 
 if missing:
     n = sum(missing.values())

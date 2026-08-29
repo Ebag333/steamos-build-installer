@@ -6,6 +6,9 @@
 #
 # These are simple "stamp a preference into a config file" operations.
 # Sourced by the build backend and repatch — do not run directly.
+#
+# Note: disable-autologin is handled by lib/optimizations/system.sh,
+# not here.  This file only handles Session= in sddm.conf.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "lib/system-config.sh is a library — source it from the wrapper, not run directly." >&2
@@ -173,30 +176,39 @@ _verify_variant() {
 _verify_update_branch() {
   local root="${1:?_verify_update_branch: missing root}"
   local expected="${2:?_verify_update_branch: missing expected value}"
+  local verify_failed=0
 
   # manifest.json (both lib paths)
   local manifest_path
   for manifest_path in /usr/lib/steamos-atomupd/manifest.json /usr/lib64/steamos-atomupd/manifest.json; do
     local manifest="$root$manifest_path"
-    if [[ ! -f "$manifest" ]] || ! grep -q "\"default_update_branch\"[[:space:]]*:[[:space:]]*\"$expected\"" "$manifest"; then
-      return 1
+    if [[ -f "$manifest" ]]; then
+      if ! grep -q "\"default_update_branch\"[[:space:]]*:[[:space:]]*\"$expected\"" "$manifest"; then
+        warn "  VERIFY FAILED: $manifest_path default_update_branch != $expected"
+        verify_failed=1
+      else
+        log "  OK $manifest_path default_update_branch=$expected"
+      fi
     fi
   done
 
   # os-release
   local os_release="$root/etc/os-release"
   if [[ ! -f "$os_release" ]] || ! grep -q "^STEAMOS_DEFAULT_UPDATE_BRANCH=$expected$" "$os_release"; then
-    return 1
+    warn "  VERIFY FAILED: os-release STEAMOS_DEFAULT_UPDATE_BRANCH != $expected"
+    verify_failed=1
+  else
+    log "  OK os-release STEAMOS_DEFAULT_UPDATE_BRANCH=$expected"
   fi
 
-  return 0
+  return $verify_failed
 }
 
 # ---------------------------------------------------------------------------
 # default-session
 # ---------------------------------------------------------------------------
 # Configure the default desktop session.
-# Writes state.toml and patches sddm.conf.
+# Patches Session= in sddm.conf.
 #
 # Args: $1 = root path, $2 = session (desktop, game)
 
@@ -212,31 +224,32 @@ _apply_default_session() {
     *)       sddm_session="plasma.desktop" ;;
   esac
 
-  # Determine Relogin value from disable-autologin setting
-  local relogin="true"
-  if [[ " ${GAMING_ITEMS:-} " == *" disable-autologin "* ]]; then
-    relogin="false"
-  fi
+  # Live mode: configure steamosctl and state.toml
+  if is_live; then
+    if command -v steamosctl >/dev/null 2>&1; then
+      steamosctl set-default-login-mode desktop 2>/dev/null \
+        || warn "steamosctl set-default-login-mode failed (non-fatal)"
+      steamosctl set-default-desktop-session "$sddm_session" 2>/dev/null \
+        || warn "steamosctl set-default-desktop-session failed (non-fatal)"
+    else
+      # Fallback: write config directly
+      log "steamosctl not available, writing config directly"
+      local config_dir="/home/deck/.config/steamos-manager"
+      install -d -m755 "$config_dir" || return 1
+      cat >"$config_dir/state.toml" <<EOF
+version = 1
 
-  # Set desktop session defaults via steamosctl (safe, no session switch)
-  if _run_in_root_cfg "$root" 'command -v steamosctl >/dev/null 2>&1'; then
-    _run_in_root_cfg "$root" "steamosctl set-default-login-mode desktop" 2>/dev/null \
-      || warn "steamosctl set-default-login-mode failed (non-fatal)"
-    _run_in_root_cfg "$root" "steamosctl set-default-desktop-session $sddm_session" 2>/dev/null \
-      || warn "steamosctl set-default-desktop-session failed (non-fatal)"
-  fi
+[services]
 
-  # Fallback: write state.toml directly
-  local state_toml="$root/home/deck/.config/steamos-manager/state.toml"
-  mkdir -p "$(dirname "$state_toml")"
-  cat >"$state_toml" <<TOML
-[general]
-default_login_mode = "desktop"
+[session_manager]
+default_login_mode = "Desktop"
 default_desktop_session = "$sddm_session"
-TOML
-  chown -R 1000:1000 "$(dirname "$state_toml")" 2>/dev/null || true
+EOF
+      chown 1000:1000 "$config_dir/state.toml"
+    fi
+  fi
 
-  # sddm.conf — set Session= and Relogin= based on config
+  # sddm.conf — set Session= based on config
   local sddm_conf="$root/etc/sddm.conf.d/steamos.conf"
   if [[ -f "$sddm_conf" ]]; then
     # Update Session= line
@@ -244,39 +257,23 @@ TOML
       log "  Setting sddm session to $sddm_session"
       sed -i "s/^Session=.*/Session=$sddm_session/" "$sddm_conf"
     fi
-    # Update Relogin= line
-    if grep -q '^Relogin=' "$sddm_conf"; then
-      log "  Setting sddm Relogin=$relogin"
-      sed -i "s/^Relogin=.*/Relogin=$relogin/" "$sddm_conf"
-    fi
   fi
 
-  log "  Default session configured: $session ($sddm_session, Relogin=$relogin)"
+  log "  Default session configured: $session ($sddm_session)"
 }
 
 _verify_default_session() {
   local root="${1:?_verify_default_session: missing root}"
   local expected="${2:?_verify_default_session: missing expected value}"
 
-  local state_toml="$root/home/deck/.config/steamos-manager/state.toml"
-  if [[ ! -f "$state_toml" ]]; then
+  local sddm_conf="$root/etc/sddm.conf.d/steamos.conf"
+  if [[ ! -f "$sddm_conf" ]]; then
     return 1
   fi
 
-  grep -q "default_login_mode.*=.*\"$expected\"" "$state_toml"
-}
-
-# ---------------------------------------------------------------------------
-# Context Helper
-# ---------------------------------------------------------------------------
-# Run a command in the target root (chroot or live).
-
-_run_in_root_cfg() {
-  local root="$1"
-  shift
-  if [[ "$root" == "/" ]]; then
-    /bin/bash -c "$*"
-  else
-    chroot "$root" /bin/bash -c "$*"
-  fi
+  case "$expected" in
+    game)    grep -q '^Session=gamescope' "$sddm_conf" ;;
+    desktop) grep -q '^Session=plasma' "$sddm_conf" ;;
+    *)       return 1 ;;
+  esac
 }

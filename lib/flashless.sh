@@ -221,9 +221,11 @@ EOF
     die "Source rootfs-A variant does not match TARGET_VARIANT=${TARGET_VARIANT:-steamdeck}"
   fi
 
-  # Check NVIDIA payload is present (repatch.sh is installed by update-strategy).
-  if [[ ! -f "$verify_mnt/usr/lib/steamos-build/repatch.sh" ]]; then
-    die "Source rootfs-A is not an NVIDIA-patched build (repatch.sh missing)"
+  # Check NVIDIA payload is present — verify the self-heal wrapper is installed.
+  # The atomupd wrapper is installed into /usr/bin/ by update-strategy.sh and
+  # is always present in an NVIDIA-patched build.
+  if [[ ! -f "$verify_mnt/usr/bin/steamos-atomupd-client" ]]; then
+    die "Source rootfs-A is not an NVIDIA-patched build (atomupd wrapper missing)"
   fi
 
   # Capture the source image's update branch so flashless_restore_etc can
@@ -277,8 +279,10 @@ flashless_format_target() {
 
 flashless_write_rootfs() {
   local src_bytes tgt_bytes
-  src_bytes="$(blockdev --getsize64 "$FL_IMG_ROOTFS" 2>/dev/null)"
-  tgt_bytes="$(blockdev --getsize64 "$FL_TARGET_ROOTFS" 2>/dev/null)"
+  src_bytes="$(blockdev --getsize64 "$FL_IMG_ROOTFS" 2>/dev/null)" \
+    || die "Could not determine source rootfs size for write"
+  tgt_bytes="$(blockdev --getsize64 "$FL_TARGET_ROOTFS" 2>/dev/null)" \
+    || die "Could not determine target rootfs size for write"
 
   # Pre-compute source hash for post-dd verification.
   log "Computing source rootfs SHA256 ($src_bytes bytes)"

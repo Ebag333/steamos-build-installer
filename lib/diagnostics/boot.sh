@@ -103,7 +103,7 @@ diagnose_boot_layout() {
 
 # Diagnose SteamOS boot state for A/B slots.
 diagnose_boot_state() {
-  local slot out rc
+  local slot out rc line
 
   log "SteamOS boot state:"
 

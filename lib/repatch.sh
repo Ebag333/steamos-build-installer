@@ -20,13 +20,12 @@ ln -sfn "$(basename "$RUN_LOG")" \
 # everything on the persistent /home filesystem.
 exec > >(tee -a "$RUN_LOG") 2>&1
 
-# Resolve script directory: prefer /home (writable, latest), fall back to /usr
-if [[ -d "/home/.steamos-build/lib" ]]; then
-  SCRIPT_DIR="/home/.steamos-build/lib"
-elif [[ -d "/usr/lib/steamos-build" ]]; then
-  SCRIPT_DIR="/usr/lib/steamos-build"
+# Resolve script directory from /home (writable, latest)
+if [[ -d "/home/.steamos-build/build_cache/lib" ]]; then
+  SCRIPT_DIR="/home/.steamos-build/build_cache/lib"
 else
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  echo "[repatch] ERROR: build cache not found at /home/.steamos-build/build_cache/lib" >&2
+  exit 1
 fi
 
 # Use the shared common.sh logging/failure framework with repatch-specific
@@ -173,14 +172,6 @@ ensure_steamos_build_dirs
   || die "missing library loader: $SCRIPT_DIR/library-loader.sh"
 source "$SCRIPT_DIR/library-loader.sh"
 
-[[ -r "$SCRIPT_DIR/pipeline.sh" ]] \
-  || die "missing pipeline: $SCRIPT_DIR/pipeline.sh"
-source "$SCRIPT_DIR/pipeline.sh"
-
-[[ -r "$SCRIPT_DIR/workflow-common.sh" ]] \
-  || die "missing workflow common: $SCRIPT_DIR/workflow-common.sh"
-source "$SCRIPT_DIR/workflow-common.sh"
-
 # Source pipeline definition
 [[ -r "$SCRIPT_DIR/pipelines/pipeline_rebuild.sh" ]] \
   || die "missing rebuild pipeline: $SCRIPT_DIR/pipelines/pipeline_rebuild.sh"
@@ -209,6 +200,25 @@ patch_record() {
 REPATCH_EXIT=0
 
 PARTSET="${1:-other}"
+
+# ── Safety guard: refuse to modify the booted slot ─────────────────────────
+_booted="$(steamos-bootconf this-image 2>/dev/null || true)"
+_target_slot=""
+case "$PARTSET" in
+  other)
+    case "$_booted" in
+      A) _target_slot=B ;;
+      B) _target_slot=A ;;
+    esac
+    ;;
+  A|B) _target_slot="$PARTSET" ;;
+esac
+
+if [[ -n "$_booted" && -n "$_target_slot" && "$_target_slot" == "$_booted" ]]; then
+  die "Refusing to modify the currently booted slot ($_booted). Use 'other' or specify the inactive slot."
+fi
+
+log "Repatch target: partset=$PARTSET booted=${_booted:-unknown} target=${_target_slot:-unknown}"
 
 ROOTDEV="/dev/disk/by-partsets/$PARTSET/rootfs"
 EFIDEV="/dev/disk/by-partsets/$PARTSET/efi"
@@ -241,7 +251,7 @@ if run_pipeline; then
   done
 
   if ((_fail_count == 0)); then
-    step "OK — $PARTSET is NVIDIA-ready ($KVER)"
+    step "OK — $PARTSET is NVIDIA-ready (${KVER:-unknown})"
     exit 0
   fi
 

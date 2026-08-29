@@ -59,12 +59,26 @@ get_initramfs_group_modules() {
   echo "${_INITRAMFS_GROUP_MODULES[$group]:-}"
 }
 
+# Collect modules from the given groups and return deduplicated.
+# Args: $@ = group names
+# Output: space-separated deduplicated module list
+_collect_and_dedup_modules() {
+  local -a groups=("$@")
+  local all_modules=""
+
+  for group in "${groups[@]}"; do
+    local mods="${_INITRAMFS_GROUP_MODULES[$group]:-}"
+    [[ -n "$mods" ]] && all_modules+=" $mods"
+  done
+
+  echo "$all_modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ' | sed 's/ $//'
+}
+
 # Get all modules from all groups (deduplicated).
 # Args: $@ = groups to include (empty = all TRUE groups)
 # Output: space-separated module list
 get_all_initramfs_modules() {
   local -a groups=("$@")
-  local all_modules=""
 
   if [[ ${#groups[@]} -eq 0 ]]; then
     for group in "${!_INITRAMFS_GROUP_MODULES[@]}"; do
@@ -73,12 +87,7 @@ get_all_initramfs_modules() {
     done
   fi
 
-  for group in "${groups[@]}"; do
-    local mods="${_INITRAMFS_GROUP_MODULES[$group]:-}"
-    [[ -n "$mods" ]] && all_modules+=" $mods"
-  done
-
-  echo "$all_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ' | sed 's/ $//'
+  _collect_and_dedup_modules "${groups[@]}"
 }
 
 # Get all modules from all groups regardless of default (deduplicated).
@@ -86,7 +95,6 @@ get_all_initramfs_modules() {
 # Output: space-separated module list
 get_all_initramfs_modules_force() {
   local -a groups=("$@")
-  local all_modules=""
 
   if [[ ${#groups[@]} -eq 0 ]]; then
     for group in "${!_INITRAMFS_GROUP_MODULES[@]}"; do
@@ -94,12 +102,7 @@ get_all_initramfs_modules_force() {
     done
   fi
 
-  for group in "${groups[@]}"; do
-    local mods="${_INITRAMFS_GROUP_MODULES[$group]:-}"
-    [[ -n "$mods" ]] && all_modules+=" $mods"
-  done
-
-  echo "$all_modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ' | sed 's/ $//'
+  _collect_and_dedup_modules "${groups[@]}"
 }
 
 # Get modules from a space-separated list of group names.
@@ -271,7 +274,7 @@ _write_mkinitcpio_config() {
   if [[ -f "$root/etc/mkinitcpio.conf" ]]; then
     existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$root/etc/mkinitcpio.conf")
     log "  Existing modules: ${existing_modules:-<none>}"
-    merged_modules=$(echo "$existing_modules $modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')
+    merged_modules=$(echo "$existing_modules $modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ')
   else
     merged_modules="$modules"
   fi
@@ -334,7 +337,7 @@ apply_initramfs() {
     local auto_modules
     auto_modules="$(discover_auto_modules "$root" "$kver")"
     modules="$(get_all_initramfs_modules) $auto_modules"
-    modules="$(echo "$modules" | tr ' ' '\n' | sort -u | grep -v '^$' | tr '\n' ' ')"
+    modules="$(echo "$modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ')"
   fi
 
   _configure_initramfs_modules "$root" "$kver" "$modules"

@@ -203,7 +203,7 @@ setup_copy_image() {
     *.bz2) bzip2 -dkc "$IMG" >"$OUT" & ;;
     *.gz) gzip -dkc "$IMG" >"$OUT" & ;;
     *.xz) xz -dkc "$IMG" >"$OUT" & ;;
-    *.zst) zstd -dkc "$IMG" -o "$OUT" & ;;
+    *.zst) zstd -dkc "$IMG" >"$OUT" & ;;
     *) cp --reflink=auto "$IMG" "$OUT" & ;;
   esac
   local decomp_pid=$!

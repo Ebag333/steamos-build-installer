@@ -325,6 +325,25 @@ _build_overlay_sync_root() {
   return 0
 }
 
+# Rename extracted source directory to match NAME from recipe.conf when
+# SOURCE_DIR differs.  This keeps the build tree consistent regardless
+# of how the upstream archive was laid out.
+# Args: $1 = extract_dir, $2 = source_dir, $3 = recipe_conf path
+_build_overlay_rename_source_dir() {
+  local extract_dir="${1:?}"
+  local source_dir="${2:?}"
+  local recipe_conf="${3:?}"
+
+  local recipe_name=""
+  recipe_name="$(sed -n 's/^NAME=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
+  if [[ -n "$source_dir" && -n "$recipe_name" && "$source_dir" != "$recipe_name" ]]; then
+    if [[ -d "$extract_dir/$source_dir" ]]; then
+      log "  Renaming source directory: $source_dir -> $recipe_name"
+      mv "$extract_dir/$source_dir" "$extract_dir/$recipe_name"
+    fi
+  fi
+}
+
 # Inject recipe sources into build root.
 # Args: $1 = build root directory, $2 = recipe directory
 _build_overlay_inject_sources() {
@@ -376,15 +395,7 @@ _build_overlay_inject_sources() {
         # Source already bundled in recipe
         mkdir -p "$extract_dir"
         cp -a "$recipe_dir/sources/$source_dir" "$extract_dir/"
-        # Rename extracted directory to match NAME if SOURCE_DIR differs
-        local recipe_name=""
-        recipe_name="$(sed -n 's/^NAME=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
-        if [[ -n "$source_dir" && -n "$recipe_name" && "$source_dir" != "$recipe_name" ]]; then
-          if [[ -d "$extract_dir/$source_dir" ]]; then
-            log "  Renaming source directory: $source_dir -> $recipe_name"
-            mv "$extract_dir/$source_dir" "$extract_dir/$recipe_name"
-          fi
-        fi
+        _build_overlay_rename_source_dir "$extract_dir" "$source_dir" "$recipe_conf"
       elif [[ "$source_type" == "tarball" ]]; then
         # Download and extract tarball
         local tarball="/tmp/source-$$-$(basename "$source_url")"
@@ -415,15 +426,7 @@ _build_overlay_inject_sources() {
             return 1
           }
           rm -f "$tarball"
-          # Rename extracted directory to match NAME if SOURCE_DIR differs
-          local recipe_name=""
-          recipe_name="$(sed -n 's/^NAME=//p' "$recipe_conf" 2>/dev/null | tr -d '"' | head -1)"
-          if [[ -n "$source_dir" && -n "$recipe_name" && "$source_dir" != "$recipe_name" ]]; then
-            if [[ -d "$extract_dir/$source_dir" ]]; then
-              log "  Renaming source directory: $source_dir -> $recipe_name"
-              mv "$extract_dir/$source_dir" "$extract_dir/$recipe_name"
-            fi
-          fi
+          _build_overlay_rename_source_dir "$extract_dir" "$source_dir" "$recipe_conf"
           # Make source writable by nobody (makepkg runs as nobody)
           chown -R nobody:nobody "$extract_dir" 2>/dev/null || true
         else
@@ -436,10 +439,11 @@ _build_overlay_inject_sources() {
         src_name="$(basename "$source_url" .git)"
         mkdir -p "$extract_dir"
         chmod 777 "$extract_dir"
-        git clone --branch "$source_ref" "$source_url" "$extract_dir/$src_name" 2>&1 | tail -3 || {
+        git clone --branch "$source_ref" "$source_url" "$extract_dir/$src_name" 2>&1 | tail -3
+        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
           warn "Failed to clone $source_url"
           return 1
-        }
+        fi
         # Make source writable by nobody (makepkg runs as nobody)
         chown -R nobody:nobody "$extract_dir" 2>/dev/null || true
       else
@@ -570,8 +574,9 @@ _build_overlay_diagnostics() {
         fi
         # Check that pkg-config can actually resolve it (including transitive deps)
         local pc_cflags=""
-        pc_cflags="$(chroot "$root" pkg-config --cflags "$pc_name" 2>/dev/null)" || pc_cflags=""
-        if [[ -n "$pc_cflags" || $? -eq 0 ]]; then
+        local pc_rc=0
+        pc_cflags="$(chroot "$root" pkg-config --cflags "$pc_name" 2>/dev/null)" || pc_rc=$?
+        if [[ -n "$pc_cflags" || $pc_rc -eq 0 ]]; then
           local pc_ver
           pc_ver="$(chroot "$root" pkg-config --modversion "$pc_name" 2>/dev/null || echo 'unknown')"
           printf '[OK]      %-40s %s\n' "$file" "$pc_ver"

@@ -1043,6 +1043,7 @@ prepare_image_rootfs_size() {
   # stale kernel partition mappings).  FS properties come from the Btrfs
   # superblock via blkid.
 
+  local final_disk_guid
   final_disk_guid="$(
     sgdisk -p "$LOOPDEV" 2>/dev/null \
       | sed -n 's/^Disk identifier (GUID):[[:space:]]*//p'

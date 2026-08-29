@@ -122,6 +122,57 @@ _hw_pkg_target() {
   fi
 }
 
+# Read a hardware manifest and populate the caller's arrays with selected
+# packages.  Callers must provide: _hw_read_manifest <conf> _arr_prefix
+# After the call the following arrays are set in the caller's scope:
+#   ${prefix}_pkgs, ${prefix}_targets, ${prefix}_descs
+# Returns 1 if no packages were selected.
+_hw_read_manifest() {
+  local conf="${1:?_hw_read_manifest: missing conf path}"
+  local prefix="${2:?_hw_read_manifest: missing array prefix}"
+  local line rc pkg version desc target
+  local -a _pkgs=() _targets=() _descs=()
+
+  while IFS="" read -r line; do
+    rc=0
+    _parse_hw_manifest_line "$line" || rc=$?
+    case "$rc" in
+      0) ;;
+      1) continue ;;
+      *)
+        warn "  Skipping malformed line in $(basename "$conf"): $line"
+        continue
+        ;;
+    esac
+
+    pkg="$HW_LINE_PKG"
+    version="$HW_LINE_VERSION"
+    desc="$HW_LINE_DESC"
+
+    if ! _hw_pkg_selected "$pkg"; then
+      log "  Skipping $pkg (not selected)"
+      continue
+    fi
+
+    target="$(_hw_pkg_target "$pkg" "$version")"
+    _pkgs+=("$pkg")
+    _targets+=("$target")
+    _descs+=("$desc")
+  done <"$conf"
+
+  if ((${#_pkgs[@]} > 0)); then
+    eval "${prefix}_pkgs=(\"\${_pkgs[@]}\")"
+    eval "${prefix}_targets=(\"\${_targets[@]}\")"
+    eval "${prefix}_descs=(\"\${_descs[@]}\")"
+  else
+    eval "${prefix}_pkgs=()"
+    eval "${prefix}_targets=()"
+    eval "${prefix}_descs=()"
+  fi
+
+  ((${#_pkgs[@]} > 0))
+}
+
 # Quote a list of pacman targets for the shell executed by in_chroot().
 _hw_quote_targets() {
   local item
@@ -178,17 +229,7 @@ _setup_arch_hw_pacman_conf() {
     { print }
   ' "$conf_path" >"$tmp_conf"
 
-  cat >>"$tmp_conf" <<'EOF'
-
-[core]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-
-[extra]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-
-[multilib]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-EOF
+  append_arch_repos "$tmp_conf"
 
   mv "$tmp_conf" "$conf_path"
 
@@ -202,7 +243,6 @@ EOF
 _install_valve_hw_manifest() {
   local conf="${1:?_install_valve_hw_manifest: missing config}"
   local pacconf="${2:?_install_valve_hw_manifest: missing pacman config}"
-  local line rc pkg version desc target
 
   [[ -f "$conf" ]] || return 0
   _validate_hw_manifest "$conf"
@@ -214,37 +254,20 @@ _install_valve_hw_manifest() {
     return 0
   fi
 
-  while IFS="" read -r line; do
-    rc=0
-    _parse_hw_manifest_line "$line" || rc=$?
-    case "$rc" in
-      0) ;;
-      1) continue ;;
-      *)
-        warn "  Skipping malformed line in $(basename "$conf"): $line"
-        continue
-        ;;
-    esac
+  local -a _v_pkgs _v_targets _v_descs
+  _hw_read_manifest "$conf" _v || return 0
 
-    pkg="$HW_LINE_PKG"
-    version="$HW_LINE_VERSION"
-    desc="$HW_LINE_DESC"
+  local i
+  for i in "${!_v_pkgs[@]}"; do
+    log "  Installing ${_v_targets[$i]} from Valve (${_v_descs[$i]})"
 
-    if ! _hw_pkg_selected "$pkg"; then
-      log "  Skipping $pkg (not selected)"
-      continue
-    fi
-
-    target="$(_hw_pkg_target "$pkg" "$version")"
-    log "  Installing $target from Valve ($desc)"
-
-    if _run_in_root "pacman --config '$pacconf' -S --needed ${PACOPTS:-} '$target'" 2>/dev/null; then
-      log "    ✓ $pkg installed"
+    if _run_in_root "pacman --config '$pacconf' -S --needed ${PACOPTS:-} '${_v_targets[$i]}'" 2>/dev/null; then
+      log "    ✓ ${_v_pkgs[$i]} installed"
     else
-      warn "    Failed to install $target from Valve (non-fatal)"
-      HW_FAILED_PKGS+=("$target")
+      warn "    Failed to install ${_v_targets[$i]} from Valve (non-fatal)"
+      HW_FAILED_PKGS+=("${_v_targets[$i]}")
     fi
-  done <"$conf"
+  done
 }
 
 # Check which packages from a list are already installed in the pristine
@@ -435,7 +458,7 @@ check_arch_glibc_compat() {
 _install_arch_hw_manifest() {
   local conf="${1:?_install_arch_hw_manifest: missing config}"
   local pacconf="${2:?_install_arch_hw_manifest: missing pacman config}"
-  local line rc pkg version desc target quoted_targets
+  local pkg quoted_targets
   local txn_id arch_pkgdir_host arch_pkgdir_chroot pacopts install_prefix=""
   local has_linux_firmware=0
   local -a targets=()
@@ -444,36 +467,19 @@ _install_arch_hw_manifest() {
   [[ -f "$conf" ]] || return 0
   _validate_hw_manifest "$conf"
 
-  while IFS="" read -r line; do
-    rc=0
-    _parse_hw_manifest_line "$line" || rc=$?
-    case "$rc" in
-      0) ;;
-      1) continue ;;
-      *)
-        warn "  Skipping malformed line in $(basename "$conf"): $line"
-        continue
-        ;;
-    esac
+  local -a _a_pkgs _a_targets _a_descs
+  if ! _hw_read_manifest "$conf" _a; then
+    return 0
+  fi
+  pkgs=("${_a_pkgs[@]}")
+  targets=("${_a_targets[@]}")
 
-    pkg="$HW_LINE_PKG"
-    version="$HW_LINE_VERSION"
-    desc="$HW_LINE_DESC"
-
-    if ! _hw_pkg_selected "$pkg"; then
-      log "  Skipping $pkg (not selected)"
-      continue
-    fi
-
-    target="$(_hw_pkg_target "$pkg" "$version")"
-    targets+=("$target")
-    pkgs+=("$pkg")
-
-    [[ "$pkg" == "linux-firmware" ]] && has_linux_firmware=1
-    [[ "$pkg" == "nvidia-open-dkms" ]] && HW_NVIDIA_REQUESTED=1
-
-    log "  Selected $target from Arch ($desc)"
-  done <"$conf"
+  local i
+  for i in "${!_a_pkgs[@]}"; do
+    [[ "${_a_pkgs[$i]}" == "linux-firmware" ]] && has_linux_firmware=1
+    [[ "${_a_pkgs[$i]}" == "nvidia-open-dkms" ]] && HW_NVIDIA_REQUESTED=1
+    log "  Selected ${_a_targets[$i]} from Arch (${_a_descs[$i]})"
+  done
 
   ((${#targets[@]} > 0)) || return 0
 
@@ -609,9 +615,9 @@ install_hw_libs() {
     arch_conf="$SCRIPT_DIR/lib/configs/hw-packages-arch.conf"
     legacy_conf="$SCRIPT_DIR/lib/configs/hw-packages.conf"
   else
-    valve_conf="/usr/lib/steamos-build/configs/hw-packages-valve.conf"
-    arch_conf="/usr/lib/steamos-build/configs/hw-packages-arch.conf"
-    legacy_conf="/usr/lib/steamos-build/configs/hw-packages.conf"
+    valve_conf="/home/.steamos-build/build_cache/lib/configs/hw-packages-valve.conf"
+    arch_conf="/home/.steamos-build/build_cache/lib/configs/hw-packages-arch.conf"
+    legacy_conf="/home/.steamos-build/build_cache/lib/configs/hw-packages.conf"
   fi
   local valve_pacconf="${PACCONF:?install_hw_libs: PACCONF is not set}"
 
@@ -697,6 +703,7 @@ install_hw_libs() {
       fi
     fi
 
+    local nvidia_ver
     nvidia_ver="$(_run_in_root "pacman -Q nvidia-utils 2>/dev/null" | awk '{print $2}' || true)"
     [[ -n "$nvidia_ver" ]] \
       || die "nvidia-utils is not installed after NVIDIA package installation"

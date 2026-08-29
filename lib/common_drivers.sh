@@ -290,8 +290,11 @@ install_payload() {
   rsync -a --force --files-from="$FILELIST.rel" "$MERGED/" "$MNT/"
 
   # Copy kernel modules (including HID) from overlay to image
-  log "Copying kernel modules from overlay to image"
-  rsync -a "$UPPER/usr/lib/modules/$KVER/updates" "$MNT/usr/lib/modules/$KVER/"
+  if [[ -d "$UPPER/usr/lib/modules/$KVER/updates" ]]; then
+    log "Copying kernel modules from overlay to image"
+    mkdir -p "$MNT/usr/lib/modules/$KVER"
+    rsync -a "$UPPER/usr/lib/modules/$KVER/updates" "$MNT/usr/lib/modules/$KVER/"
+  fi
 
   # Copy pacman keyring — not owned by any package, so excluded from filelist.
   if [[ -d "$MERGED/etc/pacman.d/gnupg" ]]; then
@@ -301,7 +304,9 @@ install_payload() {
   fi
 
   # Verify HID modules landed in the image (only if logitech-hid was selected).
-  verify_built_modules "$MNT" "$KVER" die
+  if declare -F verify_built_modules >/dev/null 2>&1; then
+    verify_built_modules "$MNT" "$KVER" die
+  fi
 
   log "Registering payload packages in the image's pacman db"
   register_payload_pkgs "$MNT" "$UPPER" "${NEW_PKGS[@]}"
@@ -350,23 +355,6 @@ install_payload() {
   mkdir -p "$MNT/usr/local/bin/diagnostics"
   cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MNT/usr/local/bin/diagnostics/scan-hardware"
   chmod +x "$MNT/usr/local/bin/diagnostics/scan-hardware"
-
-  # Bundle post-install.sh for manual configuration.
-  log "Installing post-install configuration script"
-  cp "$SCRIPT_DIR/lib/post-install.sh" "$MERGED/usr/local/bin/steamos-build-post-install"
-  chmod +x "$MERGED/usr/local/bin/steamos-build-post-install"
-  cp "$SCRIPT_DIR/lib/post-install.sh" "$MNT/usr/local/bin/steamos-build-post-install"
-  chmod +x "$MNT/usr/local/bin/steamos-build-post-install"
-
-  # Desktop shortcut — /home is a separate SteamOS partition mounted at
-  # $HOMEMNT during image construction.  Do not write this under $MNT/home
-  # or $MERGED/home: those paths are hidden as soon as the real /home mounts
-  # at boot and the shortcut would disappear.
-  log "Installing NVIDIA Setup desktop shortcut on the real home partition"
-  local desktop_file="$HOMEMNT/deck/Desktop/NVIDIA Setup.desktop"
-  mkdir -p "$HOMEMNT/deck/Desktop"
-  install -m 755 "$SCRIPT_DIR/lib/configs/NVIDIA Setup.desktop" "$desktop_file"
-  chown 1000:1000 "$desktop_file"
 
   # Run user-provided custom script if present (fail open).
   # Uses "/" (live system) — the custom script lives on /home, not inside the image.

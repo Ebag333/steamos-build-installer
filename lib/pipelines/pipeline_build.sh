@@ -196,8 +196,6 @@ phase_build_install() {
   : >"$WORKDIR/custom-payload-files.txt"
 
   # Install hardware packages (NVIDIA + optional)
-  mkdir -p "$MNT/usr/lib/steamos-build"
-  ln -sfn "$SCRIPT_DIR/lib/configs" "$MNT/usr/lib/steamos-build/configs"
   install_hw_libs
   progress_emit install_hw
 
@@ -227,7 +225,7 @@ phase_build_install() {
       recipe_name="$(get_build_recipe "$module")" || recipe_name=""
       local recipe_dir=""
       if [[ -n "$recipe_name" ]]; then
-        recipe_dir="$SCRIPT_DIR/configs/build_recipes/$recipe_name"
+        recipe_dir="$SCRIPT_DIR/lib/configs/build_recipes/$recipe_name"
       fi
 
       # Use new framework if available and recipe exists
@@ -267,19 +265,10 @@ phase_build_install() {
                 log "  Kernel modules copied to image"
               fi
               # Copy self-heal bundles from overlay to raw rootfs for finalize checks.
-              # The build script may bundle to /home/.steamos-build/bundles/<name>/
-              # and/or /usr/lib/steamos-build/<name>/.  Copy whatever exists.
+              # The build script bundles to /home/.steamos-build/bundles/<name>/.
               local _bundle_src="$MERGED/home/.steamos-build/bundles"
               if [[ -d "$_bundle_src" ]]; then
-                local _b
-                for _b in "$_bundle_src"/*/; do
-                  [[ -d "$_b" ]] || continue
-                  local _bname
-                  _bname="$(basename "$_b")"
-                  mkdir -p "$MNT/usr/lib/steamos-build/$_bname"
-                  cp -a "$_b." "$MNT/usr/lib/steamos-build/$_bname/"
-                  log "  Self-heal bundle $_bname copied to image"
-                done
+                log "  Self-heal bundles already persisted to /home/.steamos-build/bundles/"
               fi
             else
               warn "FAILED: $module direct install failed"
@@ -321,38 +310,10 @@ phase_build_install() {
 
   # Install flatpak packages from hw-packages-build.conf
   step "Installing flatpak packages"
-  local flatpaks
-  flatpaks="$(get_build_items "flatpak")"
-  if [[ -n "$flatpaks" ]]; then
-    for pkg in $flatpaks; do
-      local recipe_name
-      recipe_name="$(get_build_recipe "$pkg")" || recipe_name=""
-      local recipe_dir=""
-      if [[ -n "$recipe_name" ]]; then
-        recipe_dir="$SCRIPT_DIR/configs/build_recipes/$recipe_name"
-      fi
-
-      if [[ -d "$recipe_dir" ]]; then
-        local install_script="$recipe_dir/sources/install-${recipe_name}.sh"
-        if [[ -x "$install_script" ]]; then
-          log "Installing $pkg via recipe"
-          if bash "$install_script" "$MNT"; then
-            log "$pkg: staged for first-boot"
-          else
-            warn "FAILED: $pkg install failed"
-          fi
-        else
-          warn "No install script found for $pkg at $install_script"
-        fi
-      else
-        warn "No recipe found for $pkg"
-      fi
-    done
-  fi
+  install_flatpak_packages "$MNT"
 
   # Compute and install payload
   compute_payload
-  rm -f "$MNT/usr/lib/steamos-build/configs"
   install_payload
   _diag_os_release "after install_payload"
   progress_emit copy_payload
@@ -407,6 +368,9 @@ phase_build_configure() {
   if [[ -n "$DEFAULT_SESSION" ]]; then
     configure_desktop_session "$MNT" "$DEFAULT_SESSION"
   fi
+
+  # Run custom script in chroot if present
+  run_custom_script "$MNT"
 
   return 0
 }

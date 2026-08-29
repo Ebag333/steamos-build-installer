@@ -78,16 +78,15 @@ _apply_gamemode() {
 # ---------------------------------------------------------------------------
 # disable-autologin
 # ---------------------------------------------------------------------------
-# Disable automatic login by setting Relogin=false in sddm.conf.
-# Requires password at boot instead of auto-login.
+# Disable automatic login by clearing User= from [Autologin] in sddm.conf.
+# Without a User= value, SDDM shows the login screen instead of auto-logging in.
+# Also sets Relogin=false to prevent auto re-login after session exit.
 #
-# Context handling:
-#   - chroot/rebuild: Modify target rootfs
-#   - live: Modify running system
+# Usage: sddm_disable_autologin ROOT
+#   ROOT - Root filesystem path (e.g. "/" or "/tmp/image/rootfs")
 
-_apply_disable_autologin() {
-  local root
-  root="$(get_root)"
+sddm_disable_autologin() {
+  local root="${1:?sddm_disable_autologin: missing root}"
   local sddm_conf="${root}/etc/sddm.conf.d/steamos.conf"
 
   if [[ ! -f "$sddm_conf" ]]; then
@@ -95,17 +94,33 @@ _apply_disable_autologin() {
     return 1
   fi
 
+  local changed=0
+
+  # Clear User= to disable initial autologin
+  if grep -q '^User=' "$sddm_conf"; then
+    log "Disabling initial autologin (clearing User=)"
+    sed -i 's/^User=.*/User=/' "$sddm_conf"
+    changed=1
+  fi
+
+  # Set Relogin=false to prevent auto re-login after session exit
   if grep -q '^Relogin=true' "$sddm_conf"; then
-    log "Disabling automatic login (Relogin=false)"
-    if ! sed -i 's/^Relogin=true/Relogin=false/' "$sddm_conf"; then
-      warn "Failed to disable automatic login"
-      return 1
-    fi
-  else
+    log "Disabling re-login (Relogin=false)"
+    sed -i 's/^Relogin=true/Relogin=false/' "$sddm_conf"
+    changed=1
+  fi
+
+  if [[ $changed -eq 0 ]]; then
     log "Auto login already disabled"
   fi
 
   return 0
+}
+
+_apply_disable_autologin() {
+  local root
+  root="$(get_root)"
+  sddm_disable_autologin "$root"
 }
 
 # ---------------------------------------------------------------------------
@@ -136,5 +151,7 @@ _verify_disable_autologin() {
   local root
   root="$(get_root)"
   local sddm_conf="${root}/etc/sddm.conf.d/steamos.conf"
-  [[ -f "$sddm_conf" ]] && grep -q '^Relogin=false' "$sddm_conf"
+  [[ -f "$sddm_conf" ]] || return 1
+  # User= must be empty (no initial autologin) and Relogin must not be true
+  grep -q '^User=$' "$sddm_conf" && ! grep -q '^Relogin=true' "$sddm_conf"
 }

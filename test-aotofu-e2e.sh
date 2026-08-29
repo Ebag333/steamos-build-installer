@@ -40,6 +40,8 @@ WORKDIR="/dev/shm/test-aotofu-e2e-$$"
 MNT="$WORKDIR/mnt"
 MERGED="$WORKDIR/merged"
 
+LIBDRM_VER_BEFORE=""
+
 # Cleanup on exit
 cleanup() {
     log "Cleaning up..."
@@ -67,8 +69,10 @@ cleanup() {
         rm -rf "$dir"
     done
     
-    # Detach loop devices
-    losetup -D 2>/dev/null || true
+    # Detach only our loop device
+    if [[ -n "${LOOPDEV:-}" ]]; then
+        losetup -d "$LOOPDEV" 2>/dev/null || true
+    fi
     
     # Remove our specific workdir
     if [[ -d "$WORKDIR" ]]; then
@@ -119,9 +123,8 @@ phase_setup() {
     log "  SteamOS $version (build $build_id)"
 
     # Record the problematic libdrm version
-    local libdrm_ver
-    libdrm_ver="$(pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" libdrm 2>/dev/null | awk '{print $2}')"
-    log "  libdrm version in image: $libdrm_ver"
+    LIBDRM_VER_BEFORE="$(pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" libdrm 2>/dev/null | awk '{print $2}')"
+    log "  libdrm version in image: $LIBDRM_VER_BEFORE"
     log "  (This is the version that caused the earlier build failure)"
 }
 
@@ -165,10 +168,10 @@ phase_build_aotofu() {
 
     # Build AoTofu
     build_recipe \
-        --recipe "$SCRIPT_DIR/configs/build_recipes/aotofu-vaapi" \
+        --recipe "$SCRIPT_DIR/lib/configs/build_recipes/aotofu-vaapi" \
         --profile "$WORKDIR/profile" \
         --output "$WORKDIR/packages" \
-        --keep-failed
+        $(if ((KEEP_FAILED)); then printf '%s' "--keep-failed"; fi)
 
     log ""
     log "Build artifact: $BUILD_ARTIFACT"
@@ -195,7 +198,7 @@ phase_verify_target_unchanged() {
     local libdrm_ver_after
     libdrm_ver_after="$(pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" libdrm 2>/dev/null | awk '{print $2}')"
 
-    log "  libdrm in target before build: $(pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" libdrm 2>/dev/null | awk '{print $2}')"
+    log "  libdrm in target before build: $LIBDRM_VER_BEFORE"
     log "  libdrm in target after build:  $libdrm_ver_after"
 
     if [[ "$libdrm_ver_after" != "2.4.129-1.1" ]]; then

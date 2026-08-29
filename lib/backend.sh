@@ -55,12 +55,12 @@ UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 backend_usage() {
   cat <<'EOF'
 Usage:
-  backend.sh --action <build|flash|flashless|list-images|list-devices|is-system-disk|configure|reboot> [options]
+  backend.sh --action <build|flash|flashless|live|validate|list-images|list-devices|is-system-disk|reboot> [options]
 
 Common:
-  --action ACTION           Required: build, flash, flashless, validate, list-images, list-devices, is-system-disk, configure, reboot
+  --action ACTION           Required: build, flash, flashless, live, validate, list-images, list-devices, is-system-disk, reboot
   --image FILE              Source image path (for build)
-  --config FILE             Build configuration file
+  --config FILE             Build configuration file (required for build, flash, live)
 
 Build:
   All build settings are configured via --config file.
@@ -70,6 +70,9 @@ Flash:
   --device /dev/sdX         Target device for flash action
   --confirm                 Required for destructive CLI/backend flash
   --allow-system-disk       Override system-disk protection
+
+Live:
+  Config file must set LIVE_ACTIONS (space-separated action names)
 
 No positional parameters are accepted.
 EOF
@@ -101,38 +104,20 @@ if [[ -n "$CONFIG_FILE" ]]; then
 fi
 
 # shellcheck disable=SC2034
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --action)
-      ACTION="${2:?--action requires a value}"
-      shift 2
-      ;;
-    --image)
-      IMG="${2:?--image requires a value}"
-      shift 2
-      ;;
-    --device)
-      TARGET_DEV="${2:?--device requires a value}"
-      shift 2
-      ;;
-    --config)
-      CONFIG_FILE="${2:?--config requires a value}"
-      shift 2
-      ;;
-    --output-dir)
-      OUTPUT_DIR="${2:?--output-dir requires a value}"
-      shift 2
-      ;;
+# shellcheck source=lib/args.sh
+source "$BACKEND_DIR/args.sh"
 
+while [[ $# -gt 0 ]]; do
+  if parse_common_arg "$1" "${2:-}"; then
+    shift "$_ARG_SHIFT"
+    continue
+  fi
+
+  case "$1" in
     --confirm)
       FLASH_CONFIRMED=1
       shift
       ;;
-    --allow-system-disk)
-      ALLOW_SYSTEM_DISK=1
-      shift
-      ;;
-
     -h | --help)
       backend_usage
       exit 0
@@ -270,10 +255,6 @@ load_build_libs() {
   # Source library loader and pipeline
   # shellcheck source=lib/library-loader.sh
   source "$BACKEND_DIR/library-loader.sh"
-  # shellcheck source=lib/pipeline.sh
-  source "$BACKEND_DIR/pipeline.sh"
-  # shellcheck source=lib/workflow-common.sh
-  source "$BACKEND_DIR/workflow-common.sh"
 
   # Source pipeline definition
   # shellcheck source=lib/pipelines/pipeline_build.sh
@@ -418,15 +399,9 @@ backend_build() {
   fi
 }
 
-backend_configure() {
-  [[ -f "$BACKEND_DIR/post-install.sh" ]] || {
-    echo "post-install.sh not found in lib/" >&2
-    exit 1
-  }
-  exec bash "$BACKEND_DIR/post-install.sh"
-}
-
 backend_validate() {
+  # shellcheck source=lib/library-loader.sh
+  source "$BACKEND_DIR/library-loader.sh"
   load_workflow_libs "validate" "$BACKEND_DIR"
 
   # Source the validate pipeline
@@ -439,6 +414,47 @@ backend_validate() {
   export VALIDATE_ITEMS="${VALIDATE_ITEMS:-}"
 
   register_validate_pipeline
+  if ! run_pipeline; then
+    exit 1
+  fi
+}
+
+backend_live() {
+  [[ $EUID -eq 0 ]] || {
+    echo "Live configuration requires root." >&2
+    exit 1
+  }
+
+  # Load config file for LIVE_ACTIONS
+  [[ -n "$CONFIG_FILE" ]] || {
+    echo "--config is required for live configuration" >&2
+    exit 2
+  }
+  [[ -f "$CONFIG_FILE" ]] || {
+    echo "Config file not found: $CONFIG_FILE" >&2
+    exit 2
+  }
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+
+  local actions="${LIVE_ACTIONS:-}"
+  [[ -n "$actions" ]] || {
+    echo "LIVE_ACTIONS not set in config file" >&2
+    exit 2
+  }
+
+  # shellcheck source=lib/library-loader.sh
+  source "$BACKEND_DIR/library-loader.sh"
+  load_workflow_libs "live" "$BACKEND_DIR"
+
+  # Source the live pipeline
+  # shellcheck source=lib/pipelines/pipeline_live.sh
+  source "$BACKEND_DIR/pipelines/pipeline_live.sh"
+
+  # Export actions for the pipeline to read
+  export SELECTED_ACTIONS="$actions"
+
+  register_live_pipeline
   if ! run_pipeline; then
     exit 1
   fi
@@ -459,11 +475,78 @@ backend_reboot() {
     echo "Reboot action requires root." >&2
     exit 1
   }
-  [[ -f "$BACKEND_DIR/post-install.sh" ]] || {
-    echo "post-install.sh not found in lib/" >&2
+
+  # Detect available slots
+  local -a options=()
+  local slot_a="" slot_b=""
+
+  while IFS=$'\t' read -r dev label; do
+    case "$label" in
+      rootfs-A) slot_a="$dev" ;;
+      rootfs-B) slot_b="$dev" ;;
+    esac
+  done < <(lsblk -dno NAME,PARTLABEL /dev/nvme[0-9]* 2>/dev/null)
+
+  [[ -n "$slot_a" ]] && options+=("A" "Root A ($slot_a)")
+  [[ -n "$slot_b" ]] && options+=("B" "Root B ($slot_b)")
+
+  if [[ ${#options[@]} -eq 0 ]]; then
+    echo "No root partitions found." >&2
     exit 1
-  }
-  exec bash "$BACKEND_DIR/post-install.sh" --reboot-only
+  fi
+
+  local selected
+  if command -v yad >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]]; then
+    selected="$(yad --list \
+      --title="Boot Selector" \
+      --text="Select which root to boot into on next restart:" \
+      --column="Slot" --column="Device" \
+      --width=400 --height=200 \
+      --selectable-rows \
+      --print-column=1 \
+      "${options[@]}" 2>/dev/null)" || exit 0
+    selected="$(echo "$selected" | tr -d '|' | tr -d '\n' | xargs)"
+  else
+    local -a slot_labels=()
+    [[ -n "$slot_a" ]] && slot_labels+=("A")
+    [[ -n "$slot_b" ]] && slot_labels+=("B")
+
+    echo ""
+    echo "Reboot to which slot?"
+    local idx=1
+    [[ -n "$slot_a" ]] && echo "  $((idx++))) Root A ($slot_a)"
+    [[ -n "$slot_b" ]] && echo "  $((idx++))) Root B ($slot_b)"
+    read -rp "Choice: " choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#slot_labels[@]} )); then
+      selected="${slot_labels[$((choice - 1))]}"
+    else
+      exit 0
+    fi
+  fi
+
+  local conf_file="/esp/SteamOS/conf/${selected}.conf"
+  if [[ ! -f "$conf_file" ]]; then
+    echo "Boot config not found: $conf_file" >&2
+    exit 1
+  fi
+
+  local now
+  now="$(date -u +%Y%m%d%H%M%S)"
+
+  sed -i "s/^boot-requested-at:.*/boot-requested-at: $now/" "$conf_file" \
+    || {
+      echo "Failed to set boot-requested-at for $selected" >&2
+      exit 1
+    }
+
+  # Clear the other slot
+  local other="A"
+  [[ "$selected" == "A" ]] && other="B"
+  local other_conf="/esp/SteamOS/conf/${other}.conf"
+  [[ -f "$other_conf" ]] \
+    && sed -i "s/^boot-requested-at:.*/boot-requested-at: 0/" "$other_conf" 2>/dev/null
+
+  echo "Boot slot set: $selected will boot on next restart"
 }
 
 # ---------------------------------------------------------------------------
@@ -508,8 +591,8 @@ case "$ACTION" in
     IMG="$(readlink -f "$IMG")"
     flash_preflight "$IMG" "$TARGET_DEV"
     ;;
-  configure)
-    backend_configure
+  live)
+    backend_live
     ;;
   validate)
     backend_validate

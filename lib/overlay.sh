@@ -146,7 +146,7 @@ setup_overlay_chroot() {
     "$source_fp" "$root_uuid" "$KVER" \
     "${KPKG_NAME:-unknown}" "${KPKG_VERREL:-unknown}"
 
-  overlay_mount_with_image "$MNT" "$WORKDIR" "$MERGED" "8G" "$cache_key"
+  overlay_mount_with_image "$MNT" "$WORKDIR" "$MNT" "8G" "$cache_key"
 
   if [[ $SKIP_SIG -eq 0 ]]; then
     setup_pacman_conf "$MERGED/tmp/pacman-bld.conf" "Required DatabaseOptional"

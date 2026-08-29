@@ -19,8 +19,8 @@ fi
 declare -gA _PIPELINE_PHASES=()
 declare -gA _PIPELINE_PHASE_DESC=()
 declare -ga _PIPELINE_ORDER=()
-declare _PIPELINE_CURRENT_PHASE=""
-declare _PIPELINE_START_TIME=0
+declare -g _PIPELINE_CURRENT_PHASE=""
+declare -g _PIPELINE_START_TIME=0
 
 # ---------------------------------------------------------------------------
 # Pipeline Definition

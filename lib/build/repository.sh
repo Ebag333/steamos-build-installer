@@ -175,16 +175,6 @@ repo_generate_config() {
 
   # Optionally append Arch repos
   if ((include_arch)); then
-    cat >>"$output" <<'EOF'
-
-[core]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-
-[extra]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-
-[multilib]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-EOF
+    append_arch_repos "$output"
   fi
 }

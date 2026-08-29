@@ -66,20 +66,49 @@ verify_package_abi_compat() {
   # Check each dependency against the lock file
   local dep
   for dep in $pkg_deps; do
-    # Strip version constraints
-    local dep_name="${dep%%[><=]*}"
-    local dep_ver="${dep#*[><=]}"
+    local dep_name dep_op dep_ver
+    if [[ "$dep" =~ ^([^><=]+)(>=|<=|>|<|=)(.+)$ ]]; then
+      dep_name="${BASH_REMATCH[1]}"
+      dep_op="${BASH_REMATCH[2]}"
+      dep_ver="${BASH_REMATCH[3]}"
+    else
+      # Bare dependency with no version constraint — skip
+      continue
+    fi
 
     # Check if this is an ABI-critical package
     local locked_ver=""
     locked_ver="$(grep "^${dep_name}=" "$packages_lock" 2>/dev/null | cut -d= -f2-)"
 
-    if [[ -n "$locked_ver" && -n "$dep_ver" ]]; then
-      # Compare versions
-      if [[ "$dep_ver" != "$locked_ver" ]]; then
-        warn "ABI mismatch: $dep_name requires $dep_ver but profile has $locked_ver"
-        return 1
-      fi
+    if [[ -z "$locked_ver" ]]; then
+      continue
+    fi
+
+    # Use vercmp for proper version comparison
+    local cmp
+    cmp="$(vercmp "$locked_ver" "$dep_ver" 2>/dev/null)"
+    if [[ -z "$cmp" ]]; then
+      warn "vercmp failed for $dep_name: locked=$locked_ver dep=$dep_ver"
+      return 1
+    fi
+
+    local mismatch=0
+    case "$dep_op" in
+      '>=')
+        (( cmp < 0 )) && mismatch=1 ;;
+      '<=')
+        (( cmp > 0 )) && mismatch=1 ;;
+      '>')
+        (( cmp <= 0 )) && mismatch=1 ;;
+      '<')
+        (( cmp >= 0 )) && mismatch=1 ;;
+      '=')
+        (( cmp != 0 )) && mismatch=1 ;;
+    esac
+
+    if (( mismatch )); then
+      warn "ABI mismatch: $dep_name requires $dep_op$dep_ver but profile has $locked_ver"
+      return 1
     fi
   done
 

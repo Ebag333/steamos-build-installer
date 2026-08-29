@@ -40,37 +40,11 @@ EOF
 
   if [[ $UPDATE_MODE == selfheal ]]; then
     log "Installing self-healing update machinery"
-    mkdir -p "$MNT/usr/lib/steamos-build"
-
-    # HID source bundle is now created by the builds system (logitech-hid.sh)
-    # No need to copy from DRIVER_SRC_DIR here
-
-    # Persist build selections needed by repatch.  Package source/version policy
-    # lives in the bundled hw-packages-{valve,arch}.conf manifests.  Entries
-    # marked "latest" are resolved again on every self-heal.
-    # ---- on-device re-patch/runtime bundle
-    # common.sh is required by repatch; keep both wrappers in the bundle so a
-    # successful repatch can propagate the update machinery into the new slot.
-    for helper in \
-      repatch \
-      common \
-      overlay \
-      common_system \
-      common_modules \
-      common_drivers \
-      install-hw-libs \
-      grub \
-      update-wrapper \
-      atomupd-wrapper; do
-      install -m 755 \
-        "$SCRIPT_DIR/lib/$helper.sh" \
-        "$MNT/usr/lib/steamos-build/$helper.sh"
-    done
 
     # ---- compatibility wrapper around steamos-update
     # This no longer owns repatch; the lower atomupd wrapper catches both
     # Steam/Game Mode and KDE Discover.
-    if [[ ! -f "$MNT/usr/bin/steamos-update.orig" ]]; then
+    if [[ -f "$MNT/usr/bin/steamos-update" && ! -f "$MNT/usr/bin/steamos-update.orig" ]]; then
       mv "$MNT/usr/bin/steamos-update" "$MNT/usr/bin/steamos-update.orig"
     fi
     install -m 755 \
@@ -80,7 +54,7 @@ EOF
     # ---- authoritative wrapper around steamos-atomupd-client
     # atomupd-daemon launches this helper for OS operations, so this is the
     # shared interception point for Game Mode and Discover.
-    if [[ ! -f "$MNT/usr/bin/steamos-atomupd-client.orig" ]]; then
+    if [[ -f "$MNT/usr/bin/steamos-atomupd-client" && ! -f "$MNT/usr/bin/steamos-atomupd-client.orig" ]]; then
       mv "$MNT/usr/bin/steamos-atomupd-client" \
         "$MNT/usr/bin/steamos-atomupd-client.orig"
     fi

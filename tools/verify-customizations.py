@@ -739,7 +739,7 @@ def check_hid_modules():
     dj_matches = glob.glob(os.path.join(
         MNT, f"usr/lib/modules/{KVER}/updates/logitech/hid-logitech-dj.ko*"))
     if dj_matches:
-        dj_path = dj_matches[0].replace(MNT, "", 1)
+        dj_path = "/" + os.path.relpath(dj_matches[0], MNT)
         rc, out = run_in_mnt(["modinfo", "-F", "alias", dj_path])
         if rc == 0 and "v0000046Dp0000C547" in out.upper():
             ok("hid-logitech-dj has 046d:c547 alias")

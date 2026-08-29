@@ -122,11 +122,7 @@ _apply_thunderbolt() {
   install_file "$configs_dir/98-thunderbolt-rescan.rules" "/etc/udev/rules.d/98-thunderbolt-rescan.rules"
   enable_service "bolt.service"
 
-  # Bundle source files for self-heal (repatch.sh can restore them)
-  local bundle="${root}/usr/lib/steamos-build/thunderbolt"
-  mkdir -p "$bundle"
-  cp "$configs_dir/thunderbolt-rescan.sh" "$bundle/"
-  cp "$configs_dir/98-thunderbolt-rescan.rules" "$bundle/"
+  # Thunderbolt bundle is already persisted to /home/.steamos-build/bundles/thunderbolt by the builds system
 
   # Trigger udev reload if live
   if is_live; then

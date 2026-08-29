@@ -24,6 +24,8 @@ load_workflow_libs() {
 
   # Common libraries (shared by all workflows)
   local -a common_libs=(
+    pipeline
+    workflow-common
     common
     overlay
     common_system
@@ -37,7 +39,6 @@ load_workflow_libs() {
 
   # Workflow-specific libraries
   local -a workflow_libs=()
-  local -a driver_libs=()
 
   case "$workflow" in
     build)
@@ -50,48 +51,32 @@ load_workflow_libs() {
         finalize
         flashless
       )
-      driver_libs=(
-        builds/common
-        builds/logitech-hid
-        builds/aotofu-vaapi
-        builds/dlss_updater
-      )
       ;;
     repatch)
       workflow_libs=(
         initramfs
-      )
-      driver_libs=(
-        builds/common
-        builds/logitech-hid
-        builds/aotofu-vaapi
-        builds/dlss_updater
       )
       ;;
     live)
       workflow_libs=(
         initramfs
       )
-      driver_libs=()
       ;;
     flash)
       workflow_libs=(
         flash
       )
-      driver_libs=()
       ;;
     flashless)
       workflow_libs=(
         initramfs
         flashless
       )
-      driver_libs=()
       ;;
     validate)
       workflow_libs=(
         initramfs
       )
-      driver_libs=()
       ;;
     *)
       warn "Unknown workflow type: $workflow"
@@ -102,21 +87,16 @@ load_workflow_libs() {
   # Source common libraries
   local lib
   for lib in "${common_libs[@]}"; do
-    _load_lib "$base_dir" "$lib"
+    _load_lib "$base_dir" "$lib" || return 1
   done
 
   # Source workflow-specific libraries
   for lib in "${workflow_libs[@]}"; do
-    _load_lib "$base_dir" "$lib"
+    _load_lib "$base_dir" "$lib" || return 1
   done
 
   # Source customization entry point
-  _load_lib "$base_dir" "customization"
-
-  # Source driver libraries
-  for lib in "${driver_libs[@]}"; do
-    _load_lib "$base_dir" "$lib"
-  done
+  _load_lib "$base_dir" "customization" || return 1
 }
 
 # Load a single library.

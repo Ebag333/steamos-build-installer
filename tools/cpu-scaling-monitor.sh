@@ -13,9 +13,9 @@ while true; do
 
   boost="n/a"
   if [ -f /sys/devices/system/cpu/cpufreq/boost ]; then
-    [ "$(cat /sys/devices/system/cpu/cpufreq/boost)" = 1 ] && boost="on" || boost="off"
+    if [ "$(cat /sys/devices/system/cpu/cpufreq/boost)" = 1 ]; then boost="on"; else boost="off"; fi
   elif [ -f /sys/devices/system/cpu/intel_pstate/no_turbo ]; then
-    [ "$(cat /sys/devices/system/cpu/intel_pstate/no_turbo)" = 0 ] && boost="on" || boost="off"
+    if [ "$(cat /sys/devices/system/cpu/intel_pstate/no_turbo)" = 0 ]; then boost="on"; else boost="off"; fi
   fi
 
   printf '%-24s %-14s %-14s %-8s\n' "$ts" "$gov" "$epp" "$boost"

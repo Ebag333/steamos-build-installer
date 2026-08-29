@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 # steamos-build-installer — lib/pipelines/pipeline_live.sh
-# Live (post-install) workflow pipeline definition.
+# Live workflow pipeline definition.
 # Defines the phases for configuring a running SteamOS system.
 #
-# Sourced by post-install.sh — do not run directly.
+# Sourced by the pipeline dispatcher — do not run directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "lib/pipelines/pipeline_live.sh is a library — source it from the wrapper, not run directly." >&2
@@ -59,7 +59,7 @@ phase_live_validate() {
 # Phase: Prepare system for changes
 phase_live_prepare() {
   # Make rootfs writable if needed
-  if [[ "${config_root:-}" == "/" ]]; then
+  if [[ -z "${config_root:-}" || "${config_root:-}" == "/" ]]; then
     # Live system
     if command -v steamos-readonly >/dev/null 2>&1; then
       log "Disabling SteamOS read-only mode"
@@ -83,6 +83,9 @@ phase_live_configure() {
   local action
   for action in ${SELECTED_ACTIONS:-}; do
     case "$action" in
+      resize)
+        resize_rootfs
+        ;;
       thunderbolt)
         _apply_live_thunderbolt "$root"
         ;;
@@ -93,34 +96,34 @@ phase_live_configure() {
         _apply_live_gamemode "$root"
         ;;
       disable-autologin)
-        _apply_live_disable_autologin "$root"
+        sddm_disable_autologin "$root"
         ;;
       scx-lavd)
-        _apply_live_scx_lavd "$root"
+        apply_optimization_for_item "scx-lavd" "live" "$root"
         ;;
       vm-tunables)
-        _apply_live_vm_tunables "$root"
+        apply_optimization_for_item "vm-tunables" "live" "$root"
         ;;
       cpu-performance)
-        _apply_live_cpu_performance "$root"
+        apply_optimization_for_item "cpu-performance" "live" "$root"
         ;;
       gpu-power-limit)
-        _apply_live_gpu_power_limit "$root"
+        apply_optimization_for_item "gpu-power-limit" "live" "$root"
         ;;
       initramfs)
         _apply_live_initramfs "$root"
+        ;;
+      logitech-hid)
+        _apply_live_logitech_hid "$root"
         ;;
       keyring)
         init_pacman_keyring "$root" "both"
         ;;
       password)
-        _apply_live_password
-        ;;
-      lockscreen)
-        _apply_live_lockscreen
+        set_user_password
         ;;
       cleanup)
-        _apply_live_cleanup "$root"
+        cleanup_disk_space "$root"
         ;;
       *)
         warn "Unknown action: $action"
@@ -130,6 +133,11 @@ phase_live_configure() {
 
   # Run custom script
   run_custom_script "$root"
+
+  # Install flatpak packages and ensure staging service
+  step "Installing flatpak packages"
+  install_flatpak_packages "$root"
+  ensure_flatpak_service "$root"
 
   # Persist project files to /home for later re-run
   ensure_project_persisted
@@ -146,10 +154,12 @@ phase_live_verify() {
     _regenerate_initramfs "$root"
   fi
 
-  # Restore readonly mode
-  if command -v steamos-readonly >/dev/null 2>&1; then
-    log "Re-enabling SteamOS read-only mode"
-    steamos-readonly enable || true
+  # Restore readonly mode (only if we disabled it for the live system)
+  if [[ -z "${config_root:-}" || "${config_root:-}" == "/" ]]; then
+    if command -v steamos-readonly >/dev/null 2>&1; then
+      log "Re-enabling SteamOS read-only mode"
+      steamos-readonly enable || true
+    fi
   fi
 
   return 0
@@ -182,109 +192,6 @@ _apply_live_gamemode() {
   return 0
 }
 
-_apply_live_disable_autologin() {
-  local root="$1"
-  local sddm_conf="$root/etc/sddm.conf.d/steamos.conf"
-
-  if [[ -f "$sddm_conf" ]]; then
-    if grep -q '^Relogin=true' "$sddm_conf"; then
-      log "Disabling automatic login"
-      sed -i 's/^Relogin=true/Relogin=false/' "$sddm_conf"
-    fi
-  fi
-
-  return 0
-}
-
-_apply_live_scx_lavd() {
-  local root="$1"
-  log "Configuring scx_lavd scheduler"
-
-  # Install config
-  mkdir -p "$root/etc/scx_loader"
-  cp "$SCRIPT_DIR/lib/configs/scx_loader_config.toml" "$root/etc/scx_loader/config.toml"
-
-  # Enable service
-  mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
-  ln -sf /usr/lib/systemd/system/scx.service \
-    "$root/etc/systemd/system/multi-user.target.wants/scx.service"
-
-  return 0
-}
-
-_apply_live_vm_tunables() {
-  local root="$1"
-  log "Configuring vm.swappiness"
-
-  # Detect zram
-  local has_zram=0
-  if [[ -e "$root/usr/lib/systemd/zram-generator.conf" ]] \
-    || [[ -e "$root/etc/systemd/zram-generator.conf" ]]; then
-    has_zram=1
-  fi
-
-  # Apply appropriate swappiness
-  if ((has_zram)); then
-    cp "$SCRIPT_DIR/lib/configs/swappiness-zram.conf" "$root/etc/sysctl.d/99-vm-swappiness.conf"
-  else
-    cp "$SCRIPT_DIR/lib/configs/swappiness-disk.conf" "$root/etc/sysctl.d/99-vm-swappiness.conf"
-  fi
-
-  return 0
-}
-
-_apply_live_cpu_performance() {
-  local root="$1"
-  log "Installing CPU performance hooks"
-
-  # Install boot framework
-  local boot_src="$SCRIPT_DIR/lib/configs/boot"
-  local boot_dst="$root/usr/lib/steam-perf"
-
-  mkdir -p "$boot_dst/boot.d"
-  cp "$boot_src/apply-boot" "$boot_dst/apply-boot"
-  chmod 755 "$boot_dst/apply-boot"
-  cp "$boot_src/30-cpu" "$boot_dst/boot.d/30-cpu"
-  chmod 755 "$boot_dst/boot.d/30-cpu"
-
-  mkdir -p "$root/etc/steam-perf"
-  cp "$boot_src/config.conf" "$root/etc/steam-perf/config.conf"
-
-  mkdir -p "$root/usr/lib/systemd/system" "$root/etc/systemd/system/multi-user.target.wants"
-  cp "$boot_src/steam-perf.service" "$root/usr/lib/systemd/system/steam-perf.service"
-  ln -sf /usr/lib/systemd/system/steam-perf.service \
-    "$root/etc/systemd/system/multi-user.target.wants/steam-perf.service"
-
-  return 0
-}
-
-_apply_live_gpu_power_limit() {
-  local root="$1"
-  log "Installing GPU power limit hooks"
-
-  # Install boot framework
-  local boot_src="$SCRIPT_DIR/lib/configs/boot"
-  local boot_dst="$root/usr/lib/steam-perf"
-
-  mkdir -p "$boot_dst/boot.d"
-  cp "$boot_src/apply-boot" "$boot_dst/apply-boot"
-  chmod 755 "$boot_dst/apply-boot"
-  cp "$boot_src/20-nvidia-gpu" "$boot_dst/boot.d/20-nvidia-gpu"
-  chmod 755 "$boot_dst/boot.d/20-nvidia-gpu"
-  cp "$boot_src/25-amd-gpu" "$boot_dst/boot.d/25-amd-gpu"
-  chmod 755 "$boot_dst/boot.d/25-amd-gpu"
-
-  mkdir -p "$root/etc/steam-perf"
-  cp "$boot_src/config.conf" "$root/etc/steam-perf/config.conf"
-
-  mkdir -p "$root/usr/lib/systemd/system" "$root/etc/systemd/system/multi-user.target.wants"
-  cp "$boot_src/steam-perf.service" "$root/usr/lib/systemd/system/steam-perf.service"
-  ln -sf /usr/lib/systemd/system/steam-perf.service \
-    "$root/etc/systemd/system/multi-user.target.wants/steam-perf.service"
-
-  return 0
-}
-
 _apply_live_initramfs() {
   local root="$1"
   log "Configuring initramfs"
@@ -300,41 +207,55 @@ _apply_live_initramfs() {
   return 0
 }
 
-_apply_live_password() {
-  log "Setting user password"
-  passwd deck
-  return 0
-}
-
-_apply_live_lockscreen() {
-  log "Enabling lock screen"
-  # KDE lock screen settings
-  local kscreenlockerrc="/home/deck/.config/kscreenlockerrc"
-  if [[ -f "$kscreenlockerrc" ]]; then
-    sed -i 's/^Autolock=.*/Autolock=true/' "$kscreenlockerrc"
-    sed -i 's/^LockOnResume=.*/LockOnResume=true/' "$kscreenlockerrc"
-  fi
-  return 0
-}
-
-_apply_live_cleanup() {
+_apply_live_logitech_hid() {
   local root="$1"
-  log "Cleaning up"
+  log "Building Logitech HID modules"
 
-  # Clean pacman cache
-  if [[ "$root" == "/" ]]; then
-    pacman -Sc --noconfirm 2>/dev/null || true
-  else
-    chroot "$root" pacman -Sc --noconfirm 2>/dev/null || true
+  local recipe_dir="$SCRIPT_DIR/lib/configs/build_recipes/logitech-hid"
+  if [[ ! -d "$recipe_dir" ]]; then
+    warn "logitech-hid recipe not found"
+    return 1
   fi
 
-  # Clean temp files
-  rm -rf /tmp/* 2>/dev/null || true
+  local _install_cmd=""
+  _install_cmd="$(sed -n 's/^INSTALL_CMD=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
+  if [[ -z "$_install_cmd" ]]; then
+    warn "No INSTALL_CMD in logitech-hid recipe"
+    return 1
+  fi
 
-  # Clean journal
-  journalctl --vacuum-time=7d 2>/dev/null || true
+  local _install_args=""
+  _install_args="$(sed -n 's/^INSTALL_ARGS=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
 
-  return 0
+  local _script_name
+  _script_name="$(basename "$_install_cmd")"
+
+  # Copy recipe sources to build dir
+  local build_dir="/tmp/logitech-hid-build"
+  rm -rf "$build_dir"
+  mkdir -p "$build_dir"
+  if [[ -d "$recipe_dir/sources" ]]; then
+    cp -a "$recipe_dir/sources/." "$build_dir/"
+  fi
+
+  if [[ ! -f "$build_dir/$_script_name" ]]; then
+    warn "Install script not found: $_script_name"
+    rm -rf "$build_dir"
+    return 1
+  fi
+
+  chmod +x "$build_dir/$_script_name"
+
+  # Run the build script
+  if bash "$build_dir/$_script_name" $_install_args; then
+    log "Logitech HID modules built and installed"
+    rm -rf "$build_dir"
+    return 0
+  else
+    warn "FAILED: Logitech HID build failed"
+    rm -rf "$build_dir"
+    return 1
+  fi
 }
 
 _regenerate_initramfs() {

@@ -102,6 +102,13 @@ _apply_scx_lavd() {
     warn "Failed to enable scx.service (non-fatal)"
   fi
 
+  # Live mode: reload and restart immediately
+  if is_live; then
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl restart scx.service 2>/dev/null \
+      || warn "Failed to start scx.service (will activate on next boot)"
+  fi
+
   return 0
 }
 
@@ -132,11 +139,17 @@ _apply_vm_tunables() {
 
   # Detect if target has zram
   local has_zram=0
-  if [[ -e "${root}/usr/lib/systemd/zram-generator.conf" ]] \
-    || [[ -e "${root}/etc/systemd/zram-generator.conf" ]] \
-    || [[ -e "${root}/usr/lib/systemd/zram-generator.conf.d" ]] \
-    || [[ -e "${root}/etc/systemd/zram-generator.conf.d" ]]; then
-    has_zram=1
+  if is_live; then
+    # Live: check actual runtime state
+    [[ -e /sys/block/zram0 ]] && has_zram=1
+  else
+    # Build/rebuild: check target's generator config
+    if [[ -e "${root}/usr/lib/systemd/zram-generator.conf" ]] \
+      || [[ -e "${root}/etc/systemd/zram-generator.conf" ]] \
+      || [[ -e "${root}/usr/lib/systemd/zram-generator.conf.d" ]] \
+      || [[ -e "${root}/etc/systemd/zram-generator.conf.d" ]]; then
+      has_zram=1
+    fi
   fi
 
   # Read target's current swappiness (fall back to kernel default 60)
@@ -156,6 +169,15 @@ _apply_vm_tunables() {
     fi
   else
     log "vm.swappiness already appropriate ($target_swappiness, zram=$has_zram) — skipping"
+    return 0
+  fi
+
+  # Live mode: apply immediately
+  if is_live; then
+    local target_val
+    ((has_zram)) && target_val=180 || target_val=10
+    sysctl -q -w "vm.swappiness=$target_val" 2>/dev/null \
+      || warn "Failed to apply swappiness live (will take effect on next boot)"
   fi
 
   return 0

@@ -101,12 +101,12 @@ finalize() {
   if [[ $UPDATE_MODE == selfheal ]]; then
     grep -q 'self-healing' "$MNT/usr/bin/steamos-update" || die "update wrapper missing"
     [[ -f "$MNT/usr/bin/steamos-update.orig" ]] || die "original steamos-update not preserved"
-    grep -q 'repatch' "$MNT/usr/lib/steamos-build/repatch.sh" || die "repatch tool missing"
-    [[ -f "$MNT/usr/lib/steamos-build/overlay.sh" ]] || die "overlay helper missing"
+    grep -q 'repatch' "/home/.steamos-build/build_cache/lib/repatch.sh" || die "repatch tool missing"
+    [[ -f "/home/.steamos-build/build_cache/lib/overlay.sh" ]] || die "overlay helper missing"
     [[ -f "$HOMEMNT/.steamos-build/build.conf" ]] || die "build.conf missing"
     # Verify HID source bundle for self-heal (always applied)
     for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
-      [[ -f "$MNT/usr/lib/steamos-build/hid/$f" ]] \
+      [[ -f "/home/.steamos-build/bundles/hid/$f" ]] \
         || die "self-heal HID source missing: $f"
     done
     # Check that atomupd isn't masked — a symlink to /dev/null specifically

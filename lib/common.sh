@@ -167,8 +167,7 @@ ensure_steamos_build_dirs() {
 # Script Directory Resolution
 # ---------------------------------------------------------------------------
 # Resolve the steamos-build script directory.
-# Prefers /home/.steamos-build (writable, latest scripts),
-# falls back to /usr/lib/steamos-build (immutable, build-time).
+# Uses /home/.steamos-build (writable, latest scripts).
 #
 # Args: $1 = (optional) explicit path to check first
 # Output: path to the script directory
@@ -182,13 +181,8 @@ resolve_nvidia_dir() {
     return 0
   fi
 
-  if [[ -d "/home/.steamos-build/lib" ]]; then
-    echo "/home/.steamos-build"
-    return 0
-  fi
-
-  if [[ -d "/usr/lib/steamos-build" ]]; then
-    echo "/usr/lib/steamos-build"
+  if [[ -d "/home/.steamos-build/build_cache/lib" ]]; then
+    echo "/home/.steamos-build/build_cache"
     return 0
   fi
 
@@ -305,6 +299,10 @@ _persist_project_files_cp() {
   for d in lib tools configs; do
     [[ -d "$src/$d" ]] && cp -a "$src/$d" "$dest/$d"
   done
+
+  # Ensure all persisted scripts are executable — cp -a preserves source perms,
+  # but some tools (atomupd wrapper, repatch) check -x before invoking.
+  find "$dest" -name '*.sh' -type f -exec chmod +x {} +
 }
 
 # Ensure the project is persisted to /home/.steamos-build/.
@@ -743,10 +741,11 @@ compute_payload() {
   FILELIST="$WORKDIR/payload-files.txt"
   generate_payload_filelist "$FILELIST" "${NEW_PKGS[@]}"
 
-  if [[ $TRIM_CUDA -eq 1 ]]; then
+  if [[ "${TRIM_CUDA:-0}" -eq 1 ]]; then
     log "Trimming CUDA/OpenCL/NVVM/OptiX libraries"
     grep -Ev 'libcuda|libcudadebugger|libnvidia-nvvm|libnvidia-opencl|libnvoptix|nvidia-cuda-mps|OpenCL' \
-      "$FILELIST" >"$FILELIST.trim" && mv "$FILELIST.trim" "$FILELIST"
+      "$FILELIST" >"$FILELIST.trim" || true
+    mv "$FILELIST.trim" "$FILELIST"
   fi
   sed 's|^/||' "$FILELIST" >"$FILELIST.rel"
 
@@ -804,6 +803,22 @@ snapshot_system_state() {
   } >"$outfile"
 }
 
+# Extract loop device names from a system state snapshot file.
+# Args: $1 = snapshot file path
+# Prints sorted loop device names, one per line.
+_extract_loop_names() {
+  local file="${1:?_extract_loop_names: missing file}"
+  sed -n '/^=== LOOP DEVICES ===$/,/^===/{/^===/d;p}' "$file" \
+    | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for d in data.get("loopdevices", []):
+        print(d.get("name",""))
+except: pass
+' 2>/dev/null | sort
+}
+
 # Compare two system state snapshots and report differences.
 # Args: $1 = before snapshot, $2 = after snapshot, $3 = label (optional)
 # Returns 0 if clean (no new entries), 1 if leftovers detected.
@@ -821,24 +836,8 @@ compare_system_state() {
 
   # Extract loop device names from JSON section
   local loops_before loops_after
-  loops_before="$(sed -n '/^=== LOOP DEVICES ===$/,/^===/{/^===/d;p}' "$before" \
-    | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    for d in data.get("loopdevices", []):
-        print(d.get("name",""))
-except: pass
-' 2>/dev/null | sort)"
-  loops_after="$(sed -n '/^=== LOOP DEVICES ===$/,/^===/{/^===/d;p}' "$after" \
-    | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    for d in data.get("loopdevices", []):
-        print(d.get("name",""))
-except: pass
-' 2>/dev/null | sort)"
+  loops_before="$(_extract_loop_names "$before")"
+  loops_after="$(_extract_loop_names "$after")"
 
   # Extract mount targets from MOUNTS section (skip header line)
   local mounts_before mounts_after
@@ -908,4 +907,29 @@ except: pass
   fi
 
   return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Pacman config helpers
+# ---------------------------------------------------------------------------
+
+# Append the standard Arch Linux official repository sections to a pacman
+# config file.  Uses the geo-redundant mirror and pacman $repo/$arch
+# variables so the resulting config is portable across architectures.
+#
+# Args: $1 = path to the pacman.conf-style file to append to
+append_arch_repos() {
+  local conf="${1:?append_arch_repos: missing config path}"
+
+  cat >>"$conf" <<'EOF'
+
+[core]
+Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+
+[extra]
+Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+
+[multilib]
+Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+EOF
 }

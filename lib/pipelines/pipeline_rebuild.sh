@@ -235,26 +235,6 @@ phase_rebuild_discover() {
     [[ " $GAMING_ITEMS " == *" skip-sigcheck "* ]] && export SKIP_SIG=1
   fi
 
-  # Set HID bundle location: prefer /home (latest), fall back to /usr
-  if [[ -d "/home/.steamos-build/bundles/hid" ]]; then
-    HID_BUNDLE_DIR="/home/.steamos-build/bundles/hid"
-  elif [[ -d "/usr/lib/steamos-build/hid" ]]; then
-    HID_BUNDLE_DIR="/usr/lib/steamos-build/hid"
-  else
-    HID_BUNDLE_DIR="/home/.driver-packages/hid"
-  fi
-
-  # Logitech HID modules are always built
-  HID_EXPECTED=1
-
-  if ((HID_EXPECTED)); then
-    [[ -d "$HID_BUNDLE_DIR" ]] \
-      || {
-        die "logitech-hid selected but HID source bundle is missing"
-        return 1
-      }
-  fi
-
   # Discover kernel package and headers URL
   discover_kernel_pkg "$NEWROOT"
   construct_hdr_url "$NEWROOT"
@@ -355,104 +335,106 @@ phase_rebuild_install() {
   install_hw_libs
   patch_record "NVIDIA driver + hardware packages" "ok"
 
-  # Add Thunderbolt support files: prefer /home (latest), fall back to /usr
+  # Add Thunderbolt support files
   local thunderbolt_dir=""
   if [[ -d "/home/.steamos-build/bundles/thunderbolt" ]]; then
     thunderbolt_dir="/home/.steamos-build/bundles/thunderbolt"
-  elif [[ -d "/usr/lib/steamos-build/thunderbolt" ]]; then
-    thunderbolt_dir="/usr/lib/steamos-build/thunderbolt"
   fi
   if [[ -n "$thunderbolt_dir" ]]; then
     log "Adding thunderbolt support"
-    _install_thunderbolt_files "$thunderbolt_dir" "$MERGED"
-    _install_thunderbolt_files "$thunderbolt_dir" "$NEWROOT"
+    if declare -F _install_thunderbolt_files >/dev/null 2>&1; then
+      _install_thunderbolt_files "$thunderbolt_dir" "$MERGED"
+      _install_thunderbolt_files "$thunderbolt_dir" "$NEWROOT"
+      patch_record "Thunderbolt support" "ok"
+    else
+      warn "_install_thunderbolt_files not defined; skipping bundle install"
+      patch_record "Thunderbolt support" "fail" "_install_thunderbolt_files not implemented"
+    fi
   fi
-  patch_record "Thunderbolt support" "ok"
 
   # Build custom kernel modules from hw-packages-build.conf
   local kernel_modules
   kernel_modules="$(get_build_items "kernel-module")"
   if [[ -n "$kernel_modules" ]]; then
     for module in $kernel_modules; do
-      case "$module" in
-        logitech-hid)
-          if ((HID_EXPECTED)); then
-            log "Building upstream Logitech receiver and HID++ modules"
-            local hid_build_host="${WORKDIR:?}/hid-kmod"
-            local hid_build_chroot="/tmp/hid-kmod"
-            rm -rf "$hid_build_host"
-            mkdir -p "$hid_build_host"
-            cp -a "$HID_BUNDLE_DIR/." "$hid_build_host/"
-            mkdir -p "$MERGED$hid_build_chroot"
-            mount --bind "$hid_build_host" "$MERGED$hid_build_chroot" \
-              || die "Failed to bind-mount hid-kmod build dir into chroot"
-            in_chroot "make -C /usr/lib/modules/$KVER/build M=$hid_build_chroot clean"
-            in_chroot "make -C /usr/lib/modules/$KVER/build M=$hid_build_chroot modules"
-            in_chroot "install -Dm644 $hid_build_chroot/hid-logitech-dj.ko /usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko"
-            in_chroot "install -Dm644 $hid_build_chroot/hid-logitech-hidpp.ko /usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko"
-            in_chroot "modinfo -F alias $hid_build_chroot/hid-logitech-dj.ko | grep -qi 'v0000046Dp0000C547'" \
-              || {
-                umount "$MERGED$hid_build_chroot" 2>/dev/null
-                die "upstream hid-logitech-dj module lacks the 046d:c547 alias"
-              }
+      local recipe_name
+      recipe_name="$(get_build_recipe "$module")" || recipe_name=""
+      local recipe_dir=""
+      if [[ -n "$recipe_name" ]]; then
+        recipe_dir="$SCRIPT_DIR/lib/configs/build_recipes/$recipe_name"
+      fi
+
+      # Check for INSTALL_CMD (direct install mode)
+      local _install_cmd=""
+      if [[ -d "$recipe_dir" ]]; then
+        _install_cmd="$(sed -n 's/^INSTALL_CMD=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
+      fi
+
+      if [[ -n "$_install_cmd" ]]; then
+        # Direct install mode (e.g., logitech-hid)
+        log "Building $module via recipe (direct install)"
+        local _install_args=""
+        _install_args="$(sed -n 's/^INSTALL_ARGS=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
+
+        # Copy recipe sources into chroot
+        mkdir -p "$MERGED/tmp/build/sources"
+        if [[ -d "$recipe_dir/sources" ]]; then
+          cp -a "$recipe_dir/sources/." "$MERGED/tmp/build/sources/"
+        fi
+
+        # Run the install script in chroot
+        local _script_name
+        _script_name="$(basename "$_install_cmd")"
+        if [[ -f "$MERGED/tmp/build/sources/$_script_name" ]]; then
+          chmod +x "$MERGED/tmp/build/sources/$_script_name"
+          if in_chroot "cd /tmp/build/sources && ./${_script_name} ${_install_args}"; then
+            log "$module built and installed via recipe"
+            # Copy built modules from overlay to target
+            if [[ -d "$MERGED/usr/lib/modules/$KVER/updates" ]]; then
+              mkdir -p "$NEWROOT/usr/lib/modules/$KVER/updates"
+              rsync -a "$MERGED/usr/lib/modules/$KVER/updates/" "$NEWROOT/usr/lib/modules/$KVER/updates/"
+            fi
             register_built_module "updates/logitech/hid-logitech-dj.ko"
             register_built_module "updates/logitech/hid-logitech-hidpp.ko"
             verify_built_modules "$MERGED" "$KVER" die
-            umount "$MERGED$hid_build_chroot" 2>/dev/null
-            rm -rf "$hid_build_host"
-            log "Built upstream Logitech modules for $KVER"
-            patch_record "Logitech HID++" "ok"
-          fi
-          ;;
-        aotofu-vaapi)
-          if apply_aotofu_vaapi_rebuild; then
-            log "AoTofu VA-API driver rebuilt successfully"
+            patch_record "$module" "ok"
           else
-            warn "FAILED: aotofu-vaapi rebuild failed"
+            warn "FAILED: $module build via recipe failed"
+            patch_record "$module" "fail"
           fi
-          ;;
-      esac
+        else
+          warn "Install script not found: $_script_name in $recipe_dir/sources/"
+          patch_record "$module" "fail"
+        fi
+      elif declare -F "apply_${module//-/_}_rebuild" >/dev/null 2>&1; then
+        # Legacy function mode (e.g., aotofu-vaapi)
+        local _fn="apply_${module//-/_}_rebuild"
+        log "Building $module via $_fn"
+        if "$_fn"; then
+          log "$module rebuilt successfully"
+          patch_record "$module" "ok"
+        else
+          warn "FAILED: $module rebuild failed"
+          patch_record "$module" "fail"
+        fi
+      else
+        warn "No recipe or rebuild function found for $module"
+        patch_record "$module" "fail"
+      fi
     done
   fi
 
   # Install flatpak packages from hw-packages-build.conf
   step "Installing flatpak packages"
-  local flatpaks
-  flatpaks="$(get_build_items "flatpak")"
-  if [[ -n "$flatpaks" ]]; then
-    for pkg in $flatpaks; do
-      local recipe_name
-      recipe_name="$(get_build_recipe "$pkg")" || recipe_name=""
-      local recipe_dir=""
-      if [[ -n "$recipe_name" ]]; then
-        recipe_dir="$SCRIPT_DIR/configs/build_recipes/$recipe_name"
-      fi
-
-      if [[ -d "$recipe_dir" ]]; then
-        local install_script="$recipe_dir/sources/install-${recipe_name}.sh"
-        if [[ -x "$install_script" ]]; then
-          log "Installing $pkg via recipe"
-          if bash "$install_script" "$NEWROOT"; then
-            patch_record "$pkg" "ok"
-          else
-            warn "FAILED: $pkg install failed"
-            patch_record "$pkg" "fail"
-          fi
-        else
-          warn "No install script found for $pkg at $install_script"
-          patch_record "$pkg" "fail"
-        fi
-      else
-        warn "No recipe found for $pkg"
-        patch_record "$pkg" "fail"
-      fi
-    done
-  fi
+  install_flatpak_packages "$NEWROOT" patch_record
 
   # Copy payload
   step "Copying reconciled payload into $PARTSET rootfs"
   copy_driver_payload "$NEWROOT" "$WORK/before.txt" "$WORK"
   patch_record "Payload copy" "ok"
+
+  # Ensure flatpak staging service is installed (idempotent)
+  ensure_flatpak_service "$NEWROOT"
 
   return 0
 }
@@ -495,14 +477,6 @@ phase_rebuild_reconcile() {
   # Propagate self-healing scripts from /home (latest) or /usr (fallback).
   local nvidia_dir
   nvidia_dir="$(resolve_nvidia_dir)" || die "Cannot find steamos-build directory"
-
-  mkdir -p "$NEWROOT/usr/lib/steamos-build"
-
-  # Copy library subdirectories (lib/, pipelines/, diagnostics/)
-  local d
-  for d in lib pipelines diagnostics; do
-    [[ -d "$nvidia_dir/$d" ]] && cp -a "$nvidia_dir/$d" "$NEWROOT/usr/lib/steamos-build/"
-  done
 
   # Persist project files to /home for later re-run
   ensure_project_persisted

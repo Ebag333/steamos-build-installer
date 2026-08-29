@@ -142,6 +142,10 @@ _validate_item() {
     hw-packages)
       _validate_hw_packages "$root"
       ;;
+    # Flatpak packages
+    flatpak)
+      _validate_flatpaks "$root"
+      ;;
     *)
       _validate_fail "$item" "unknown validation item"
       ;;
@@ -171,6 +175,9 @@ _validate_all() {
 
   # Hardware packages
   _validate_hw_packages "$root"
+
+  # Flatpak packages
+  _validate_flatpaks "$root"
 }
 
 # ---------------------------------------------------------------------------
@@ -202,16 +209,16 @@ _validate_default_session() {
 _validate_optimization() {
   local item="$1"
   local root="$2"
+  local rc
 
-  if verify_optimization_for_item "$item" "$OPT_MODE" "$root" 2>/dev/null; then
+  verify_optimization_for_item "$item" "$OPT_MODE" "$root" 2>/dev/null
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
     _validate_pass "$item"
+  elif [[ $rc -eq 2 ]]; then
+    _validate_skip "$item" "verify not supported"
   else
-    local rc=$?
-    if [[ $rc -eq 2 ]]; then
-      _validate_skip "$item" "verify not supported"
-    else
-      _validate_fail "$item"
-    fi
+    _validate_fail "$item"
   fi
 }
 
@@ -245,6 +252,53 @@ _validate_hw_packages() {
   else
     _validate_fail "hw-packages"
   fi
+}
+
+_validate_flatpaks() {
+  local root="$1"
+  local flatpaks
+  flatpaks="$(get_build_items "flatpak")"
+
+  if [[ -z "$flatpaks" ]]; then
+    _validate_skip "flatpak" "no flatpaks configured"
+    return
+  fi
+
+  local pkg recipe_name recipe_dir app_id
+  for pkg in $flatpaks; do
+    recipe_name="$(get_build_recipe "$pkg")" || recipe_name=""
+    if [[ -z "$recipe_name" ]]; then
+      _validate_fail "flatpak/$pkg" "no recipe found"
+      continue
+    fi
+
+    recipe_dir="$SCRIPT_DIR/lib/configs/build_recipes/$recipe_name"
+    if [[ ! -d "$recipe_dir" ]]; then
+      _validate_fail "flatpak/$pkg" "recipe directory missing"
+      continue
+    fi
+
+    app_id="$(sed -n 's/^FLATPAK_APP_ID=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"')"
+    if [[ -z "$app_id" ]]; then
+      _validate_fail "flatpak/$pkg" "no FLATPAK_APP_ID in recipe"
+      continue
+    fi
+
+    if [[ "$OPT_MODE" == "live" ]]; then
+      if flatpak info "$app_id" &>/dev/null; then
+        _validate_pass "flatpak/$pkg ($app_id)"
+      else
+        _validate_fail "flatpak/$pkg" "$app_id not installed"
+      fi
+    else
+      local staged="$root/usr/share/steamos-build/flatpaks"
+      if [[ -d "$staged" && -n "$(ls "$staged"/*.flatpak 2>/dev/null)" ]]; then
+        _validate_pass "flatpak/$pkg (staged)"
+      else
+        _validate_fail "flatpak/$pkg" "no staged flatpak bundles in $staged"
+      fi
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------

@@ -108,6 +108,7 @@ _build_resolve_dep() {
 _build_cleanup_build_root=""
 _build_cleanup_keep_failed=0
 _build_parent_exit_trap=""
+_build_parent_exit_code=""
 _build_exit_cleanup() {
   if ((_build_cleanup_keep_failed)) && [[ -n "$_build_cleanup_build_root" && -d "$_build_cleanup_build_root" ]]; then
     warn "Build failed — preserving build root: $_build_cleanup_build_root"
@@ -120,9 +121,10 @@ _build_exit_cleanup() {
       }
     fi
   fi
-  # Restore parent trap if it was saved
-  if [[ -n "$_build_parent_exit_trap" ]]; then
-    eval "$_build_parent_exit_trap"
+  # Execute parent exit code directly (we're inside the EXIT handler,
+  # so re-registering the trap via eval would not execute it)
+  if [[ -n "$_build_parent_exit_code" ]]; then
+    eval "$_build_parent_exit_code"
   fi
 }
 
@@ -229,6 +231,13 @@ build_recipe() {
   _build_cleanup_build_root="$build_root"
   _build_cleanup_keep_failed="$keep_failed"
   _build_parent_exit_trap="$(trap -p EXIT)" || true
+  _build_parent_exit_code=""
+  if [[ -n "$_build_parent_exit_trap" ]]; then
+    _build_parent_exit_code="$_build_parent_exit_trap"
+    _build_parent_exit_code="${_build_parent_exit_code#trap -- \'}"
+    _build_parent_exit_code="${_build_parent_exit_code#trap \'}"
+    _build_parent_exit_code="${_build_parent_exit_code%\' EXIT}"
+  fi
   trap _build_exit_cleanup EXIT
 
   # Sync build root with profile
@@ -719,38 +728,8 @@ _build_verify_artifact() {
 
 # Generate a pacman.conf for a build profile.
 _build_generate_pacman_conf() {
-  local root="${1:?}"
-  local output="${2:?}"
-
-  # Read DBPath from the target's config
-  local dbpath
-  dbpath="$(sed -n 's/^[[:space:]]*DBPath[[:space:]]*=//p' "$root/etc/pacman.conf" 2>/dev/null | head -1 | tr -d ' ')"
-  [[ -n "$dbpath" ]] || dbpath="/var/lib/pacman"
-
-  # Start with options
-  {
-    printf '[options]\n'
-    printf 'SigLevel = Never\n'
-    printf 'Architecture = %s\n' "${PROFILE_ARCH:-x86_64}"
-    printf 'DBPath = %s\n' "$dbpath"
-    printf '\n'
-  } >"$output"
-
-  # Append repo sections from the target's config (skip [options])
-  sed -n '/^\[/,$p' "$root/etc/pacman.conf" 2>/dev/null | sed '/^\[options\]/,/^$/d' >>"$output"
-
-  # Append Arch repos as build-tool fallback
-  cat >>"$output" <<'EOF'
-
-[core]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-
-[extra]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-
-[multilib]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-EOF
+  source "${BASH_SOURCE[0]%/*}/repository.sh"
+  repo_generate_config "$1" "$2" 1
 }
 
 # Generate a makepkg.conf for a build profile.
@@ -821,7 +800,7 @@ _build_record_package_versions() {
   # Add recipe-specific ABI-critical packages if provided
   if [[ -n "$recipe_conf" && -f "$recipe_conf" ]]; then
     local extra_str
-    extra_str="$(sed -n '/^ABI_CRITICAL_PKGS=(/,/^)/{/^ABI_CRITICAL_PKGS=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
+    extra_str="$(sed -n '/^ABI_CRITICAL_PKGS=(/,/)/{s/^ABI_CRITICAL_PKGS=(//;s/)[[:space:]]*$//;/^[[:space:]]*$/d;p}' "$recipe_conf" 2>/dev/null)"
     if [[ -n "$extra_str" ]]; then
       local -a extra_pkgs
       eval "extra_pkgs=($extra_str)"

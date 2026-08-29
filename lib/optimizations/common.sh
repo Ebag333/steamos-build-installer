@@ -244,7 +244,7 @@ enable_service() {
     # For chroot, create the symlink manually
     local wants_dir="${root}/etc/systemd/system/multi-user.target.wants"
     mkdir -p "$wants_dir"
-    create_symlink "/usr/lib/systemd/system/$service" "$wants_dir/$service"
+    create_symlink "/usr/lib/systemd/system/$service" "/etc/systemd/system/multi-user.target.wants/$service"
   fi
 }
 
@@ -313,6 +313,11 @@ install_boot_framework() {
 
   if ! enable_service "steam-perf.service"; then
     warn "Failed to enable steam-perf.service (non-fatal)"
+  fi
+
+  # Live mode: reload systemd
+  if is_live; then
+    systemctl daemon-reload 2>/dev/null || true
   fi
 
   return 0

@@ -51,7 +51,7 @@ _build_devtools_create_root() {
   local mkarchroot_output=""
   mkarchroot_output="$(mkarchroot \
     -C "$pacman_conf" \
-    -M "$PROFILE_MAKEPKG" \
+    ${PROFILE_MAKEPKG:+-M "$PROFILE_MAKEPKG"} \
     "$build_dir/root" \
     base base-devel 2>&1)" || {
     warn "mkarchroot failed:"
@@ -86,10 +86,11 @@ _build_devtools_sync_root() {
   log "  Syncing build root"
 
   # Update the root
-  arch-nspawn -C "$pacman_conf" "$root" pacman -Syu --noconfirm 2>&1 | tail -5 || {
+  arch-nspawn -C "$pacman_conf" "$root" pacman -Syu --noconfirm 2>&1 | tail -5
+  if [[ "${PIPESTATUS[0]}" -ne 0 ]]; then
     warn "Failed to sync build root"
     return 1
-  }
+  fi
 
   return 0
 }

@@ -160,7 +160,6 @@ If `scx_lavd` is not installed, the `scx-scheds` package may not have been in th
 
 | Path | Contents |
 |---|---|
-| `/var/log/steamos-build-post-install.log` | Post-install configuration utility log |
 | `/usr/lib/steamos-build/build.conf` | Build manifest (flags, driver version, kernel version, timestamp) |
 
 ### Installed system — boot logs (USB collector)

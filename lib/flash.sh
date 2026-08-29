@@ -83,6 +83,7 @@ flash_is_system_disk() {
 flash_preflight() {
   local img="$1" target="$2"
   local checks_passed=0 checks_failed=0
+  local _saved_opts="$-"
   set +e # diagnostic function — don't die on individual command failures
 
   IMG_BYTES="$(stat -c '%s' "$img")"
@@ -373,9 +374,11 @@ flash_preflight() {
   if ((checks_failed > 0)); then
     echo ""
     echo "Flash aborted."
+    [[ "$_saved_opts" == *e* ]] && set -e
     return 1
   fi
 
+  [[ "$_saved_opts" == *e* ]] && set -e
   return 0
 }
 

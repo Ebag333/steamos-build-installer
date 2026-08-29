@@ -25,7 +25,6 @@ lib/
 ├── finalize.sh                # Sanity checks, cleanup, publish image
 ├── flash.sh                   # USB flash: device scanning, dd write, verification
 ├── flashless.sh               # Flashless install to inactive A/B slot
-├── post-install.sh            # Post-install configuration utility
 ├── scan-hardware.sh           # PCI hardware scanning for diagnostics
 ├── check-deps.sh              # Host dependency checker/installer
 ├── pci-discovery.sh           # PCI device discovery for initramfs module selection

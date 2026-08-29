@@ -69,7 +69,13 @@ steamos_get_kernel_version() {
     echo "$kernel_pkg"
   else
     # Fallback: look for installed kernel
-    find "$root/usr/lib/modules" -maxdepth 1 -type d -name '6.*' 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "unknown"
+    local moddir
+    moddir="$(find "$root/usr/lib/modules" -maxdepth 1 -type d -name '6.*' 2>/dev/null | head -1)"
+    if [[ -n "$moddir" ]]; then
+      basename "$moddir"
+    else
+      echo "unknown"
+    fi
   fi
 }
 

@@ -39,6 +39,15 @@ classify_driver() {
   echo "normal"
 }
 
+# Parse a single `lspci -nn` line into: dev, vendor_device, desc, driver.
+parse_lspci_line() {
+  local line="$1"
+  dev=$(echo "$line" | cut -d' ' -f1)
+  vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
+  desc=$(echo "$line" | sed 's/^[^ ]* //; s/\[[0-9a-f]\{4\}:[0-9a-f]\{4\}\]//g; s/(rev [^)]*)//; s/  */ /g; s/ *$//')
+  driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
+}
+
 # ---- header ----
 echo -e "${CYAN}=== Hardware Driver Scan ===${NC}"
 echo ""
@@ -50,16 +59,7 @@ unclaimed=0
 critical_missing=0
 
 while IFS="" read -r line; do
-  # Parse lspci -nn output:
-  # "00:1f.0 ISA bridge [0601]: Intel Corporation Device [8086:7e02] (rev 20)"
-  dev=$(echo "$line" | cut -d' ' -f1)
-
-  # Extract vendor:device ID (last [...] pair)
-  vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
-
-  # Extract description: everything between the class code and vendor_device
-  # Strip: class code [xxxx], (rev ...), trailing whitespace
-  desc=$(echo "$line" | sed 's/^[^ ]* //; s/\[[0-9a-f]\{4\}:[0-9a-f]\{4\}\]//g; s/(rev [^)]*)//; s/  */ /g; s/ *$//')
+  parse_lspci_line "$line"
 
   # Get device class
   class_code=$(cat "/sys/bus/pci/devices/0000:${dev}/class" 2>/dev/null || echo "0x000000")
@@ -76,9 +76,6 @@ while IFS="" read -r line; do
     0x0604) class="PCI" ;;
     *) class="OTHER" ;;
   esac
-
-  # Get driver
-  driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
 
   # Classify
   if [[ -n "$driver" ]]; then
@@ -146,10 +143,7 @@ done
 echo ""
 echo -e "${CYAN}=== Claimed critical devices ===${NC}"
 while IFS="" read -r line; do
-  dev=$(echo "$line" | cut -d' ' -f1)
-  vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
-  desc=$(echo "$line" | sed 's/^[^ ]* //; s/\[[0-9a-f]\{4\}:[0-9a-f]\{4\}\]//g; s/(rev [^)]*)//; s/  */ /g; s/ *$//')
-  driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
+  parse_lspci_line "$line"
   [[ -z "$driver" ]] && continue
   priority=$(classify_driver "$driver")
   [[ "$priority" == "CRITICAL" ]] || continue
@@ -161,10 +155,7 @@ if [[ $unclaimed -gt 0 ]]; then
   echo ""
   echo -e "${CYAN}=== Unclaimed devices with available modules ===${NC}"
   while IFS="" read -r line; do
-    dev=$(echo "$line" | cut -d' ' -f1)
-    vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
-    desc=$(echo "$line" | sed 's/^[^ ]* //; s/\[[0-9a-f]\{4\}:[0-9a-f]\{4\}\]//g; s/(rev [^)]*)//; s/  */ /g; s/ *$//')
-    driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
+    parse_lspci_line "$line"
     [[ -n "$driver" ]] && continue
 
     if [[ -n "$vendor_device" ]]; then
@@ -182,8 +173,7 @@ if [[ $unclaimed -gt 0 ]]; then
   echo ""
   echo -e "${CYAN}=== Unclaimed device details ===${NC}"
   while IFS="" read -r line; do
-    dev=$(echo "$line" | cut -d' ' -f1)
-    driver=$(lspci -k -s "$dev" 2>/dev/null | grep "Kernel driver in use" | awk '{print $NF}' || true)
+    parse_lspci_line "$line"
     [[ -n "$driver" ]] && continue
     echo ""
     lspci -nnk -s "$dev" 2>/dev/null | sed 's/^/  /'

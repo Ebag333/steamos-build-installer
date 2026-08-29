@@ -24,10 +24,13 @@ build_aotofu_with_framework() {
   # Step 2: Build the recipe
   log "Building AoTofu VA-API driver"
   build_recipe \
-    --recipe "$SCRIPT_DIR/configs/build_recipes/aotofu-vaapi" \
+    --recipe "$SCRIPT_DIR/lib/configs/build_recipes/aotofu-vaapi" \
     --profile "$PROFILE_DIR" \
     --output "$workdir/packages" \
-    --keep-failed
+    --keep-failed || {
+    warn "AoTofu build failed — check $workdir/packages for details"
+    return 1
+  }
 
   # Step 3: Install the artifact
   log "Installing AoTofu into target"
