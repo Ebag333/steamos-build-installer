@@ -17,12 +17,13 @@ fi
 OPTIMIZATIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source common utilities
+# shellcheck source=lib/optimizations/common.sh
 source "$OPTIMIZATIONS_DIR/common.sh"
 
 # Source all optimization modules
 for _opt_module in video cpu-performance system pci-hardware build-tools oobe; do
   if [[ -r "$OPTIMIZATIONS_DIR/$_opt_module.sh" ]]; then
-    # shellcheck source=video.sh
+    # shellcheck disable=SC1090
     source "$OPTIMIZATIONS_DIR/$_opt_module.sh"
   else
     warn "Missing optimization module: $_opt_module.sh"

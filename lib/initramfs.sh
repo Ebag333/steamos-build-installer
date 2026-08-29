@@ -375,6 +375,7 @@ reconcile_initramfs() {
     effective_etc=1
   fi
 
+  # shellcheck disable=SC2317  # trap handler — invoked via `trap ... ERR` below
   _reconcile_initramfs_cleanup() {
     set +e
     if ((effective_etc)); then unmount_effective_etc "$root" 2>/dev/null; fi

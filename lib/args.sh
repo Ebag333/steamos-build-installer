@@ -26,31 +26,37 @@ fi
 parse_common_arg() {
   case "$1" in
     --action)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
       ACTION="${2:?--action requires a value}"
       _ARG_SHIFT=2
       return 0
       ;;
     --image)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh, lib/setup.sh, lib/pipelines/
       IMG="${2:?--image requires a value}"
       _ARG_SHIFT=2
       return 0
       ;;
     --device)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
       TARGET_DEV="${2:?--device requires a value}"
       _ARG_SHIFT=2
       return 0
       ;;
     --config)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh, lib/pipelines/
       CONFIG_FILE="${2:?--config requires a value}"
       _ARG_SHIFT=2
       return 0
       ;;
     --output-dir)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
       OUTPUT_DIR="${2:?--output-dir requires a value}"
       _ARG_SHIFT=2
       return 0
       ;;
     --allow-system-disk)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
       ALLOW_SYSTEM_DISK=1
       _ARG_SHIFT=1
       return 0

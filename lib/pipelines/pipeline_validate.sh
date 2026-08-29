@@ -84,6 +84,7 @@ phase_validate_discover() {
     source "$VALIDATE_CONFIG"
   elif [[ -f "/home/.steamos-build/build.conf" ]]; then
     log "Loading persisted config: /home/.steamos-build/build.conf"
+    # shellcheck disable=SC1091
     source "/home/.steamos-build/build.conf"
   else
     log "No config found — will validate system state only"

@@ -85,19 +85,22 @@ _apply_neutralize_oobe() {
   local jupiter="${root}/usr/bin/steam-jupiter"
 
   if [[ ! -f "$jupiter" ]]; then
-    warn "steam-jupiter not found at ${jupiter#${root}} — cannot neutralize OOBE data wipe"
+    warn "steam-jupiter not found at ${jupiter#"${root}"} — cannot neutralize OOBE data wipe"
     return 1
   fi
 
   log "Patching steam-jupiter to remove OOBE data wipe"
 
   # Handle both argument orderings seen across SteamOS versions
+  # shellcheck disable=SC2016
   sed -i 's/rm -rf --one-file-system "\$STEAM_DIR" "\$STEAM_LINKS"/: # neutralized by steamos-build-installer/' "$jupiter"
+  # shellcheck disable=SC2016
   sed -i 's/rm -rf --one-file-system "\$STEAM_LINKS" "\$STEAM_DIR"/: # neutralized by steamos-build-installer/' "$jupiter"
 
   # Fail closed: if the destructive line survived (whitespace change,
   # restructure), return failure rather than shipping a silently
   # unpatched image.
+  # shellcheck disable=SC2016
   if grep -Eq 'rm -rf --one-file-system "\$STEAM_(DIR|LINKS)" "\$STEAM_(DIR|LINKS)"' "$jupiter"; then
     warn "Failed to neutralize destructive OOBE Steam reset in steam-jupiter"
     return 1
@@ -127,6 +130,7 @@ _verify_neutralize_oobe() {
     return 1
   fi
 
+  # shellcheck disable=SC2016
   if grep -Eq 'rm -rf --one-file-system "\$STEAM_(DIR|LINKS)" "\$STEAM_(DIR|LINKS)"' "$jupiter"; then
     return 1
   fi

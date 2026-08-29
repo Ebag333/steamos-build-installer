@@ -766,7 +766,7 @@ prepare_image_rootfs_size() {
 
   # Find rootfs-A by GPT partition name.
   local root_partnum root_start root_size_sectors root_partuuid
-  local root_type_guid root_fs_uuid root_partlabel
+  local root_type_guid root_fs_uuid
   local part
   for part in "$LOOPDEV"p*; do
     [[ -b "$part" ]] || continue
@@ -774,7 +774,6 @@ prepare_image_rootfs_size() {
     sgdisk_partition_info "$pnum" "$LOOPDEV"
     if [[ "$SGDINFO_NAME" == "rootfs-A" ]]; then
       root_partnum="$pnum"
-      root_partlabel="$SGDINFO_NAME"
       root_start="$SGDINFO_START"
       root_size_sectors="$SGDINFO_SIZE"
       root_type_guid="$SGDINFO_TYPE_GUID"

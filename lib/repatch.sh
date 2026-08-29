@@ -30,10 +30,14 @@ fi
 
 # Use the shared common.sh logging/failure framework with repatch-specific
 # presentation and diagnostics.
+# shellcheck disable=SC2034 # read by sourced common.sh
 LOG_TAG="repatch"
+# shellcheck disable=SC2034 # read by sourced common.sh
 LOGGER_TAG="steamos-build-repatch"
+# shellcheck disable=SC2034 # read by sourced common.sh
 LOG_COLOR=0
 CURRENT_STEP="startup"
+# shellcheck disable=SC2034 # read by sourced common.sh
 FAILURE_REPORTED=0
 
 # May not exist yet if failure happens very early.
@@ -161,6 +165,7 @@ if [[ ! -r "$SCRIPT_DIR/common.sh" ]]; then
   echo "[repatch] ERROR: missing helper: $SCRIPT_DIR/common.sh" >&2
   exit 1
 fi
+# shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/common.sh"
 
 # Ensure the full .steamos-build tree exists (logs already created above;
@@ -170,11 +175,13 @@ ensure_steamos_build_dirs
 # Source library loader, pipeline, and workflow common functions
 [[ -r "$SCRIPT_DIR/library-loader.sh" ]] \
   || die "missing library loader: $SCRIPT_DIR/library-loader.sh"
+# shellcheck source=lib/library-loader.sh
 source "$SCRIPT_DIR/library-loader.sh"
 
 # Source pipeline definition
 [[ -r "$SCRIPT_DIR/pipelines/pipeline_rebuild.sh" ]] \
   || die "missing rebuild pipeline: $SCRIPT_DIR/pipelines/pipeline_rebuild.sh"
+# shellcheck source=lib/pipelines/pipeline_rebuild.sh
 source "$SCRIPT_DIR/pipelines/pipeline_rebuild.sh"
 
 # Load all repatch workflow libraries
@@ -189,6 +196,7 @@ declare -a PATCH_RESULTS=()
 
 # patch_record NAME STATUS [DETAIL]
 #   STATUS is "ok" or "fail".
+# shellcheck disable=SC2317  # called from sourced pipeline_rebuild.sh
 patch_record() {
   local name="$1" status="$2" detail="${3:-}"
   PATCH_RESULTS+=("$name|$status|$detail")
@@ -196,8 +204,6 @@ patch_record() {
     warn "Optional patch failed: $name — $detail"
   fi
 }
-
-REPATCH_EXIT=0
 
 PARTSET="${1:-other}"
 
@@ -220,15 +226,20 @@ fi
 
 log "Repatch target: partset=$PARTSET booted=${_booted:-unknown} target=${_target_slot:-unknown}"
 
+# shellcheck disable=SC2034 # read by sourced pipeline_rebuild.sh
 ROOTDEV="/dev/disk/by-partsets/$PARTSET/rootfs"
+# shellcheck disable=SC2034 # read by sourced pipeline_rebuild.sh
 EFIDEV="/dev/disk/by-partsets/$PARTSET/efi"
 
 NEWROOT="$(mktemp -d /tmp/repatch-root.XXXXXX)"
 # SteamOS /home is ext4 with casefold enabled, which OverlayFS rejects as an
 # upperdir.  Build inside a temporary plain-ext4 loopback filesystem stored on
 # /home, where there is enough space for DKMS/toolchain work.
+# shellcheck disable=SC2034 # read by sourced pipeline_rebuild.sh
 WORKIMG=/home/.steamos-build-work.img
+# shellcheck disable=SC2034 # read by sourced pipeline_rebuild.sh
 WORK="$(mktemp -d /tmp/repatch-work.XXXXXX)"
+# shellcheck disable=SC2034 # read by sourced pipeline_rebuild.sh
 WORK_LOOPDEV=""
 
 # ── Register and run pipeline ────────────────────────────────────────────────

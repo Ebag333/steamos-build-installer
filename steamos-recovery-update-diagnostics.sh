@@ -83,6 +83,7 @@ fi
 # 1. Basic system / recovery image identity
 ###############################################################################
 
+# shellcheck disable=SC2016 # $vars expand inside the inner bash -lc, not here
 run_sh system_identity '
 echo "=== DATE ==="
 date -Ins
@@ -178,6 +179,7 @@ echo "=== /proc/mounts ==="
 cat /proc/mounts
 '
 
+# shellcheck disable=SC2016 # $d expands inside the inner bash -lc, not here
 sudo_sh partition_tables '
 for d in /dev/sd? /dev/nvme?n1 /dev/mmcblk?; do
   [[ -b "$d" ]] || continue
@@ -256,6 +258,7 @@ ip6tables-save 2>&1 || true
 # 5. Steam / Valve hostname resolution and HTTPS tests
 ###############################################################################
 
+# shellcheck disable=SC2016 # $h expands inside the inner bash -lc, not here
 run_sh dns_tests '
 for h in \
   steamdeck-images.steamos.cloud \
@@ -269,6 +272,7 @@ do
 done
 '
 
+# shellcheck disable=SC2016 # $url expands inside the inner bash -lc, not here
 run_sh https_tests '
 for url in \
   https://steamdeck-images.steamos.cloud/ \
@@ -324,6 +328,7 @@ systemctl list-unit-files --no-pager 2>&1 | \
 # 7. Discover the actual recovery/update launchers and scripts
 ###############################################################################
 
+# shellcheck disable=SC2016 # $c expands inside the inner bash -lc, not here
 run_sh updater_commands '
 for c in \
   steamos-update \
@@ -341,6 +346,7 @@ do
 done
 '
 
+# shellcheck disable=SC2016 # $root expands inside the inner bash -lc, not here
 sudo_sh updater_file_discovery '
 roots=(/usr/bin /usr/sbin /usr/lib /usr/libexec /usr/share/applications /etc/systemd /usr/lib/systemd /home/deck/Desktop /home/deck/.local/share/applications)
 for root in "${roots[@]}"; do
@@ -354,6 +360,7 @@ for root in "${roots[@]}"; do
 done
 '
 
+# shellcheck disable=SC2016 # $root/$f expand inside the inner bash -lc, not here
 sudo_sh desktop_launchers '
 for root in /home/deck/Desktop /usr/share/applications /home/deck/.local/share/applications; do
   [[ -d "$root" ]] || continue

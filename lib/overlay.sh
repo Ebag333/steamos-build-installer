@@ -146,6 +146,7 @@ setup_overlay_chroot() {
     "$source_fp" "$root_uuid" "$KVER" \
     "${KPKG_NAME:-unknown}" "${KPKG_VERREL:-unknown}"
 
+  # shellcheck disable=SC2153  # WORKDIR is set in lib/backend.sh
   overlay_mount_with_image "$MNT" "$WORKDIR" "$MNT" "8G" "$cache_key"
 
   if [[ $SKIP_SIG -eq 0 ]]; then
@@ -807,7 +808,7 @@ for dev in data.get("loopdevices", []):
 
   [[ -n "$matches" ]] || return 0
 
-  local line loop backing
+  local loop backing
   while IFS=$'\t' read -r loop backing; do
     [[ -n "$loop" ]] || continue
     warn "Cleaning stale build loop from previous run: $loop ($backing)"

@@ -133,6 +133,7 @@ _hw_read_manifest() {
   local line rc pkg version desc target
   local -a _pkgs=() _targets=() _descs=()
 
+  # shellcheck disable=SC2094  # $conf is only read, never written
   while IFS="" read -r line; do
     rc=0
     _parse_hw_manifest_line "$line" || rc=$?
@@ -577,6 +578,7 @@ _install_arch_hw_manifest() {
     log "NVIDIA local DB entries:"
     _run_in_root "ls -ld /usr/lib/holo/pacmandb/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true"
     # Check for damaged records (missing desc files).
+    # shellcheck disable=SC2016 # Variables expand inside the chroot, not here.
     _run_in_root '
       bad=0
       for d in /usr/lib/holo/pacmandb/local/*; do
@@ -688,6 +690,7 @@ install_hw_libs() {
   # explicit recovery attempt and then enforce the invariant before returning.
   if ((HW_NVIDIA_REQUESTED)); then
     if _is_install_chroot; then
+      # shellcheck disable=SC2153  # KVER is set by detect_kernel_version in common_modules.sh
       if ! nvidia_module_exists "$MERGED" "$KVER"; then
         log "DKMS hook did not build NVIDIA for $KVER — forcing"
         _run_in_root "dkms autoinstall -k '$KVER'"

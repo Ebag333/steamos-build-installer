@@ -618,22 +618,22 @@ flash_write() {
   fi
 
   local home_part=""
-  local expected_parts=0 found_parts=0
+  local expected_count=0 found_count=0
   local part
   for part in "${target}"*; do
     [[ -b "$part" ]] || continue
-    expected_parts=$((expected_parts + 1))
+    expected_count=$((expected_count + 1))
     local pname
     pname="$(blkid -s PARTLABEL -o value "$part" 2>/dev/null || true)"
     if [[ -n "$pname" ]]; then
-      found_parts=$((found_parts + 1))
+      found_count=$((found_count + 1))
     fi
     case "$pname" in
       home) home_part="$part" ;;
     esac
   done
 
-  if ((expected_parts > 0 && found_parts == 0)); then
+  if ((expected_count > 0 && found_count == 0)); then
     echo "  ✗ No partition labels found — kernel may not have re-read the table"
     echo "    Try: partx -u $target"
     return 1

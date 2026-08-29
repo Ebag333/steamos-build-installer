@@ -247,7 +247,7 @@ _apply_live_logitech_hid() {
   chmod +x "$build_dir/$_script_name"
 
   # Run the build script
-  if bash "$build_dir/$_script_name" $_install_args; then
+  if bash "$build_dir/$_script_name" "$_install_args"; then
     log "Logitech HID modules built and installed"
     rm -rf "$build_dir"
     return 0

@@ -28,6 +28,7 @@ _BUILD_OVERLAY_LOADED=1
 # Prints: path to build root directory (to stdout)
 _build_overlay_create_root() {
   local name="${1:?}"
+  # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
   local profile="${2:?}"
 
   local build_dir="${WORKDIR:-/tmp}/build-roots/$name-$$"
@@ -398,7 +399,8 @@ _build_overlay_inject_sources() {
         _build_overlay_rename_source_dir "$extract_dir" "$source_dir" "$recipe_conf"
       elif [[ "$source_type" == "tarball" ]]; then
         # Download and extract tarball
-        local tarball="/tmp/source-$$-$(basename "$source_url")"
+        local tarball
+        tarball="/tmp/source-$$-$(basename "$source_url")"
         if curl -sL "$source_url" -o "$tarball" 2>&1; then
           # Verify source integrity if SHA256 is provided
           local expected_sha256=""
@@ -557,6 +559,17 @@ _build_overlay_diagnostics() {
         printf '[OK]      %s\n' "$file"
       else
         printf '[MISSING] %s\n' "$file"
+      fi
+    done
+    echo ""
+
+    echo "===== GENERIC BUILD TOOLS ====="
+    local bt_pkg
+    for bt_pkg in "${generic_build_tools[@]}"; do
+      if chroot "$root" pacman -Q "$bt_pkg" >/dev/null 2>&1; then
+        printf '[OK]      %s %s\n' "$bt_pkg" "$(chroot "$root" pacman -Q "$bt_pkg" 2>/dev/null)"
+      else
+        printf '[MISSING] %s\n' "$bt_pkg"
       fi
     done
     echo ""
@@ -747,13 +760,14 @@ _build_overlay_install_deps() {
   else
     # Package build mode: extract deps from PKGBUILD
     if [[ -f "$root/tmp/build/PKGBUILD" ]]; then
+      # shellcheck disable=SC2016 # Single quotes intentional: ${makedepends[@]} and ${depends[@]} must expand inside the chroot, not the outer shell.
       deps="$(chroot "$root" /bin/bash -c 'cd /tmp/build && source PKGBUILD 2>/dev/null && echo "${makedepends[@]} ${depends[@]}"' 2>/dev/null || true)"
     fi
   fi
 
   if [[ -n "$deps" ]]; then
     log "  Installing recipe dependencies: $deps"
-    chroot "$root" pacman -S --noconfirm $deps 2>&1 | tail -5 || true
+    chroot "$root" pacman -S --noconfirm "$deps" 2>&1 | tail -5 || true
   fi
 }
 

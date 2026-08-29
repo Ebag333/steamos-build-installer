@@ -220,6 +220,7 @@ phase_rebuild_discover() {
 
   # Load persisted build selections from user's config
   if [[ -r /home/.steamos-build/build.conf ]]; then
+    # shellcheck disable=SC1091
     source /home/.steamos-build/build.conf
   else
     die "Build config not found at /home/.steamos-build/build.conf"
@@ -290,6 +291,7 @@ phase_rebuild_overlay() {
   overlay_mount "$NEWROOT" "$WORK" "$WORK/merged"
 
   # Set up shared build helpers
+  # shellcheck disable=SC2034 # MNT is read by functions in common_drivers.sh, grub.sh, finalize.sh, overlay.sh, etc.
   MNT="$NEWROOT"
   WORKDIR="$WORK"
 
@@ -456,7 +458,6 @@ phase_rebuild_configure() {
         patch_record "$_item" "ok"
       else
         patch_record "$_item" "fail"
-        REPATCH_EXIT=10
       fi
     done
   fi
@@ -466,7 +467,6 @@ phase_rebuild_configure() {
     patch_record "nvidia-power" "ok"
   else
     patch_record "nvidia-power" "fail" "could not enable nvidia power services"
-    REPATCH_EXIT=10
   fi
 
   return 0
@@ -475,9 +475,6 @@ phase_rebuild_configure() {
 # Phase: Reconcile and verify
 phase_rebuild_reconcile() {
   # Propagate self-healing scripts from /home (latest) or /usr (fallback).
-  local nvidia_dir
-  nvidia_dir="$(resolve_nvidia_dir)" || die "Cannot find steamos-build directory"
-
   # Persist project files to /home for later re-run
   ensure_project_persisted
 
@@ -501,7 +498,7 @@ phase_rebuild_reconcile() {
 
   # Reconcile GRUB
   step "Reconciling GRUB configuration"
-  reconcile_grub "$NEWROOT"
+  reconcile_grub "$NEWROOT" "$EFIDEV" "$PARTSET"
 
   return 0
 }

@@ -19,6 +19,7 @@ fi
 CUSTOMIZATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source optimization entry point
+# shellcheck disable=SC1091
 source "$CUSTOMIZATION_DIR/optimizations/entry.sh"
 
 # ---------------------------------------------------------------------------
@@ -77,6 +78,7 @@ get_build_items() {
   fi
 
   local type name version default desc recipe
+  # shellcheck disable=SC2034 # desc skipped positionally so recipe lands in the correct variable
   while IFS='|' read -r type name version default desc recipe; do
     [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
     [[ -n "$type_filter" && "$type" != "$type_filter" ]] && continue
@@ -109,6 +111,7 @@ get_build_recipe() {
   fi
 
   local type name version default desc recipe
+  # shellcheck disable=SC2034 # desc skipped positionally so recipe lands in the correct variable
   while IFS='|' read -r type name version default desc recipe; do
     [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
     if [[ "$name" == "$item_name" ]]; then
@@ -137,6 +140,7 @@ get_build_item_version() {
   fi
 
   local type name version default desc recipe
+  # shellcheck disable=SC2034 # desc skipped positionally so recipe lands in the correct variable
   while IFS='|' read -r type name version default desc recipe; do
     [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
     if [[ "$name" == "$item_name" ]]; then

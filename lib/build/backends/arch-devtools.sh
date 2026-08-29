@@ -23,6 +23,7 @@ _BUILD_DEVTOOLS_LOADED=1
 # Prints: path to build root directory
 _build_devtools_create_root() {
   local name="${1:?}"
+  # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
   local profile="${2:?}"
 
   local build_dir="${WORKDIR:-/tmp}/build-roots/$name-$$"

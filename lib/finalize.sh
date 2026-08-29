@@ -365,9 +365,9 @@ finalize() {
     rm -rf "$WORKDIR"/merged
     rm -rf "$WORKDIR"/upper
     rm -rf "$WORKDIR"/ovlwork
-    rm -rf "$WORKDIR"/mnt
+    rm -rf "${WORKDIR:?}"/mnt
     rm -rf "$WORKDIR"/efi
-    rm -rf "$WORKDIR"/home
+    rm -rf "${WORKDIR:?}"/home
     rm -f "$WORKDIR"/*.building
     rm -f "$WORKDIR"/*.building.src-fingerprint
     rm -f "$WORKDIR"/pkgs-before.txt

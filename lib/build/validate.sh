@@ -224,12 +224,12 @@ run_validation_matrix() {
 
   local pass=0 fail=0
 
-  _validate_clean_build "$merged" "$workdir" && ((++pass)) || ((++fail))
-  _validate_abi_block "$merged" "$workdir" && ((++pass)) || ((++fail))
-  _validate_arch_fallback "$merged" "$workdir" && ((++pass)) || ((++fail))
-  _validate_build_failure_preserves "$merged" "$workdir" && ((++pass)) || ((++fail))
-  _validate_artifact_boundary "$merged" "$workdir" && ((++pass)) || ((++fail))
-  _validate_provenance_logging "$merged" "$workdir" && ((++pass)) || ((++fail))
+  if _validate_clean_build "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
+  if _validate_abi_block "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
+  if _validate_arch_fallback "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
+  if _validate_build_failure_preserves "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
+  if _validate_artifact_boundary "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
+  if _validate_provenance_logging "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
 
   log ""
   log "========================================"

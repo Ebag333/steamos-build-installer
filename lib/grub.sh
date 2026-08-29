@@ -466,6 +466,7 @@ reconcile_grub() {
   # ERR trap ensures teardown runs even if patching or validation calls die().
   # Uses the permissive chroot cleanup variant (lazy-unmount fallback, never
   # dies) so the trap itself cannot fail while we are already handling an error.
+  # shellcheck disable=SC2317  # Called via trap _reconcile_grub_cleanup ERR below
   _reconcile_grub_cleanup() {
     set +e
     umount_chroot_fs "$root" 2>/dev/null

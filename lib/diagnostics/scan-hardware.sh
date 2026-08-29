@@ -54,6 +54,7 @@ while IFS="" read -r line; do
 
     if [[ -n "$modules" ]]; then
       echo "  Matching module(s):"
+      # shellcheck disable=SC2001
       echo "$modules" | sed 's/^/    /'
     else
       echo "  No matching kernel module found for $vendor_device"

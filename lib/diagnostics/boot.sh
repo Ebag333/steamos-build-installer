@@ -181,7 +181,7 @@ diagnose_kernel_state() {
 
   # Check kernel package
   local kpkg_dir
-  kpkg_dir="$(ls -d "$root/usr/lib/holo/pacmandb/local/linux-neptune-"* 2>/dev/null | head -1 || true)"
+  kpkg_dir="$(find "$root/usr/lib/holo/pacmandb/local" -maxdepth 1 -name 'linux-neptune-*' -type d 2>/dev/null | head -1 || true)"
   if [[ -n "$kpkg_dir" ]]; then
     log "  kernel package: $(basename "$kpkg_dir")"
   else

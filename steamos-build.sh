@@ -847,6 +847,7 @@ _ui_parse_hw_manifest() {
   local source="$2"
   local line_num=0 line rest group pkg version default desc
 
+  # shellcheck disable=SC2094  # Read-only: $conf is only read; bad_lines is an array, not a file
   while IFS= read -r line; do
     ((++line_num))
     [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
@@ -980,7 +981,7 @@ ui_select_system_tweaks() {
   # Strip group prefix from selected items (remove "Module: " prefix)
   selected="${selected%%|*}"
   selected="${selected% }"
-  selected="$(echo "$selected" | sed 's/[A-Za-z]*: //g')"
+  selected="${selected//*: /}"
   echo "$selected"
 }
 
@@ -1185,11 +1186,13 @@ EOF
   fi
 
   # Always write all selection keys (empty if not selected)
-  echo "HW_SUPPORT_ITEMS=\"$hw_items\"" >>"$conf_file"
-  echo "GAMING_ITEMS=\"$gaming_items\"" >>"$conf_file"
-  echo "CUSTOM_DRIVERS=\"$drivers\"" >>"$conf_file"
-  echo "CUSTOM_DRIVERS_SET=1" >>"$conf_file"
-  echo "INITRAMFS_MODULES=\"$initramfs_mods\"" >>"$conf_file"
+  {
+    echo "HW_SUPPORT_ITEMS=\"$hw_items\""
+    echo "GAMING_ITEMS=\"$gaming_items\""
+    echo "CUSTOM_DRIVERS=\"$drivers\""
+    echo "CUSTOM_DRIVERS_SET=1"
+    echo "INITRAMFS_MODULES=\"$initramfs_mods\""
+  } >>"$conf_file"
 
   [[ "${add_installer^^}" != "TRUE" ]] && echo "ADD_INSTALLER=0" >>"$conf_file"
 
@@ -2237,8 +2240,8 @@ _check_persisted_sync() {
   _sync_tmp="$(mktemp /tmp/steamos-build-sync-XXXXXX.txt)"
   printf '%s' "$dialog_text" >"$_sync_tmp"
 
-  local sync_choice _sync_rc=0
-  sync_choice="$(yad --text-info \
+  local _sync_rc=0
+  yad --text-info \
     --title="Project Sync" \
     --filename="$_sync_tmp" \
     --button="Skip":1 \
@@ -2247,7 +2250,7 @@ _check_persisted_sync() {
     --width=700 \
     --height=400 \
     --wrap \
-    2>/dev/null)" || _sync_rc=$?
+    2>/dev/null || _sync_rc=$?
   rm -f "$_sync_tmp"
   if [[ $_sync_rc -ne 0 ]]; then
     return 0
@@ -2272,7 +2275,7 @@ _check_persisted_sync() {
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete "$current/lib/" "$persisted/lib/" 2>&1 || _sync_rc=$?
   else
-    rm -rf "$persisted/lib" 2>&1 || true
+    rm -rf "${persisted:?}/lib" 2>&1 || true
     cp -a "$current/lib" "$persisted/lib" 2>&1 || _sync_rc=$?
   fi
 

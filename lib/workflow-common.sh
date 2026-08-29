@@ -238,6 +238,7 @@ init_pacman_keyring() {
   log "Initializing pacman keyring ($keyring)"
 
   # Check if pacman is available
+  # shellcheck disable=SC2016 # $1 expands inside the chroot shell, not locally
   if ! chroot "$root" /bin/sh -c 'command -v "$1" >/dev/null 2>&1' sh pacman; then
     warn "pacman not available in target"
     return 1

@@ -124,16 +124,23 @@ phase_build_setup() {
 
   # Set up directory structure
   MNT="$WORKDIR/mnt"
+  # shellcheck disable=SC2034 # used by setup.sh, grub.sh, overlay.sh, finalize.sh, common.sh
   EFIMNT="$WORKDIR/efi"
   HOMEMNT="$WORKDIR/home"
+  # shellcheck disable=SC2034 # used by overlay.sh, common_drivers.sh, common.sh
   UPPER="$WORKDIR/upper"
+  # shellcheck disable=SC2034 # used by overlay.sh, common_drivers.sh, common.sh
   OVLWORK="$WORKDIR/ovlwork"
   MERGED="$WORKDIR/merged"
+  # shellcheck disable=SC2034 # used by overlay.sh, common.sh
   OVL_IMG="$WORKDIR/overlay-work.img"
+  # shellcheck disable=SC2034 # used by overlay.sh, common.sh
   OVL_MNT="$WORKDIR/overlay-mnt"
+  # shellcheck disable=SC2034 # used by overlay.sh, common.sh
   OVL_LOOPDEV=""
 
   # Persistent mount tracking — survives killed processes.
+  # shellcheck disable=SC2034 # MOUNTS_FILE used by common_system.sh track/untrack_mount helpers
   MOUNTS_FILE="$WORKDIR/mounts"
 
   # Clear stale state and create directories

@@ -287,6 +287,7 @@ install_kernel_headers() {
 install_payload() {
   log "Copying driver payload into the image rootfs"
   # shellcheck disable=SC2034
+  # shellcheck disable=SC2153 # FILELIST is set in lib/common.sh
   rsync -a --force --files-from="$FILELIST.rel" "$MERGED/" "$MNT/"
 
   # Copy kernel modules (including HID) from overlay to image

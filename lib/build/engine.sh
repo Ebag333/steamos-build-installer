@@ -171,6 +171,7 @@ build_recipe() {
   # Load recipe
   local recipe_conf="$recipe_dir/recipe.conf"
   [[ -f "$recipe_conf" ]] || die "build_recipe: recipe.conf not found in $recipe_dir"
+  # shellcheck disable=SC1090
   source "$recipe_conf"
 
   local name="${NAME:?recipe.conf must set NAME}"
@@ -205,6 +206,7 @@ build_recipe() {
   _build_load_profile "$profile"
 
   # Source repository policy and initialize from recipe
+  # shellcheck source=lib/build/repository.sh
   source "${BASH_SOURCE[0]%/*}/repository.sh"
   repo_init "$recipe_conf"
 
@@ -274,6 +276,7 @@ build_recipe() {
       return 1
     }
 
+    # shellcheck disable=SC2034 # global set for callers (pipeline_build.sh, validate.sh, etc.)
     BUILD_ARTIFACT="$artifact"
     log "Build complete: $artifact"
     log ""
@@ -532,6 +535,7 @@ PROFILE_ROOT=$root
 PROFILE_GENERATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
+  # shellcheck disable=SC2034 # global set for callers (pipeline_build.sh, validate.sh, etc.)
   PROFILE_DIR="$output_dir"
   log "Profile generated: $output_dir"
   log "  OS: ${os_id:-unknown} ${os_version:-unknown}"
@@ -548,8 +552,10 @@ _build_load_profile() {
   local profile_dir="${1:?}"
 
   if [[ -f "$profile_dir/profile.conf" ]]; then
+    # shellcheck disable=SC1091
     source "$profile_dir/profile.conf"
   elif [[ -f "$profile_dir" ]]; then
+    # shellcheck disable=SC1090
     source "$profile_dir"
   else
     die "Profile not found: $profile_dir"
@@ -718,6 +724,7 @@ _build_verify_artifact() {
   local profile="${2:?}"
 
   # Source verification module
+  # shellcheck source=lib/build/verify.sh
   source "${BASH_SOURCE[0]%/*}/verify.sh"
 
   verify_package_metadata "$pkg" || return 1
@@ -728,6 +735,7 @@ _build_verify_artifact() {
 
 # Generate a pacman.conf for a build profile.
 _build_generate_pacman_conf() {
+  # shellcheck source=lib/build/repository.sh
   source "${BASH_SOURCE[0]%/*}/repository.sh"
   repo_generate_config "$1" "$2" 1
 }

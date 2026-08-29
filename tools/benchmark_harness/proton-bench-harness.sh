@@ -172,6 +172,7 @@ OPTIONS_JSON="$RUN_DIR/launch-options.json"
 GAME_NAME=""
 
 # MangoHud default output location — we override per-case via config.
+# shellcheck disable=SC2034 # MANGOHUD_DEFAULT_LOG reserved for future use
 MANGOHUD_DEFAULT_LOG="${XDG_CONFIG_HOME:-$HOME/.config}/MangoHud"
 
 # ---------------------------------------------------------------------------
@@ -398,6 +399,7 @@ build_cases() {
   fi
 
   local count=0
+  # shellcheck disable=SC2034 # reports unused; only canon and score are consumed
   while IFS=$'\t' read -r canon score reports; do
     [[ -n "$canon" ]] || continue
     ((count++))
@@ -507,7 +509,7 @@ MANGOCONF
   if ((USE_MANGOHUD)); then
     # MangoHud writes its own filename; find the latest in our case dir.
     local mh_csv
-    mh_csv="$(ls -t "$case_dir"/*.csv 2>/dev/null | grep -v telemetry | head -1)"
+    mh_csv="$(find "$case_dir" -maxdepth 1 -name '*.csv' ! -name '*telemetry*' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
     if [[ -n "$mh_csv" && "$mh_csv" != "$telemetry" ]]; then
       mv "$mh_csv" "$mangohud_csv" 2>/dev/null || true
     fi

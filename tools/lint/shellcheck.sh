@@ -8,7 +8,7 @@
 #   tools/lint/shellcheck.sh [--repo-root DIR]
 #
 # Requirements:
-#   shellcheck must be installed (apt install shellcheck, pacman -S shellcheck, etc.)
+#   The shellcheck tool must be installed (apt install shellcheck, pacman -S shellcheck, etc.)
 #
 # Exit codes:
 #   0 — no violations
@@ -49,5 +49,5 @@ if ! command -v shellcheck &>/dev/null; then
 fi
 
 echo "Running shellcheck..."
-find "$REPO_ROOT" -name '*.sh' -print0 | xargs -0 shellcheck
+(cd "$REPO_ROOT" && find . -name '*.sh' -print0 | xargs -0 shellcheck -x)
 echo "PASS: shellcheck clean"

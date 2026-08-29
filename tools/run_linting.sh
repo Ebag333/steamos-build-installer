@@ -67,9 +67,13 @@ run_check() {
   fi
 }
 
-run_check "shellcheck"      "$LINT_DIR/shellcheck.sh"      "${root_args[@]}"
-run_check "shfmt"           "$LINT_DIR/shfmt.sh"           "${shfmt_args[@]}"
-run_check "single-source"   "$LINT_DIR/single-source.sh"   "${root_args[@]}"
+run_check "shfmt" "$LINT_DIR/shfmt.sh" "${shfmt_args[@]}"
+
+if [[ "$FIX_MODE" != true ]]; then
+  run_check "bash -n" "$LINT_DIR/bash-n.sh" "${root_args[@]}"
+  run_check "shellcheck" "$LINT_DIR/shellcheck.sh" "${root_args[@]}"
+  run_check "single-source" "$LINT_DIR/single-source.sh" "${root_args[@]}"
+fi
 
 if [[ $failed -gt 0 ]]; then
   echo "FAILED: $failed check(s) failed"
