@@ -29,10 +29,10 @@ CONFIG_FILE=""
 UPDATE_MODE="selfheal" # selfheal | hold | stock
 # shellcheck disable=SC2034  # consumed by lib/finalize.sh and lib/installer.sh
 ADD_INSTALLER=1
-HW_SUPPORT_ITEMS=""        # space-separated items: linux-firmware libfprint fprintd bolt dkms
-DEFAULT_SESSION="game"     # desktop | game
-INITRAMFS_MODULES=""       # space-separated module list; empty = stock
-GAMING_ITEMS=""            # space-separated: (all items now handled by optimization system)
+HW_SUPPORT_ITEMS=""    # space-separated items: linux-firmware libfprint fprintd bolt dkms
+DEFAULT_SESSION="game" # desktop | game
+INITRAMFS_MODULES=""   # space-separated module list; empty = stock
+GAMING_ITEMS=""        # space-separated: (all items now handled by optimization system)
 # shellcheck disable=SC2034  # consumed by lib/common_drivers.sh, lib/finalize.sh, and lib/flashless.sh
 TARGET_VARIANT="steamdeck" # steamdeck | steamdeck-oobe
 UPDATE_BRANCH="stable"     # stable | beta | preview | rc | bc | pc | main
