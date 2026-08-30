@@ -258,17 +258,3 @@ _apply_live_logitech_hid() {
   fi
 }
 
-_regenerate_initramfs() {
-  local root="$1"
-  log "Regenerating initramfs"
-
-  if [[ -x "$root/usr/bin/dracut" ]]; then
-    chroot "$root" dracut -f 2>/dev/null || warn "dracut failed"
-  elif [[ -x "$root/usr/bin/mkinitcpio" ]]; then
-    chroot "$root" mkinitcpio -P 2>/dev/null || warn "mkinitcpio failed"
-  else
-    warn "No initramfs tool found"
-  fi
-
-  return 0
-}

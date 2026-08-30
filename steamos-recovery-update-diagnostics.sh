@@ -18,7 +18,7 @@ mkdir -p "$BASE"
 
 # Preserve output even when individual commands fail.
 exec 3>&1
-log() { printf '[diag] %s\n' "$*" >&3; }
+log() { printf '[diag] %s\n' "$*" >&3; } # lint-ignore: no-shadow
 
 run() {
   local name="$1"

@@ -36,11 +36,6 @@ _hw_pkg_selected() {
 
   [[ " $HW_SUPPORT_ITEMS " == *" $pkg "* ]] && return 0
 
-  if [[ "$pkg" == linux-firmware-* &&
-    " $HW_SUPPORT_ITEMS " == *" linux-firmware "* ]]; then
-    return 0
-  fi
-
   return 1
 }
 
@@ -294,7 +289,11 @@ check_image_packages() {
     # Skip entries that don't look like package names (no spaces, no special chars)
     [[ "$pkg" =~ [[:space:]/=] ]] && continue
     local ver
-    ver="$(pacman -Q --dbpath "$dbpath" "$pkg" 2>/dev/null | awk 'NR==1 {print $2}')"
+    if info="$(pacman -Q --dbpath "$dbpath" "$pkg" 2>/dev/null)"; then
+      ver="$(awk 'NR==1 {print $2}' <<<"$info")"
+    else
+      ver=""
+    fi
     [[ -n "$ver" ]] && printf '%s=%s\n' "$pkg" "$ver"
   done
 }
@@ -730,6 +729,30 @@ install_hw_libs() {
 # Returns 0 if all packages are installed, 1 if any are missing.
 # Prints status for each package to stdout.
 
+# Cached package list for verify_hw_libs (populated on first use)
+_VERIFY_HW_LIBS_PKG_CACHE=""
+_VERIFY_HW_LIBS_PKG_CACHE_READY=0
+
+_verify_hw_libs_ensure_cache() {
+  if [[ "$_VERIFY_HW_LIBS_PKG_CACHE_READY" -eq 1 ]]; then
+    return
+  fi
+
+  local _context="live"
+  _is_install_chroot && _context="chroot:$MERGED"
+  log "  [verify_hw_libs] context=$_context"
+
+  _VERIFY_HW_LIBS_PKG_CACHE="$(_run_in_root "pacman -Qq" 2>/dev/null)" || true
+  _VERIFY_HW_LIBS_PKG_CACHE_READY=1
+
+  if [[ -n "$_VERIFY_HW_LIBS_PKG_CACHE" ]]; then
+    log "  [verify_hw_libs] installed packages:"
+    while IFS= read -r _pkg; do
+      log "    $_pkg"
+    done <<<"$_VERIFY_HW_LIBS_PKG_CACHE"
+  fi
+}
+
 verify_hw_libs() {
   local packages="${1:-}"
   local missing=0
@@ -745,14 +768,22 @@ verify_hw_libs() {
     fi
   fi
 
+  _verify_hw_libs_ensure_cache
+
   for pkg in $packages; do
     # Strip version pin if present
     pkg="${pkg%%=*}"
     [[ -z "$pkg" ]] && continue
 
-    if _run_in_root "pacman -Q '$pkg'" &>/dev/null; then
-      local ver
-      ver="$(_run_in_root "pacman -Q '$pkg'" 2>/dev/null | awk '{print $2}')"
+    # Check cached package list
+    if echo "$_VERIFY_HW_LIBS_PKG_CACHE" | grep -qx "$pkg"; then
+      # Package is installed — get version and install reason
+      local _info
+      _info="$(_run_in_root "pacman -Qi '$pkg'" 2>/dev/null)" || true
+      local ver _reason
+      ver="$(echo "$_info" | sed -n 's/^Version *: //p')"
+      _reason="$(echo "$_info" | sed -n 's/^Install Reason *: //p')"
+      log "  [verify_hw_libs] $pkg $ver — ${_reason:-unknown}"
       log "  ✓ $pkg $ver"
     else
       warn "  ✗ $pkg not installed"

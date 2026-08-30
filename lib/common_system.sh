@@ -68,31 +68,6 @@ run_depmod_ldconfig() {
   chroot "$root" ldconfig
 }
 
-# Enable nvidia power management services in a chroot.
-# Creates enable symlinks directly rather than relying on systemctl inside a
-# chroot (no running systemd daemon means systemctl enable is unreliable).
-# Args: $1 = root path
-enable_nvidia_power_services() {
-  local root="${1:?enable_nvidia_power_services: missing root}"
-  local wants_dir="$root/etc/systemd/system/multi-user.target.wants"
-  local svc enabled=0
-
-  for svc in nvidia-suspend nvidia-resume nvidia-hibernate; do
-    if [[ -f "$root/usr/lib/systemd/system/${svc}.service" ]]; then
-      mkdir -p "$wants_dir"
-      ln -sf "/usr/lib/systemd/system/${svc}.service" \
-        "$wants_dir/${svc}.service"
-      ((enabled++)) || true
-    fi
-  done
-
-  if ((enabled == 0)); then
-    warn "No nvidia power services found in image — nothing to enable"
-  else
-    log "Enabled $enabled nvidia power service(s)"
-  fi
-}
-
 # Backup steamos-update and install the self-heal wrapper.
 # Args: $1 = root path
 backup_original_updater() {

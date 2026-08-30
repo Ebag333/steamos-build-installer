@@ -177,24 +177,6 @@ _pipeline_report_failure() {
 # Workflow Registration Helpers
 # ---------------------------------------------------------------------------
 
-# Register a build workflow pipeline.
-register_build_pipeline() {
-  define_pipeline \
-    "validate" \
-    "setup" \
-    "prepare" \
-    "install" \
-    "configure" \
-    "finalize"
-
-  register_phase "validate" "phase_build_validate" "Validate build inputs"
-  register_phase "setup" "phase_build_setup" "Set up build environment"
-  register_phase "prepare" "phase_build_prepare" "Prepare rootfs and overlay"
-  register_phase "install" "phase_build_install" "Install drivers and packages"
-  register_phase "configure" "phase_build_configure" "Configure system and GRUB"
-  register_phase "finalize" "phase_build_finalize" "Finalize and publish image"
-}
-
 # Register a repatch workflow pipeline.
 register_repatch_pipeline() {
   define_pipeline \
@@ -209,16 +191,4 @@ register_repatch_pipeline() {
   register_phase "install" "phase_repatch_install" "Install drivers and packages"
   register_phase "configure" "phase_repatch_configure" "Configure system and GRUB"
   register_phase "reconcile" "phase_repatch_reconcile" "Reconcile and verify"
-}
-
-# Register a live workflow pipeline.
-register_live_pipeline() {
-  define_pipeline \
-    "validate" \
-    "configure" \
-    "verify"
-
-  register_phase "validate" "phase_live_validate" "Validate target"
-  register_phase "configure" "phase_live_configure" "Apply configuration"
-  register_phase "verify" "phase_live_verify" "Verify changes"
 }

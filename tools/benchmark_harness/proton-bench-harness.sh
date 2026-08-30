@@ -55,7 +55,7 @@ USE_MANGOHUD="${PROTON_BENCH_MANGOHUD:-}"
 # Parse args
 # ---------------------------------------------------------------------------
 
-usage() {
+usage() { # lint-ignore: no-shadow
   cat <<EOF
 Usage: $(basename "$0") <appid> [OPTIONS]
 
@@ -179,7 +179,7 @@ MANGOHUD_DEFAULT_LOG="${XDG_CONFIG_HOME:-$HOME/.config}/MangoHud"
 # Helpers
 # ---------------------------------------------------------------------------
 
-log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; } # lint-ignore: no-shadow
 
 gpu_snapshot() {
   nvidia-smi -i "$GPU_ID" \

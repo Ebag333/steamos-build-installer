@@ -41,6 +41,7 @@ OUTPUT_DIR="" # empty = same directory as source image
 WORKDIR=""
 WORKDIR_LOCATION="auto" # auto | ram | disk
 _WORKDIR_EXPLICIT=""
+PACMAN_REPO="valve-arch-valve" # valve-arch-valve | arch-valve | valve
 
 FLASH_CONFIRMED=0
 ALLOW_SYSTEM_DISK=0
@@ -401,6 +402,85 @@ backend_build() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Validate backend — image mounting and cleanup
+# ---------------------------------------------------------------------------
+
+VALIDATE_MNT=""
+VALIDATE_LOOP=""
+VALIDATE_ROOTFS=""
+VALIDATE_VARPART=""
+VALIDATE_UDEV_RULE="/run/udev/rules.d/89-steamos-validate.rules"
+
+validate_mount_image() {
+  local img="$1"
+
+  # Install udev guard BEFORE attaching loop — prevents udisks2 from
+  # seeing the partitions and triggering an automount popup.
+  mkdir -p /run/udev/rules.d
+  cat >"$VALIDATE_UDEV_RULE" <<'EOF'
+# steamos-validate — suppress udisks2 automount for all loop partitions
+SUBSYSTEM=="block", KERNEL=="loop[0-9]*p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0"
+EOF
+  udevadm control --reload-rules
+  log "Installed udev guard: $VALIDATE_UDEV_RULE"
+
+  log "Attaching loop device: $img"
+  VALIDATE_LOOP="$(losetup -f --show --partscan "$img")" \
+    || die "Failed to attach loop device"
+  log "  Loop: $VALIDATE_LOOP"
+  udevadm settle --timeout=10
+
+  log "Scanning partitions on $VALIDATE_LOOP"
+  local part label
+  for part in "$VALIDATE_LOOP"p*; do
+    label="$(blkid -s PARTLABEL -o value "$part" 2>/dev/null)" || continue
+    log "  $part: ${label:-<unknown>}"
+    case "$label" in
+      rootfs-A | rootfs) VALIDATE_ROOTFS="$part" ;;
+      var-A | var)        VALIDATE_VARPART="$part" ;;
+    esac
+  done
+
+  [[ -n "$VALIDATE_ROOTFS" ]] || die "No rootfs partition found in $img"
+  log "  rootfs: $VALIDATE_ROOTFS"
+  log "  var:    ${VALIDATE_VARPART:-<not found>}"
+
+  log "Mounting $VALIDATE_ROOTFS on $VALIDATE_MNT (read-only)"
+  mount -o ro "$VALIDATE_ROOTFS" "$VALIDATE_MNT" \
+    || die "Failed to mount rootfs"
+
+  # Mount var if it exists as a separate partition.
+  # Recovery images may have var baked into rootfs; skip if not found.
+  if [[ -n "$VALIDATE_VARPART" ]]; then
+    mkdir -p "$VALIDATE_MNT/var"
+    log "Mounting $VALIDATE_VARPART on $VALIDATE_MNT/var (read-only)"
+    mount -o ro "$VALIDATE_VARPART" "$VALIDATE_MNT/var" \
+      || die "Failed to mount var"
+  fi
+
+  log "Mount complete"
+}
+
+validate_cleanup() {
+  set +e
+  # Unmount var before rootfs-A (reverse order)
+  if [[ -n "$VALIDATE_MNT" ]] && mountpoint -q "$VALIDATE_MNT/var" 2>/dev/null; then
+    umount "$VALIDATE_MNT/var" 2>/dev/null
+  fi
+  if [[ -n "$VALIDATE_MNT" ]] && mountpoint -q "$VALIDATE_MNT" 2>/dev/null; then
+    umount "$VALIDATE_MNT" 2>/dev/null
+  fi
+  if [[ -n "${VALIDATE_LOOP:-}" ]]; then
+    losetup -d "$VALIDATE_LOOP" 2>/dev/null
+  fi
+  [[ -d "$VALIDATE_MNT" ]] && rmdir "$VALIDATE_MNT" 2>/dev/null
+  # Remove udev guard and reload
+  rm -f "$VALIDATE_UDEV_RULE" 2>/dev/null
+  udevadm control --reload-rules 2>/dev/null
+  set -e
+}
+
 backend_validate() {
   # shellcheck source=lib/library-loader.sh
   source "$BACKEND_DIR/library-loader.sh"
@@ -410,15 +490,77 @@ backend_validate() {
   # shellcheck source=lib/pipelines/pipeline_validate.sh
   source "$BACKEND_DIR/pipelines/pipeline_validate.sh"
 
-  # Pass config and root via environment for the pipeline to read
+  # Pass config via environment for the pipeline to read
   export VALIDATE_CONFIG="${CONFIG_FILE:-}"
-  export VALIDATE_ROOT="${VALIDATE_ROOT:-/}"
-  export VALIDATE_ITEMS="${VALIDATE_ITEMS:-}"
+
+  if [[ -n "$IMG" ]]; then
+    # ── Offline image validation ──────────────────────────────────────
+    [[ $EUID -eq 0 ]] || die "Image validation requires root (needed for loop/mount)."
+    [[ -f "$IMG" ]] || die "Image not found: $IMG"
+    IMG="$(readlink -f "$IMG")"
+
+    VALIDATE_MNT="$(mktemp -d /tmp/steamos-validate.XXXXXX)"
+
+    trap 'validate_cleanup' EXIT
+
+    log "=== Mounts before ==="
+    local _loop_state
+    _loop_state="$(losetup -a 2>/dev/null)" || true
+    if [[ -n "$_loop_state" ]]; then
+      log "$_loop_state"
+    else
+      log "  (no active loop devices)"
+    fi
+
+    validate_mount_image "$IMG"
+
+    export VALIDATE_ROOT="$VALIDATE_MNT"
+    export MERGED="$VALIDATE_MNT"
+    export OPT_MODE="chroot"
+    export OPT_ROOT="$VALIDATE_MNT"
+
+    log ""
+    log "╔═══════════════════════════════════════════════════════════╗"
+    log "║  VALIDATING OFFLINE IMAGE                                ║"
+    log "╠═══════════════════════════════════════════════════════════╣"
+    log "║  Image:    $IMG"
+    log "║  Rootfs:   $VALIDATE_ROOTFS"
+    log "║  Var:      ${VALIDATE_VARPART:-<not separate>}"
+    log "║  Mount:    $VALIDATE_MNT"
+    log "║  Mode:     chroot"
+    log "╚═══════════════════════════════════════════════════════════╝"
+    log ""
+  else
+    # ── Live system validation ────────────────────────────────────────
+    export VALIDATE_ROOT="${VALIDATE_ROOT:-/}"
+
+    log ""
+    log "╔═══════════════════════════════════════════════════════════╗"
+    log "║  VALIDATING LIVE SYSTEM                                  ║"
+    log "╠═══════════════════════════════════════════════════════════╣"
+    log "║  Root:     $VALIDATE_ROOT"
+    log "║  Mode:     live"
+    log "╚═══════════════════════════════════════════════════════════╝"
+    log ""
+  fi
 
   register_validate_pipeline
-  if ! run_pipeline; then
-    exit 1
+  local rc=0
+  run_pipeline || rc=$?
+
+  if [[ -n "$VALIDATE_MNT" ]]; then
+    log ""
+    log "=== Mounts after ==="
+    local _loop_after
+    _loop_after="$(losetup -a 2>/dev/null)" || true
+    if [[ -n "$_loop_after" ]]; then
+      log "$_loop_after"
+    else
+      log "  (no active loop devices)"
+    fi
   fi
+
+  return $rc
 }
 
 backend_live() {

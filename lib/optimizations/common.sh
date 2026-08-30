@@ -338,7 +338,7 @@ if [[ "$(type -t warn)" == "function" ]]; then
   eval "$(declare -f warn | sed '1s/^warn/_original_warn/')"
 fi
 
-log() {
+log() { # lint-ignore: no-shadow
   if declare -F _opt_log >/dev/null 2>&1; then
     _opt_log "$@"
   elif declare -F _original_log >/dev/null 2>&1; then
@@ -348,7 +348,7 @@ log() {
   fi
 }
 
-warn() {
+warn() { # lint-ignore: no-shadow
   if declare -F _opt_warn >/dev/null 2>&1; then
     _opt_warn "$@"
   elif declare -F _original_warn >/dev/null 2>&1; then

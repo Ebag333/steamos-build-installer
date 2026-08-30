@@ -147,7 +147,7 @@ setup_overlay_chroot() {
     "${KPKG_NAME:-unknown}" "${KPKG_VERREL:-unknown}"
 
   # shellcheck disable=SC2153  # WORKDIR is set in lib/backend.sh
-  overlay_mount_with_image "$MNT" "$WORKDIR" "$MNT" "8G" "$cache_key"
+  overlay_mount_with_image "$MNT" "$WORKDIR" "$MERGED" "8G" "$cache_key"
 
   if [[ $SKIP_SIG -eq 0 ]]; then
     setup_pacman_conf "$MERGED/tmp/pacman-bld.conf" "Required DatabaseOptional"

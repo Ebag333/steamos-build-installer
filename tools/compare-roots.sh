@@ -112,7 +112,7 @@ echo ""
 MNT_A="/tmp/compare-rootfs-a"
 MNT_B="/tmp/compare-rootfs-b"
 
-cleanup() {
+cleanup() { # lint-ignore: no-shadow
   umount "$MNT_A" 2>/dev/null || true
   umount "$MNT_B" 2>/dev/null || true
   rmdir "$MNT_A" "$MNT_B" 2>/dev/null || true

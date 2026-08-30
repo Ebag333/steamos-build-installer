@@ -47,7 +47,7 @@ CONFIG_FILE=""
 CLI_MODE=0
 SETUP_MODE=0
 
-usage() {
+usage() { # lint-ignore: no-shadow
   cat <<'EOF'
 Usage:
   steamos-build.sh
@@ -656,6 +656,8 @@ run_backend_gui() {
   rm -f "$rcfile" "$tmpdir"/progress*
   echo "[gui] backend exit code: $rc" >&2
 
+  GUI_LAST_LOG="$logfile"
+
   if [[ "$rc" -ne 0 ]]; then
     # Extract the actual error reason from the log.
     # die() emits "[fail] message" — grab the last one, strip ANSI codes.
@@ -680,26 +682,27 @@ run_backend_gui() {
       error_msg="$error_reason"
     fi
 
-    ui_error "<b>$error_msg</b>
+    if [[ "${GUI_QUIET:-0}" -ne 1 ]]; then
+      ui_error "<b>$error_msg</b>
 
 Full log: $logfile"
 
-    # Show scrollable log tail so the user can inspect the failure context.
-    printf '%s\n' "$tail_text" | yad --text-info \
-      --title="Build Log (tail)" \
-      --image=dialog-error \
-      --window-icon=dialog-error \
-      --text="<b>$error_msg</b>" \
-      --button="OK":0 \
-      --width=900 --height=500 \
-      --wrap \
-      --tail \
-      2>/dev/null || true
+      # Show scrollable log tail so the user can inspect the failure context.
+      printf '%s\n' "$tail_text" | yad --text-info \
+        --title="Build Log (tail)" \
+        --image=dialog-error \
+        --window-icon=dialog-error \
+        --text="<b>$error_msg</b>" \
+        --button="OK":0 \
+        --width=900 --height=500 \
+        --wrap \
+        --tail \
+        2>/dev/null || true
+    fi
 
     return "$rc"
   fi
 
-  GUI_LAST_LOG="$logfile"
   echo "[gui] success. Log: $logfile" >&2
   return 0
 }
@@ -867,6 +870,14 @@ _ui_parse_hw_manifest() {
   done <"$conf"
 }
 
+# Run hardware detection and return detected package names.
+# Prints space-separated list to stdout.
+_ui_detect_hw() {
+  # shellcheck source=lib/detect-hw-packages.sh
+  source "$SCRIPT_DIR/lib/detect-hw-packages.sh"
+  detect_hw_packages | tr '\n' ' '
+}
+
 # Hardware support component selection dialog.
 # Prints space-separated item list to stdout; empty if cancelled.
 # Items: logitech-hid linux-firmware libfprint fprintd bolt
@@ -899,12 +910,38 @@ Example: Firmware|linux-firmware|latest|TRUE|Full firmware suite"
     return
   }
 
-  local selected
+  # Run hardware detection.
+  local detected
+  detected="$(_ui_detect_hw)"
+
+  # Override defaults for detected packages.
+  if [[ -n "$detected" ]]; then
+    local -a new_rows=()
+    local i
+    for ((i=0; i<${#rows[@]}; i+=6)); do
+      local default="${rows[$i]}"
+      local group="${rows[$i+1]}"
+      local pkg="${rows[$i+2]}"
+      local version="${rows[$i+3]}"
+      local source="${rows[$i+4]}"
+      local desc="${rows[$i+5]}"
+
+      # If package is detected, pre-select it.
+      if [[ " $detected " == *" $pkg "* ]]; then
+        default="TRUE"
+      fi
+
+      new_rows+=("$default" "$group" "$pkg" "$version" "$source" "$desc")
+    done
+    rows=("${new_rows[@]}")
+  fi
+
+  local selected yad_rc=0
   selected="$(yad --list --checklist \
     --title="Hardware Support Components" \
     --text="<b>Select hardware support components to install.</b>
 
-<span fgcolor='gray'>linux-firmware replaces Valve's Deck subset with the full Arch firmware suite.
+<span fgcolor='gray'>Auto-detected packages are pre-selected based on your hardware.
 Packages are sourced from Valve's repository or official Arch repositories.</span>" \
     --column="Install" \
     --column="Group" \
@@ -918,9 +955,16 @@ Packages are sourced from Valve's repository or official Arch repositories.</spa
     --width=1500 \
     --height=840 \
     --button="Cancel":1 \
+    --button="Auto-detect":2 \
     --button="OK":0 \
     "${rows[@]}" \
-    2>/dev/null)" || selected=""
+    2>/dev/null)" || yad_rc=$?
+
+  # Handle Auto-detect button — re-run detection and refresh dialog.
+  if [[ "$yad_rc" -eq 2 ]]; then
+    ui_select_hw_support
+    return
+  fi
 
   # Clean trailing separators.
   selected="${selected%%|*}"
@@ -1047,6 +1091,7 @@ _build_form_common_args() {
     --field="Update mode:CB"
     --field="Workspace location:CB"
     --field="Working directory!Use automatic unless you want an explicit build directory"
+    --field="Pacman repository!Which package repos to use and in what priority:CB"
     --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK"
     --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK"
     --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK"
@@ -1062,6 +1107,7 @@ _build_form_common_args() {
     "^selfheal!hold!stock"
     "^auto!ram!disk"
     "automatic"
+    "^Valve + Arch (Valve priority)!Valve + Arch (Arch priority)!Valve only"
     "TRUE"
     "FALSE"
     "TRUE"
@@ -1099,11 +1145,11 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     2>/dev/null)" || return 1
 
   local base_image update_branch rootfs session update workspace workdir
-  local hw_support initramfs_support system_tweaks package_builds add_installer
+  local pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer
 
   IFS="$sep" read -r \
     base_image update_branch rootfs session update workspace workdir \
-    hw_support initramfs_support system_tweaks package_builds add_installer \
+    pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer \
     <<<"$form"
 
   rootfs="${rootfs:-10240}"
@@ -1131,6 +1177,13 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     workdir=""
   fi
 
+  # Map pacman repo dropdown to internal key
+  case "$pacman_repo" in
+    "Valve + Arch (Valve priority)") pacman_repo="valve-arch-valve" ;;
+    "Valve + Arch (Arch priority)")  pacman_repo="arch-valve" ;;
+    "Valve only")                    pacman_repo="valve" ;;
+  esac
+
   # Write build config to a temporary file
   local conf_file
   conf_file="$(mktemp /tmp/steamos-build-XXXXXX.conf)"
@@ -1143,6 +1196,7 @@ UPDATE_BRANCH="$update_branch"
 DEFAULT_SESSION="$session"
 UPDATE_MODE="$update"
 WORKDIR_LOCATION="$workspace"
+PACMAN_REPO="$pacman_repo"
 EOF
 
   [[ -n "$workdir" ]] && echo "WORKDIR=\"$workdir\"" >>"$conf_file"
@@ -1231,7 +1285,7 @@ ui_build() {
       --print-column=1 \
       --separator="" \
       --center \
-      --width=900 \
+    --width=1000 \
       --height=320 \
       --button="Cancel":1 \
       --button="Build":2 \
@@ -1356,11 +1410,11 @@ Configure the build options below. The image will be selected when you build." \
     2>/dev/null)" || return 0
 
   local update_branch rootfs session update workspace workdir
-  local hw_support initramfs_support system_tweaks package_builds add_installer
+  local pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer
 
   IFS="$sep" read -r \
     update_branch rootfs session update workspace workdir \
-    hw_support initramfs_support system_tweaks package_builds add_installer \
+    pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer \
     <<<"$form"
 
   rootfs="${rootfs:-10240}"
@@ -1368,6 +1422,13 @@ Configure the build options below. The image will be selected when you build." \
   update="${update:-selfheal}"
   workspace="${workspace:-auto}"
   update_branch="${update_branch:-stable}"
+
+  # Map pacman repo dropdown to internal key
+  case "$pacman_repo" in
+    "Valve + Arch (Valve priority)") pacman_repo="valve-arch-valve" ;;
+    "Valve + Arch (Arch priority)")  pacman_repo="arch-valve" ;;
+    "Valve only")                    pacman_repo="valve" ;;
+  esac
 
   # Show sub-dialogs for optional items
   local hw_items="" gaming_items="" drivers="" initramfs_mods=""
@@ -1515,6 +1576,7 @@ Configure the build options below. The image will be selected when you build." \
   conf_content+="DEFAULT_SESSION=\"${session:-game}\"\n"
   conf_content+="UPDATE_MODE=\"${update:-selfheal}\"\n"
   conf_content+="WORKDIR_LOCATION=\"$workspace\"\n"
+  conf_content+="PACMAN_REPO=\"$pacman_repo\"\n"
 
   [[ -n "$workdir" && "$workdir" != "automatic" ]] && conf_content+="WORKDIR=\"$workdir\"\n"
   [[ "${add_installer^^}" != "TRUE" ]] && conf_content+="ADD_INSTALLER=0\n"
@@ -1736,26 +1798,22 @@ Do not continue unless you have explicitly verified that overwriting it is inten
   echo "[ui_flash] preflight exit=$preflight_rc" >&2
   echo "$preflight_output" >&2
 
-  # Format preflight for the dialog (escape for Pango markup).
-  # Pango renders literal newlines as line breaks — no <br> tags needed.
-  local preflight_html
-  preflight_html="$(echo "$preflight_output" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
-
   if [[ $preflight_rc -ne 0 ]]; then
-    yad --question \
+    yad --form \
       --title="Preflight Check Failed" \
       --text="<b>Preflight check failed — high risk action.</b>
-
-$preflight_html
 
 <b>Resolve all preflight issues before flashing.</b>
 
 Proceeding anyway may result in a corrupted flash or data loss." \
+      --field="Preflight Results:TXT" "$preflight_output" \
       --button="Cancel":1 \
       --button="Accept Risk":0 \
       --center \
       --width=700 \
-      --height=500 2>/dev/null || return 1
+      --height=500 \
+      --fontname="monospace" \
+      2>/dev/null || return 1
   fi
 
   # Require the user to confirm the target serial number.
@@ -1929,36 +1987,108 @@ EOF
 }
 
 ui_validate() {
-  local result
-  result="$(yad --form \
-    --title="Validate Configuration" \
-    --text="<b>Select what to validate.</b>
+  local conf_file="" image=""
+
+  # Selection loop — same pattern as ui_build
+  while true; do
+    local choice rc=0
+    choice="$(yad --list \
+      --title="Validate Configuration" \
+      --text="<b>Select what to validate, then press Validate.</b>
 
 Config file: build configuration to validate against.
 Leave blank to validate all items as if everything were enabled.
 
 Image: SteamOS image to validate offline.
 Leave blank to validate against the live running system." \
-    --field="Config file:FL" \
-    --field="Image:FL" \
-    --file-filter="Config files (*.conf) | *.conf" \
-    --file-filter="Images (*.img) | *.img" \
-    --separator="|" \
-    --center \
-    --width=600 \
-    --button="Cancel":1 \
-    --button="Validate":0 \
-    2>/dev/null)" || return 0
+      --column="Input" \
+      --column="Selection" \
+      --print-column=1 \
+      --separator="" \
+      --center \
+      --width=700 \
+      --height=300 \
+      --button="Cancel":1 \
+      --button="Validate":2 \
+      "Config file" "${conf_file:-<i>not selected</i>}" \
+      "Image" "${image:-<i>not selected</i>}" \
+      2>/dev/null)" || rc=$?
 
-  local config_file image
-  config_file="$(echo "$result" | cut -d'|' -f1)"
-  image="$(echo "$result" | cut -d'|' -f2)"
+    if ((rc == 1)); then
+      return 0
+    elif ((rc == 2)); then
+      break
+    fi
+
+    local _tmp=""
+    case "$choice" in
+      "Config file")
+        _tmp="$(yad --file \
+          --title="Select Config File" \
+          --text="Select a build configuration file:" \
+          --file-filter="Config files (*.conf) | *.conf" \
+          --center \
+          --width=700 \
+          --height=500 \
+          2>/dev/null)" || true
+        [[ -n "$_tmp" ]] && conf_file="$_tmp"
+        ;;
+      "Image")
+        _tmp="$(yad --file \
+          --title="Select Image" \
+          --text="Select a SteamOS image to validate offline:" \
+          --file-filter="Images (*.img *.img.bz2 *.img.gz *.img.xz *.img.zst) | *.img *.img.bz2 *.img.gz *.img.xz *.img.zst" \
+          --center \
+          --width=700 \
+          --height=500 \
+          2>/dev/null)" || true
+        [[ -n "$_tmp" ]] && image="$_tmp"
+        ;;
+    esac
+  done
 
   local -a args=(--action validate)
-  [[ -z "$config_file" ]] || args+=(--config "$config_file")
+  [[ -z "$conf_file" ]] || args+=(--config "$conf_file")
   [[ -z "$image" ]] || args+=(--image "$image")
 
+  GUI_QUIET=1
   run_backend_gui "Validating configuration..." "${args[@]}"
+  local rc=$?
+
+  # Show validation results if we have a log
+  if [[ -n "${GUI_LAST_LOG:-}" && -f "$GUI_LAST_LOG" ]]; then
+    local report
+    report="$(sed -n '/SYSTEM STATE REPORT\|VALIDATION REPORT/,$ p' "$GUI_LAST_LOG" 2>/dev/null \
+      | sed 's/\x1b\[[0-9;]*m//g')"
+
+    if [[ -n "$report" ]]; then
+      local icon="dialog-information"
+      if echo "$report" | grep -qE 'Failed:\s*[1-9]'; then
+        icon="dialog-error"
+      fi
+
+      local key="KEY:
+  ✓ = present / passes validation
+  · = absent / not configured (informational)
+  ✗ = expected but missing (failure — only with config)
+  ◆ = present but not selected in config (informational)
+  ○ = not present and not selected in config
+"
+      report="${key}${report}"
+
+      echo "$report" | yad --text-info \
+        --title="Validation Results" \
+        --image="$icon" \
+        --window-icon="$icon" \
+        --text="<b>Validation complete</b>" \
+        --button="OK":0 \
+        --width=700 --height=500 \
+        --monospace \
+        2>/dev/null || true
+    fi
+  fi
+
+  return $rc
 }
 
 ui_diagnostics() {
