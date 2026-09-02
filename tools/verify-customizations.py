@@ -7,9 +7,9 @@ flags needed.  Exits 0 if all checks pass, 1 if any fail.
 
 Usage (offline — from the build host, image still loop-mounted):
   sudo python3 tools/verify-customizations.py \
-      --mnt /tmp/nvidia-build/mnt \
-      --homemnt /tmp/nvidia-build/home \
-      --efimnt /tmp/nvidia-build/efi
+      --mnt /tmp/steamos-build/mnt \
+      --homemnt /tmp/steamos-build/home \
+      --efimnt /tmp/steamos-build/efi
 
 Usage (online — running on the target device):
   sudo python3 tools/verify-customizations.py --online
@@ -943,8 +943,8 @@ def check_config_bundle():
         return
 
     for cfg in ("99-nvidia-patch.conf", "98-thunderbolt-rescan.rules",
-                "thunderbolt-rescan.sh", "hw-packages-arch.conf",
-                "hw-packages-valve.conf", "NVIDIA Setup.desktop"):
+                "thunderbolt-rescan.sh", "hw-packages.conf",
+                "NVIDIA Setup.desktop"):
         file_exists(os.path.join(configs_dir, cfg), f"bundled {cfg}")
 
 

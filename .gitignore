@@ -9,6 +9,11 @@
 .nvidia-patch-work/
 .verify-work/
 
+# test build output
+/tools/test/build/**
+/tools/test/output/**
+/tools/test/temp/*
+
 # personal working notes (not part of the released tool)
 ACHIEVEMENTS.md
 HANDOFF.md

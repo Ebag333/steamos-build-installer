@@ -30,10 +30,9 @@ lib/
 ├── pci-discovery.sh           # PCI device discovery for initramfs module selection
 ├── configs/                   # Configuration files bundled into the image
 │   ├── defaults.conf          # Build flag defaults
-│   ├── hw-packages-arch.conf  # Arch repo packages
-│   ├── hw-packages-valve.conf # Valve repo packages
+│   ├── hw-packages.conf       # Hardware packages (pacman, build-recipe, flatpak)
 │   ├── pipx-packages.conf    # Pipx package definitions
-│   ├── pacman-arch.conf       # Arch pacman repo config
+│   ├── pacman-arch.conf       # Arch pacman repo config (for tools)
 │   ├── 99-nvidia-patch.conf   # modprobe: blacklist nouveau, enable KMS
 │   ├── scx_loader_config.toml # scx_lavd scheduler config
 │   ├── swappiness-zram.conf   # vm.swappiness=180

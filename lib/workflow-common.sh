@@ -34,15 +34,24 @@ configure_desktop_session() {
 # Used by: build, repatch, live workflows.
 
 # Run custom script if present.
+# Uses CUSTOM_FINALIZE_SCRIPT from config if set, otherwise falls back to
+# the hardcoded path at /home/.steamos-build/recovery/custom.sh.
 # Args: $1 = root path (optional, defaults to /)
 # Returns 0 on success or script not found, 1 on script failure
 run_custom_script() {
   local root="${1:-/}"
-  local custom="$root/home/.steamos-build/recovery/custom.sh"
+  local custom=""
+
+  # User-selected script from config takes priority
+  if [[ -n "${CUSTOM_FINALIZE_SCRIPT:-}" ]]; then
+    custom="$CUSTOM_FINALIZE_SCRIPT"
+  else
+    custom="$root/home/.steamos-build/recovery/custom.sh"
+  fi
 
   if [[ -f "$custom" ]]; then
     log "Running custom script: $custom"
-    if bash "$custom" 2>&1; then
+    if bash "$custom" "$root" 2>&1; then
       log "Custom script completed successfully"
       return 0
     else
@@ -109,7 +118,7 @@ ensure_flatpak_service() {
   return 0
 }
 
-# Install flatpak packages from hw-packages-build.conf.
+# Install flatpak packages from hw-packages.conf.
 # Resolves recipes and runs install scripts for each flatpak item.
 # Args: $1 = target root path, $2 = callback function name (optional)
 #   If a callback is provided, it is called as: callback PKG "ok"|"fail"
@@ -215,6 +224,35 @@ ensure_rootfs_writable() {
       return 0
     else
       warn "Failed to set rootfs writable"
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+# Restore btrfs rootfs to read-only.
+# Args: $1 = root path
+# Returns 0 on success, 1 on failure
+restore_rootfs_readonly() {
+  local root="${1:?restore_rootfs_readonly: missing root}"
+
+  # Check if btrfs
+  if ! btrfs filesystem show "$root" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Check if writable
+  local ro_prop
+  ro_prop="$(btrfs property get "$root" ro 2>/dev/null || echo "ro=false")"
+
+  if [[ "$ro_prop" == "ro=false" ]]; then
+    log "  Restoring rootfs to read-only"
+    if btrfs property set "$root" ro true; then
+      log "  Rootfs restored to read-only"
+      return 0
+    else
+      warn "Failed to restore rootfs to read-only"
       return 1
     fi
   fi
@@ -400,8 +438,15 @@ enable_nvidia_power_services() {
 # Returns 0 on success, 1 on failure
 install_nvidia_modprobe_conf() {
   local root="${1:?install_nvidia_modprobe_conf: missing root}"
-  local conf_dir="$root/etc/modprobe.d"
 
+  # Skip if nvidia packages are not installed
+  if [[ ! -d "$root/usr/share/nvidia" ]] \
+    && [[ ! -f "$root/usr/bin/nvidia-smi" ]]; then
+    log "Skipping nvidia modprobe configuration (nvidia not installed)"
+    return 0
+  fi
+
+  local conf_dir="$root/etc/modprobe.d"
   log "Installing nvidia modprobe configuration"
 
   mkdir -p "$conf_dir"
@@ -448,9 +493,9 @@ cleanup_disk_space() {
   log "Cleaning up disk space"
 
   if [[ "$root" == "/" ]]; then
-    pacman -Sc --noconfirm 2>/dev/null || warn "pacman cache cleanup failed"
+    pacman_clean_cache --host 2>/dev/null || warn "pacman cache cleanup failed"
   else
-    chroot "$root" pacman -Sc --noconfirm 2>/dev/null || warn "pacman cache cleanup failed"
+    pacman_clean_cache --chroot 2>/dev/null || warn "pacman cache cleanup failed"
   fi
 
   rm -rf /tmp/* 2>/dev/null || true

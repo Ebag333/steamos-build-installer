@@ -34,6 +34,8 @@ load_workflow_libs() {
     common_drivers
     install-hw-libs
     grub
+    pacman-helpers
+    system-upgrade
     diagnostics/boot
   )
 
@@ -59,7 +61,13 @@ load_workflow_libs() {
       ;;
     live)
       workflow_libs=(
+        rootfs-etc
+        setup
         initramfs
+        update-strategy
+        installer
+        finalize
+        flashless
       )
       ;;
     flash)

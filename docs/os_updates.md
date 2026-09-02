@@ -55,8 +55,7 @@ An OS update replaces the rootfs entirely. The repatch process re-applies:
 |---|---|
 | `driver.conf` | Persisted build selections (gaming items, initramfs modules, etc.) |
 | `build.conf` | Build manifest (versions, flags, timestamp) |
-| `configs/hw-packages-arch.conf` | Arch package manifest |
-| `configs/hw-packages-valve.conf` | Valve package manifest |
+| `configs/hw-packages.conf` | Hardware packages (pacman, build-recipe, flatpak) |
 | `configs/pipx-packages.conf` | Pipx package definitions |
 | `configs/99-nvidia-patch.conf` | Modprobe config |
 | `configs/scx_loader_config.toml` | scx_lavd scheduler config |
@@ -85,15 +84,15 @@ An OS update replaces the rootfs entirely. The repatch process re-applies:
 The package manifests at `/usr/lib/steamos-build/configs/` control what gets installed during self-heal. To pin a specific NVIDIA driver version:
 
 ```bash
-sudo nano /usr/lib/steamos-build/configs/hw-packages-arch.conf
+sudo nano /usr/lib/steamos-build/configs/hw-packages.conf
 ```
 
 Change `latest` to a specific version:
 
 ```
-NVIDIA|nvidia-open-dkms|570.86.15|TRUE|NVIDIA open kernel module sources for DKMS
-NVIDIA|nvidia-utils|570.86.15|TRUE|NVIDIA userspace driver libraries and tools
-NVIDIA|lib32-nvidia-utils|570.86.15|TRUE|32-bit NVIDIA userspace libraries
+pacman|Nvidia|nvidia-open-dkms|570.86.15|TRUE|NVIDIA open kernel module sources for DKMS|nvidia-open-dkms
+pacman|Nvidia|nvidia-utils|570.86.15|TRUE|NVIDIA userspace driver libraries and tools|
+pacman|Nvidia|lib32-nvidia-utils|570.86.15|TRUE|32-bit NVIDIA userspace libraries|
 ```
 
 The next OS update will use these pinned versions instead of resolving `latest`.
@@ -103,8 +102,7 @@ The next OS update will use these pinned versions instead of resolving `latest`.
 Edit the manifests to add or remove packages from future self-heal cycles:
 
 ```bash
-sudo nano /usr/lib/steamos-build/configs/hw-packages-arch.conf
-sudo nano /usr/lib/steamos-build/configs/hw-packages-valve.conf
+sudo nano /usr/lib/steamos-build/configs/hw-packages.conf
 ```
 
 Remove a line or set its default to `FALSE` to exclude it. Add a line to include a new package.

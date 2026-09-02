@@ -34,10 +34,13 @@ add_kernel_param() {
 # Build the complete list of kernel parameters for this build.
 # Returns the full parameter string via stdout.
 _build_all_params() {
-  local all_params="$NVIDIA_CMDLINE_ADD"
+  local all_params=""
+  if nvidia_is_selected; then
+    all_params="$NVIDIA_CMDLINE_ADD"
+  fi
   [[ -n "${EXTRA_CMDLINE_ADD:-}" ]] && all_params+=" $EXTRA_CMDLINE_ADD"
   [[ "${DEBUG_BOOT:-0}" -eq 1 ]] && all_params+=" $DEBUG_CMDLINE_ADD"
-  echo "$all_params"
+  echo "${all_params# }"
 }
 
 # ── Token matching ────────────────────────────────────────────────────────────
@@ -220,18 +223,42 @@ patch_persistent_defaults() {
   local all_params
   all_params="$(_build_all_params)"
 
+  # Skip entirely if no params to patch and debug boot not enabled
+  if [[ -z "$all_params" && "${DEBUG_BOOT:-0}" -ne 1 ]]; then
+    log "No kernel params to patch — skipping grub defaults"
+    return 0
+  fi
+
   # ── /etc/default/grub (single-line GRUB_CMDLINE_LINUX_DEFAULT="...") ────
-  # Only strip "quiet" — do NOT inject our params here.  grub-steamos
-  # (GRUB_CMDLINE_LINUX) is the sole persistent source; writing to both
-  # caused the entire parameter set to appear twice on /proc/cmdline
-  # because the grub generator consumes both variables.
-  if [[ -f "$grub_default" ]]; then
-    log "Stripping quiet from /etc/default/grub"
+  # Only strip "quiet" when debug boot is enabled — do NOT inject our params
+  # here.  grub-steamos (GRUB_CMDLINE_LINUX) is the sole persistent source;
+  # writing to both caused the entire parameter set to appear twice on
+  # /proc/cmdline because the grub generator consumes both variables.
+  if [[ -f "$grub_default" && "${DEBUG_BOOT:-0}" -eq 1 ]]; then
+    log "Stripping quiet from /etc/default/grub (debug boot enabled)"
     _remove_quiet_from_grub_default "$grub_default"
   fi
 
+  # ── Valve/SteamOS-specific GRUB settings ───────────────────────────────
+  # These are new Valve defaults from the pacnew that should be merged.
+  if [[ -f "$grub_default" ]]; then
+    # GRUB_FORCE_EFI_ALL_VIDEO=1: Force loading all_video. Otherwise GRUB
+    # may try to load efi_uga, which Valve explicitly doesn't build.
+    if ! grep -q '^GRUB_FORCE_EFI_ALL_VIDEO=' "$grub_default" 2>/dev/null; then
+      log "Adding GRUB_FORCE_EFI_ALL_VIDEO=1 to /etc/default/grub"
+      echo 'GRUB_FORCE_EFI_ALL_VIDEO=1' >>"$grub_default"
+    fi
+
+    # GRUB_DISABLE_UUID=true: Tell GRUB not to use filesystem UUIDs so
+    # Valve's partition-UUID mechanism can take over (relevant for A/B).
+    if ! grep -q '^GRUB_DISABLE_UUID=' "$grub_default" 2>/dev/null; then
+      log "Adding GRUB_DISABLE_UUID=true to /etc/default/grub"
+      echo 'GRUB_DISABLE_UUID=true' >>"$grub_default"
+    fi
+  fi
+
   # ── /etc/default/grub-steamos (multiline GRUB_CMDLINE_LINUX="...") ──────
-  if [[ -f "$grub_steamos" ]]; then
+  if [[ -f "$grub_steamos" && -n "$all_params" ]]; then
     log "Patching /etc/default/grub-steamos persistent defaults"
 
     # Collect params that need adding
@@ -245,12 +272,11 @@ patch_persistent_defaults() {
 
     if [[ ${#params_to_add[@]} -gt 0 ]]; then
       _add_params_to_grub_steamos "$grub_steamos" "${params_to_add[@]}"
+      # Only add to keep-list if we actually have params to preserve
+      _ensure_grub_steamos_keep_list
     else
       log "  All params already in grub-steamos"
     fi
-
-    # Always ensure the atomic-update keep-list entry exists (idempotent).
-    _ensure_grub_steamos_keep_list
   fi
 }
 
@@ -309,6 +335,12 @@ patch_kernel_cmdline() {
   local all_params
   all_params="$(_build_all_params)"
 
+  # Skip entirely if no params to patch
+  if [[ -z "$all_params" ]]; then
+    log "No kernel params to patch — skipping EFI grub.cfg"
+    return 0
+  fi
+
   log "Patching EFI grub.cfg kernel lines"
 
   # Remove quiet from all kernel lines
@@ -351,6 +383,12 @@ finalize_grub() {
   local all_params
   all_params="$(_build_all_params)"
 
+  # Skip validation if no params to check
+  if [[ -z "$all_params" ]]; then
+    log "No kernel params to validate — skipping grub validation"
+    return 0
+  fi
+
   log "Validating kernel command line"
 
   local failed=0
@@ -367,13 +405,13 @@ finalize_grub() {
   done
 
   # ── /etc/default/grub ──
-  # Only verify quiet was stripped — our params live in grub-steamos only.
-  if [[ -f "$grub_default" ]]; then
+  # Only verify quiet was stripped when debug boot is enabled.
+  if [[ -f "$grub_default" && "${DEBUG_BOOT:-0}" -eq 1 ]]; then
     if _param_in_grub_default "$grub_default" "quiet"; then
       warn "  quiet still present in /etc/default/grub"
       failed=1
     else
-      log "  OK grub default: quiet removed"
+      log "  OK grub default: quiet removed (debug boot)"
     fi
   fi
 
@@ -388,14 +426,16 @@ finalize_grub() {
       fi
     done
 
-    # Validate atomic-update keep-list
-    local keep_file="$MNT/etc/atomic-update.conf.d/steamos-build-installer.conf"
-    if [[ -d "$MNT/etc/atomic-update.conf.d" ]]; then
-      if ! grep -q '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
-        warn "  MISSING: grub-steamos not in atomic-update keep-list"
-        failed=1
-      else
-        log "  OK keep-list: grub-steamos present"
+    # Validate atomic-update keep-list (only when we have params to preserve)
+    if [[ -n "$all_params" ]]; then
+      local keep_file="$MNT/etc/atomic-update.conf.d/steamos-build-installer.conf"
+      if [[ -d "$MNT/etc/atomic-update.conf.d" ]]; then
+        if ! grep -q '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
+          warn "  MISSING: grub-steamos not in atomic-update keep-list"
+          failed=1
+        else
+          log "  OK keep-list: grub-steamos present"
+        fi
       fi
     fi
   else

@@ -19,11 +19,13 @@ The main menu presents these actions:
 | Action | Description |
 |---|---|
 | **Build** | Patch a SteamOS recovery image with NVIDIA drivers |
-| **Generate Config** | Save a build configuration file for later or automated use |
+| **Generate Config** | Save a configuration file for build or live OS use |
 | **Flash** | Write a completed image to a USB drive |
 | **Flashless** | Install a built image to the inactive A/B slot (no USB needed) |
+| **Live OS** | Apply a configuration directly to the running system |
+| **Validate** | Check system configuration and installed state |
 | **Diagnostics** | System diagnostics and hardware reporting |
-| **Configure** | Post-install configuration checklist |
+| **Boot Selector** | Choose which A/B slot to boot next |
 | **Reboot** | Reboot helper |
 | **Quit** | Exit |
 
@@ -61,6 +63,24 @@ Selecting **Flash** to write a completed image to USB. The dialog shows removabl
 
 Selecting **Flashless** installs directly to the inactive A/B slot without needing a USB drive. The tool detects the current and target slots, verifies the image is an NVIDIA build, and writes it to the inactive partition.
 
+### Live OS flow
+
+Selecting **Live OS** applies a configuration directly to the running SteamOS system. The flow mirrors Build but operates on the live rootfs instead of an offline image.
+
+1. Select a `.conf` file (generated via **Generate Config** or written manually)
+2. Review the configuration summary and any warnings for destructive actions
+3. Confirm and apply
+
+The config uses the same format as Build. Key variables: `HW_SUPPORT_ITEMS`, `GAMING_ITEMS`, `INITRAMFS_MODULES`, `DEFAULT_SESSION`, `UPDATE_MODE`, `BASE_OS_MODE`. See [Live Pipeline](pipeline-live.md) for details.
+
+Destructive actions trigger a warning dialog before execution: base OS upgrade, disable autologin, set password, fix keyring, skip signature checks.
+
+### Generate Config flow
+
+Selecting **Generate Config** opens a mode selector (Build or Live OS), then a settings form. The form adapts to the selected mode — Live OS hides build-only fields (rootfs size, workspace, one-click installer, custom finalize script, persist builder).
+
+After configuring, a confirmation summary is shown and the config is saved as a `.conf` file. This file can be used with Build, Live OS, or the CLI.
+
 ---
 
 ## CLI Mode
@@ -71,7 +91,8 @@ Pass named arguments (no positional parameters). Root is requested automatically
 ./steamos-build.sh --action build --image FILE [build options]
 ./steamos-build.sh --action flash --image FILE --device /dev/sdX
 ./steamos-build.sh --action flashless --image FILE
-./steamos-build.sh --action configure
+./steamos-build.sh --action live --config FILE
+./steamos-build.sh --action validate [--config FILE] [--image FILE]
 ./steamos-build.sh --action reboot
 ./steamos-build.sh --action list-images
 ./steamos-build.sh --action list-devices
@@ -93,10 +114,10 @@ Install host dependencies (Arch/SteamOS only):
 
 | Argument | Description |
 |---|---|
-| `--action ACTION` | One of: `build`, `flash`, `flashless`, `configure`, `reboot`, `list-images`, `list-devices`, `is-system-disk`, `preflight` |
+| `--action ACTION` | One of: `build`, `flash`, `flashless`, `live`, `validate`, `reboot`, `list-images`, `list-devices`, `is-system-disk`, `preflight` |
 | `--image FILE` | Source or completed image path |
 | `--device DEVICE` | Target block device for flashing (e.g. `/dev/sda`) |
-| `--config FILE` | Load settings from a config file (see [Build Config](customization_build_config.md)) |
+| `--config FILE` | Load settings from a config file (used by build, live, and validate) |
 | `--output-dir DIR` | Where to write the output image |
 
 ### Flash options
@@ -125,4 +146,10 @@ the full list.
 # Flashless install
 ./steamos-build.sh --action flashless \
     --image /path/to/steamdeck-repair-nvidia-usbinstall.img
+
+# Apply config to live system
+sudo ./steamos-build.sh --action live --config my-live.conf
+
+# Validate live system against config
+./steamos-build.sh --action validate --config my-build.conf
 ```

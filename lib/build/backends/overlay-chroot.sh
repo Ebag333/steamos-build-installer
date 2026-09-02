@@ -292,9 +292,17 @@ _build_overlay_sync_root() {
   # Copy pacman.conf into the root
   cp "$pacman_conf" "$root/etc/pacman.conf"
 
+  # Pre-flight: resolve known package conflicts before syncing
+  if ! pacman_upgrade_preflight "Build root sync" --root "$root"; then
+    return 0
+  fi
+
   # Refresh package database (Valve repos are required, Arch repos are optional)
+  # Phase 4 already performed pacman -Syu; only refresh databases here.
   local sync_output
-  sync_output="$(chroot "$root" pacman -Sy 2>&1)" || true
+  sync_output="$(chroot "$root" pacman -Sy --noconfirm --ask=4 \
+    > >(_pacman_filter_stdout) \
+    2> >(tee -a "${PACMAN_RAW_LOG:-/dev/null}" | _pacman_filter_stderr >&2))" || true
 
   # Check if at least the Valve repos synced
   if echo "$sync_output" | grep -q "core-3.8\|holo-3.8\|jupiter-3.8"; then
@@ -705,14 +713,14 @@ _build_overlay_run() {
   # Explicitly reinstall glibc first to restore stripped development headers.
   # SteamOS runtime images register glibc as installed but may lack /usr/include/*.h.
   # pacman -S base-devel won't touch glibc if it's already "installed".
-  chroot "$root" pacman -S --noconfirm glibc 2>&1 | tail -5 || {
+  if ! pacman_install --chroot --no-needed --noconfirm -- glibc; then
     warn "Failed to reinstall glibc"
     return 1
-  }
-  chroot "$root" pacman -S --noconfirm base-devel 2>&1 | tail -5 || {
+  fi
+  if ! pacman_install --chroot --no-needed --noconfirm -- base-devel; then
     warn "Failed to install build dependencies"
     return 1
-  }
+  fi
 
   # Install recipe-specific dependencies based on build mode
   _build_overlay_install_deps "$root" "$recipe_conf" "$install_cmd"
@@ -767,7 +775,8 @@ _build_overlay_install_deps() {
 
   if [[ -n "$deps" ]]; then
     log "  Installing recipe dependencies: $deps"
-    chroot "$root" pacman -S --noconfirm "$deps" 2>&1 | tail -5 || true
+    # shellcheck disable=SC2086 # deps is intentionally word-split
+    pacman_install --chroot --no-needed --noconfirm -- $deps || true
   fi
 }
 

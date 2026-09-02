@@ -5,7 +5,7 @@
 # installation via systemd user service.
 #
 # Usage: install-dlss-updater.sh ROOT
-#   ROOT: target rootfs mount point (e.g. /dev/shm/nvidia-build/mnt)
+#   ROOT: target rootfs mount point (e.g. /dev/shm/steamos-build/mnt)
 #
 set -euo pipefail
 

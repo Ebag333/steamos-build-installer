@@ -19,11 +19,42 @@ fi
 # Callers may also define these optional hooks before or after sourcing:
 #   failure_journal_context  -> prints compact caller-specific journal context
 #   failure_snapshot_extra   -> emits caller-specific diagnostic sections
+# Debug log line — only prints when DEBUG=1.  Goes to stderr to avoid
+# polluting pipelines.
+debug() {
+  [[ "${DEBUG:-0}" == 1 ]] || return 0
+  printf 'DEBUG: %s\n' "$*" >&2
+}
+
+# Run a command only when DEBUG=1.  Returns 0 immediately otherwise.
+# Use for expensive diagnostics that should not slow normal builds.
+debug_cmd() {
+  [[ "${DEBUG:-0}" == 1 ]] || return 0
+  "$@"
+}
+
+# Verbose log — prints when VERBOSE=1 or DEBUG=1 (debug implies verbose).
+verbose_log() {
+  [[ "${VERBOSE:-0}" == 1 || "${DEBUG:-0}" == 1 ]] || return 0
+  log "$@"
+}
+
+# Append a raw line to the persistent log file.  No prefix, no color.
+# Defaults to /dev/null when RAW_LOG is unset.
+raw_log() {
+  printf '%s\n' "$*" >>"${RAW_LOG:-/dev/null}"
+}
+
 : "${LOG_TAG:=nvidia-usb}"
 : "${LOGGER_TAG:=steamos-build}"
 : "${LOG_COLOR:=1}"
 : "${CURRENT_STEP:=startup}"
 : "${FAILURE_REPORTED:=0}"
+: "${PACMAN_RAW_LOG:=/tmp/steamos-pacman-raw.log}"
+: "${PARTITION_DEBUG_LOG:=/tmp/steamos-partition.log}"
+: "${BTRFS_DEBUG_LOG:=/dev/null}"
+: "${DEBUG:=0}"
+: "${VERBOSE:=0}"
 
 log() {
   if [[ "${LOG_COLOR:-1}" -eq 1 ]]; then
@@ -93,6 +124,18 @@ failure_snapshot() {
   echo >&2
   echo "=== SPACE ===" >&2
   df -h /home 2>&1 || df -h 2>&1 || true
+
+  # Dump raw Pacman log tail on failure
+  if [[ -s "${PACMAN_RAW_LOG:-}" ]]; then
+    warn "Pacman raw output (last 100 lines):"
+    tail -100 "$PACMAN_RAW_LOG" >&2
+  fi
+
+  # Dump partition debug log tail on failure
+  if [[ -s "${PARTITION_DEBUG_LOG:-}" ]]; then
+    warn "Partition operations raw output (last 50 lines):"
+    tail -50 "$PARTITION_DEBUG_LOG" >&2
+  fi
 }
 
 report_failure() {
@@ -601,7 +644,7 @@ cleanup() {
   for kid in $(jobs -p 2>/dev/null); do
     kill "$kid" 2>/dev/null || true
     wait "$kid" 2>/dev/null || true
-    ((kid_count++))
+    ((++kid_count))
   done
   ((kid_count > 0)) && log "cleanup: stopped $kid_count background child(ren)"
 

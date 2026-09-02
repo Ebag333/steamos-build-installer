@@ -402,7 +402,7 @@ build_cases() {
   # shellcheck disable=SC2034 # reports unused; only canon and score are consumed
   while IFS=$'\t' read -r canon score reports; do
     [[ -n "$canon" ]] || continue
-    ((count++))
+    ((++count))
     ((count > 8)) && break
 
     local env_str="" arg_str=""
@@ -715,7 +715,7 @@ print(data.get('name', sys.argv[2]))
 
   for ((r = 1; r <= ROUNDS; r++)); do
     for i in "${!CASE_LABELS[@]}"; do
-      ((run_num++))
+      ((++run_num))
       log "[$run_num/$total_runs] Case $((i + 1))/${#CASE_LABELS[@]}, round $r/$ROUNDS ..."
       run_one "$i" "$r"
 

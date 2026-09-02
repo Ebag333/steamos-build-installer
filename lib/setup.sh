@@ -21,7 +21,7 @@ setup_resolve_workdir() {
 
   # If the user forced a location via config, honour it.
   if [[ "${WORKDIR_LOCATION:-auto}" == "ram" ]]; then
-    WORKDIR="/dev/shm/nvidia-build"
+    WORKDIR="/dev/shm/steamos-build"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR"
     log "Build workspace: RAM (forced by config)"
@@ -112,7 +112,7 @@ if len(d) >= 596 and d[512:520] == b"EFI PART":
 
   # Auto: prefer RAM if it has enough headroom, otherwise disk.
   if ((ram_avail >= need_mb)); then
-    WORKDIR="/dev/shm/nvidia-build"
+    WORKDIR="/dev/shm/steamos-build"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR"
     log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free, need ~${need_mb})"
@@ -244,16 +244,27 @@ setup_loop_mount() {
   partx -a "$LOOPDEV"
   udevadm settle --timeout=10
 
+  local checked=0 passed=0
   for part in "$LOOPDEV"p*; do
     [[ -b "$part" ]] || continue
+    ((++checked))
 
-    log "udev quarantine state for $part:"
-    udevadm info -q property -n "$part" 2>/dev/null \
-      | grep -E 'ID_PART_ENTRY_(UUID|NAME)|UDISKS_IGNORE|SYSTEMD_READY' \
-      | while IFS="" read -r line; do
-        log "  $line"
-      done || true
+    local props
+    props="$(udevadm info -q property -n "$part" 2>/dev/null)" || true
+
+    if echo "$props" | grep -q 'UDISKS_IGNORE=1' \
+      && echo "$props" | grep -q 'SYSTEMD_READY=0'; then
+      ((++passed))
+    else
+      warn "udev quarantine FAILED for $part:"
+      echo "$props" \
+        | grep -E 'ID_PART_ENTRY_(UUID|NAME)|UDISKS_IGNORE|SYSTEMD_READY' \
+        | while IFS="" read -r line; do
+          warn "  $line"
+        done || true
+    fi
   done
+  log "udev quarantine: $passed/$checked image partitions protected"
 
   # A build-loop partition must NEVER own a SteamOS partset link.
   local link target collision=0

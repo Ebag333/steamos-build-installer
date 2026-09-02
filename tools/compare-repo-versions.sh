@@ -13,8 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VALVE_PKGS_CONF="$REPO_ROOT/lib/configs/hw-packages-valve.conf"
-ARCH_PKGS_CONF="$REPO_ROOT/lib/configs/hw-packages-arch.conf"
+HW_PACKAGES_CONF="$REPO_ROOT/lib/configs/hw-packages.conf"
 ARCH_PACMAN_CONF="$REPO_ROOT/lib/configs/pacman-arch.conf"
 
 ARCH_DBPATH="/var/lib/pacman-arch"
@@ -22,7 +21,7 @@ ARCH_DBPATH="/var/lib/pacman-arch"
 MODE="compare"
 [[ "${1:-}" == "--upgrades" ]] && MODE="upgrades"
 
-for f in "$VALVE_PKGS_CONF" "$ARCH_PKGS_CONF" "$ARCH_PACMAN_CONF"; do
+for f in "$HW_PACKAGES_CONF" "$ARCH_PACMAN_CONF"; do
   if [[ ! -f "$f" ]]; then
     echo "ERROR: Required config not found: $f" >&2
     exit 1
@@ -30,11 +29,12 @@ for f in "$VALVE_PKGS_CONF" "$ARCH_PKGS_CONF" "$ARCH_PACMAN_CONF"; do
 done
 
 # ---------------------------------------------------------------------------
-# Extract package names from a pipe-delimited config file.
+# Extract package names from hw-packages.conf filtered by TYPE.
 # ---------------------------------------------------------------------------
 extract_packages() {
   local conf="$1"
-  grep -v '^\s*#' "$conf" | grep -v '^\s*$' | cut -d'|' -f2 | sort -u
+  local type_filter="$2"
+  awk -F'|' -v t="$type_filter" '!/^\s*(#|$)/ && $1 == t {print $2}' "$conf" | sort -u
 }
 
 # ---------------------------------------------------------------------------
@@ -50,6 +50,7 @@ query_version() {
   local raw
 
   if [[ -n "$extra_args" ]]; then
+    # shellcheck disable=SC2086 # extra_args is intentionally word-split
     raw=$(pacman $extra_args -Si "$pkg" 2>&1) || true
   else
     raw=$(pacman -Si "$pkg" 2>&1) || true
@@ -76,8 +77,7 @@ echo ""
 if [[ "$MODE" == "compare" ]]; then
   mapfile -t packages < <(
     {
-      extract_packages "$VALVE_PKGS_CONF"
-      extract_packages "$ARCH_PKGS_CONF"
+      extract_packages "$HW_PACKAGES_CONF" "pacman"
     } | sort -u
   )
 
@@ -94,22 +94,31 @@ if [[ "$MODE" == "compare" ]]; then
   printf "%-35s %-22s %-22s %s\n" "PACKAGE" "VALVE" "ARCH" "STATUS"
   printf "%-35s %-22s %-22s %s\n" "-------" "-----" "----" "------"
 
-  same=0; different=0; valve_only=0; arch_only=0; both_missing=0
+  same=0
+  different=0
+  valve_only=0
+  arch_only=0
+  both_missing=0
 
   for pkg in "${packages[@]}"; do
     valve_ver=$(query_version "$pkg")
     arch_ver=$(query_version "$pkg" "--config $ARCH_PACMAN_CONF --dbpath $ARCH_DBPATH")
 
     if [[ "$valve_ver" == "NOT FOUND" && "$arch_ver" == "NOT FOUND" ]]; then
-      status="BOTH MISSING"; ((both_missing++)) || true
+      status="BOTH MISSING"
+      ((++both_missing)) || true
     elif [[ "$valve_ver" == "NOT FOUND" ]]; then
-      status="ARCH ONLY"; ((arch_only++)) || true
+      status="ARCH ONLY"
+      ((++arch_only)) || true
     elif [[ "$arch_ver" == "NOT FOUND" ]]; then
-      status="VALVE ONLY"; ((valve_only++)) || true
+      status="VALVE ONLY"
+      ((++valve_only)) || true
     elif [[ "$valve_ver" == "$arch_ver" ]]; then
-      status="SAME"; ((same++)) || true
+      status="SAME"
+      ((++same)) || true
     else
-      status="DIFFERENT"; ((different++)) || true
+      status="DIFFERENT"
+      ((++different)) || true
     fi
 
     printf "%-35s %-22s %-22s %s\n" "$pkg" "$valve_ver" "$arch_ver" "$status"
@@ -143,12 +152,12 @@ elif [[ "$MODE" == "upgrades" ]]; then
 
     if [[ "$arch_ver" == "NOT FOUND" ]]; then
       printf "%-35s %-22s %-22s %s\n" "$pkg" "$installed_ver" "NOT IN ARCH" "-"
-      ((not_in_arch++)) || true
+      ((++not_in_arch)) || true
       continue
     fi
 
     if [[ "$installed_ver" == "$arch_ver" ]]; then
-      ((up_to_date++)) || true
+      ((++up_to_date)) || true
       continue
     fi
 
@@ -156,9 +165,9 @@ elif [[ "$MODE" == "upgrades" ]]; then
     cmp=$(vercmp "$installed_ver" "$arch_ver" 2>/dev/null || echo "0")
     if [[ "$cmp" -lt 0 ]]; then
       printf "%-35s %-22s %-22s %s\n" "$pkg" "$installed_ver" "$arch_ver" "YES"
-      ((upgrades++)) || true
+      ((++upgrades)) || true
     else
-      ((up_to_date++)) || true
+      ((++up_to_date)) || true
     fi
   done < <(pacman -Q 2>/dev/null)
 

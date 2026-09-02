@@ -82,6 +82,6 @@ All build options are set via the config file. There are no CLI flags for build 
 | `ADD_INSTALLER` | `1` | Include one-click installer |
 | `HW_SUPPORT_ITEMS` | `""` | Space-separated HW packages to install |
 | `GAMING_ITEMS` | `""` | Space-separated system tweaks |
-| `CUSTOM_DRIVERS` | `""` | Space-separated custom driver builds |
 | `INITRAMFS_MODULES` | `""` | Kernel modules for initramfs |
 | `ALLOW_SYSTEM_DISK` | `0` | Allow flashing system disk |
+| `VALIDATE_OUTPUT_FORMAT` | `text` | Validation output: text or json |

@@ -10,7 +10,17 @@ set -euo pipefail
 
 REF="${1:-master}"
 BASE_URL="https://raw.githubusercontent.com/torvalds/linux/$REF/drivers/hid"
-KVER="$(uname -r)"
+KVER="$(
+  find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+    | sort -V \
+    | tail -1
+)"
+
+[[ -d "/usr/lib/modules/$KVER/build" ]] || {
+  echo "ERROR: headers/build tree missing for $KVER" >&2
+  exit 1
+}
+
 BUILD_DIR="/tmp/hid-kmod"
 INSTALL_DIR="/usr/lib/modules/$KVER/updates/logitech"
 BUNDLE_DIR="/home/.steamos-build/bundles/hid"

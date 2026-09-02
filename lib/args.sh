@@ -61,6 +61,24 @@ parse_common_arg() {
       _ARG_SHIFT=1
       return 0
       ;;
+    --output)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
+      VALIDATE_OUTPUT_FILE="${2:?--output requires a value}"
+      _ARG_SHIFT=2
+      return 0
+      ;;
+    --debug)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh, lib/common.sh
+      DEBUG=1
+      _ARG_SHIFT=1
+      return 0
+      ;;
+    --verbose)
+      # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh, lib/common.sh
+      VERBOSE=1
+      _ARG_SHIFT=1
+      return 0
+      ;;
     *)
       return 1
       ;;

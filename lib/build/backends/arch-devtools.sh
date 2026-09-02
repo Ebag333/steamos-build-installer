@@ -86,8 +86,10 @@ _build_devtools_sync_root() {
 
   log "  Syncing build root"
 
-  # Update the root
-  arch-nspawn -C "$pacman_conf" "$root" pacman -Syu --noconfirm 2>&1 | tail -5
+  # Update the root — Phase 4 already performed pacman -Syu; only refresh databases here.
+  arch-nspawn -C "$pacman_conf" "$root" pacman -Sy --noconfirm --ask=4 \
+    > >(tail -5 | _pacman_filter_stdout) \
+    2> >(tee -a "${PACMAN_RAW_LOG:-/dev/null}" | _pacman_filter_stderr >&2)
   if [[ "${PIPESTATUS[0]}" -ne 0 ]]; then
     warn "Failed to sync build root"
     return 1

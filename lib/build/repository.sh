@@ -122,33 +122,6 @@ repo_is_in_target() {
   pacman -Q --dbpath "$dbpath" "$pkg" >/dev/null 2>&1
 }
 
-# Validate that a package transaction doesn't cross distro boundaries.
-# Args: $1 = root path, $@ = package names
-# Returns 0 if safe, 1 if any package would cross distro boundaries.
-repo_validate_transaction() {
-  local root="${1:?}"
-  shift
-
-  local pkg
-  for pkg in "$@"; do
-    # Strip version pin
-    pkg="${pkg%%=*}"
-
-    # Skip empty
-    [[ -z "$pkg" ]] && continue
-
-    # If the package is in the target image and not in the allowed list, reject
-    if repo_is_in_target "$root" "$pkg"; then
-      if ! repo_is_arch_allowed "$pkg"; then
-        warn "Cross-distro upgrade blocked: $pkg is already installed from target"
-        return 1
-      fi
-    fi
-  done
-
-  return 0
-}
-
 # Generate a pacman config with proper repository priority.
 # Args: $1 = target root, $2 = output path, $3 = include arch repos (0/1)
 repo_generate_config() {

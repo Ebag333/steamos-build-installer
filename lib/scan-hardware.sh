@@ -87,7 +87,7 @@ while IFS="" read -r line; do
     esac
     printf "%-12s %-8s %-11s %-45s %-18s %b\n" "$dev" "$class" "${vendor_device:--}" "${desc:0:45}" "$driver" "$status"
   else
-    ((unclaimed++))
+    ((++unclaimed))
     status="${RED}✗ unclaimed${NC}"
 
     # Check if a module exists
@@ -109,7 +109,7 @@ while IFS="" read -r line; do
     if [[ -n "$modules" ]]; then
       for mod in $modules; do
         if [[ "$(classify_driver "$mod")" == "CRITICAL" ]]; then
-          ((critical_missing++))
+          ((++critical_missing))
         fi
       done
     fi

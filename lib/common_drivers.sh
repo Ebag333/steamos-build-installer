@@ -20,25 +20,57 @@ NVIDIA_CMDLINE_ADD='rd.driver.blacklist=nouveau modprobe.blacklist=nouveau nvidi
 # shellcheck disable=SC2034
 DEBUG_CMDLINE_ADD='rd.debug rd.log=all'
 
+# Check if nvidia was selected for this build.
+# Returns 0 if nvidia is selected, 1 if not.
+# Checks HW_NVIDIA_REQUESTED (set by install_hw_libs) or falls back to
+# checking if nvidia-utils is installed in the image.
+nvidia_is_selected() {
+  # Fast path: flag set by install_hw_libs
+  if [[ "${HW_NVIDIA_REQUESTED:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  # Check HW_SUPPORT_ITEMS for nvidia packages (used by validator)
+  if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then
+    if [[ " $HW_SUPPORT_ITEMS " == *" nvidia-open-dkms "* || " $HW_SUPPORT_ITEMS " == *" nvidia-utils "* ]]; then
+      return 0
+    fi
+  fi
+  # Fallback: check if nvidia-utils is in the image
+  if [[ -n "${MNT:-}" ]] && pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" nvidia-utils &>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 # Discover kernel package in a rootfs's pacman local db.
 # Sets KPKG_DIR, KPKG_FULL, KPKG_NAME, KPKG_VERREL globals.
 # Args: $1 = root path
 discover_kernel_pkg() {
   local root="${1:?discover_kernel_pkg: missing root}"
-  PACDB="$root/usr/lib/holo/pacmandb/local"
+  local dbpath="$root/usr/lib/holo/pacmandb"
 
-  KPKG_DIR=""
-  for d in "$PACDB"/linux-neptune-*-[0-9]*; do
-    [[ -d "$d" ]] || continue
-    case "$(basename "$d")" in *-headers-* | *firmware* | *rtw*) continue ;; esac
-    KPKG_DIR="$d"
-    break
-  done
-  [[ -n "$KPKG_DIR" ]] || die "Kernel package not found in $root pacman db"
+  KPKG_NAME="$(
+    pacman --dbpath "$dbpath" -Qq 2>/dev/null \
+      | grep -E '^linux-neptune-[0-9]+$' \
+      | head -n1
+  )"
 
-  KPKG_FULL="$(basename "$KPKG_DIR")"
-  KPKG_NAME="${KPKG_FULL%-*-*}"
-  KPKG_VERREL="${KPKG_FULL#"$KPKG_NAME"-}"
+  [[ -n "$KPKG_NAME" ]] \
+    || die "Kernel package not found in $root pacman db"
+
+  KPKG_VERREL="$(
+    pacman --dbpath "$dbpath" -Q "$KPKG_NAME" 2>/dev/null \
+      | awk 'NR == 1 {print $2}'
+  )"
+
+  [[ -n "$KPKG_VERREL" ]] \
+    || die "Could not determine version for kernel package $KPKG_NAME"
+
+  KPKG_FULL="${KPKG_NAME}-${KPKG_VERREL}"
+  KPKG_DIR="$dbpath/local/$KPKG_FULL"
+
+  [[ -d "$KPKG_DIR" ]] \
+    || die "Kernel package DB entry not found: $KPKG_DIR"
 }
 
 # Construct the headers URL for a kernel package.
@@ -75,7 +107,7 @@ compute_new_pkgs() {
       env LC_ALL=C comm -13 "$before" "$after" \
         | awk '{print $1}' \
         | grep -Ev "$BUILD_ONLY_RE" \
-        | grep -vxFf "$extra_exclude"
+        | awk -v excl="$extra_exclude" 'BEGIN{while((getline l < excl)>0) e[l]=1} !e[$0]'
     )
   else
     mapfile -t NEW_PKGS < <(
@@ -151,11 +183,39 @@ register_payload_pkgs() {
   local overlay_upper="${2:?register_payload_pkgs: missing overlay upper}"
   shift 2
 
+  local db="$dest_root/usr/lib/holo/pacmandb/local"
+  local pkg new_ver old_ver src
+
+  mkdir -p "$db"
+
   for pkg in "$@"; do
-    rm -rf "$dest_root/usr/lib/holo/pacmandb/local/$pkg"-[0-9]*
-    for entry in "$overlay_upper/usr/lib/holo/pacmandb/local/$pkg"-[0-9]*; do
-      [[ -d "$entry" ]] && rsync -a "$entry" "$dest_root/usr/lib/holo/pacmandb/local/" && break
-    done
+    # Exact version installed in the overlay.
+    new_ver="$(
+      chroot "$MERGED" pacman -Q "$pkg" 2>/dev/null \
+        | awk 'NR == 1 {print $2}'
+    )"
+
+    [[ -n "$new_ver" ]] \
+      || die "Unable to determine overlay version for package: $pkg"
+
+    src="$overlay_upper/usr/lib/holo/pacmandb/local/$pkg-$new_ver"
+
+    [[ -d "$src" ]] \
+      || die "Pacman DB entry not found in overlay upper: $pkg-$new_ver"
+
+    # Remove exact previous version of this same package from destination.
+    old_ver="$(
+      pacman \
+        --dbpath "$dest_root/usr/lib/holo/pacmandb" \
+        -Q "$pkg" 2>/dev/null \
+        | awk 'NR == 1 {print $2}'
+    )" || true
+
+    if [[ -n "$old_ver" ]]; then
+      rm -rf -- "$db/$pkg-$old_ver"
+    fi
+
+    rsync -a -- "$src" "$db/"
   done
 }
 
@@ -165,17 +225,35 @@ register_payload_pkgs() {
 #   (via in_chroot) before the entry is deleted.  Directories are skipped since
 #   they are shared across packages.
 remove_replaced_packages() {
-  local root="$1"
+  local root="${1:?remove_replaced_packages: missing root}"
   shift
-  local pkg f
+
+  local dbpath="$root/usr/lib/holo/pacmandb"
+  local pkg f ver
 
   for pkg in "$@"; do
     log "  Removing replaced package files: $pkg"
+
+    # Query the OLD package while it is still registered in the destination.
     while IFS="" read -r f; do
-      [[ "$f" == */ ]] && continue
-      rm -f "$root$f" 2>/dev/null || true
-    done < <(in_chroot "pacman -Qlq $pkg" 2>/dev/null)
-    rm -rf "$root/usr/lib/holo/pacmandb/local/$pkg"-[0-9]* 2>/dev/null || true
+      [[ -z "$f" || "$f" == */ ]] && continue
+      rm -f -- "$root$f" 2>/dev/null || true
+    done < <(
+      pacman \
+        --dbpath "$dbpath" \
+        -Qlq "$pkg" 2>/dev/null
+    )
+
+    ver="$(
+      pacman \
+        --dbpath "$dbpath" \
+        -Q "$pkg" 2>/dev/null \
+        | awk 'NR == 1 {print $2}'
+    )" || true
+
+    if [[ -n "$ver" ]]; then
+      rm -rf -- "$dbpath/local/$pkg-$ver"
+    fi
   done
 }
 
@@ -279,8 +357,24 @@ install_kernel_headers() {
   in_chroot "curl -sfL '$HDR_URL' -o /tmp/headers.pkg.tar.zst"
 
   log "Installing exact-match kernel headers"
-  in_chroot \
-    "pacman --config '$PACCONF' -U $PACOPTS /tmp/headers.pkg.tar.zst"
+  pacman_install_local -- /tmp/headers.pkg.tar.zst
+}
+
+# Verify that a propagated package in the final image matches the overlay.
+# Args: $1 = package name
+# Uses globals: MERGED, MNT
+verify_propagated_package() {
+  local pkg="$1"
+  local expected actual
+  expected="$(chroot "$MERGED" pacman -Q "$pkg" 2>/dev/null)" || return 1
+  actual="$(chroot "$MNT" pacman -Q "$pkg" 2>/dev/null)" || {
+    die "Package missing from final image after propagation: $pkg"
+  }
+  if [[ "$actual" != "$expected" ]]; then
+    die "Package state mismatch after propagation: $pkg
+  overlay: $expected
+  image:   $actual"
+  fi
 }
 
 # rsync the payload into the real image rootfs and register its packages.
@@ -323,11 +417,16 @@ install_payload() {
   log "Running depmod + ldconfig in the image"
   run_depmod_ldconfig "$MNT" "$KVER"
 
-  log "Writing modprobe config (blacklist nouveau, enable nvidia KMS)"
-  mkdir -p "$MERGED/etc/modprobe.d"
-  cp "$SCRIPT_DIR/lib/configs/99-nvidia-patch.conf" "$MERGED/etc/modprobe.d/99-nvidia-patch.conf"
-  mkdir -p "$MNT/etc/modprobe.d"
-  cp "$SCRIPT_DIR/lib/configs/99-nvidia-patch.conf" "$MNT/etc/modprobe.d/99-nvidia-patch.conf"
+  # Only install nvidia modprobe config if nvidia packages are present
+  if [[ -d "$MNT/usr/share/nvidia" ]] || [[ -f "$MNT/usr/bin/nvidia-smi" ]]; then
+    log "Writing modprobe config (blacklist nouveau, enable nvidia KMS)"
+    mkdir -p "$MERGED/etc/modprobe.d"
+    cp "$SCRIPT_DIR/lib/configs/99-nvidia-patch.conf" "$MERGED/etc/modprobe.d/99-nvidia-patch.conf"
+    mkdir -p "$MNT/etc/modprobe.d"
+    cp "$SCRIPT_DIR/lib/configs/99-nvidia-patch.conf" "$MNT/etc/modprobe.d/99-nvidia-patch.conf"
+  else
+    log "Skipping nvidia modprobe config (nvidia not installed)"
+  fi
 
   log "Restoring module autoloading in initramfs"
   mount_chroot_fs "$MNT"
@@ -346,7 +445,11 @@ install_payload() {
 
   umount_chroot_fs "$MNT" strict
 
-  enable_nvidia_power_services "$MNT"
+  if nvidia_is_selected; then
+    enable_nvidia_power_services "$MNT"
+  else
+    log "Skipping nvidia power services (nvidia not selected)"
+  fi
 
   # Bundle scan-hardware.sh for manual use.
   log "Installing hardware scan tool"
@@ -380,4 +483,57 @@ configure_update_channel() {
   verify_system_config update-branch "$MNT" "$branch"
 
   log "Update channel configured and verified"
+}
+
+# Copy built kernel modules from the build overlay to the target image.
+# This is the new "copy back" mechanism that only copies built artifacts,
+# not the entire pacman transaction.
+#
+# Args: none (uses globals: $MERGED, $MNT, $KVER, $BUILT_MODULE_FILES)
+# ---------------------------------------------------------------------------
+copy_built_modules_to_image() {
+  [[ -n "${MERGED:-}" ]] || die "copy_built_modules_to_image: MERGED is not set"
+  [[ -n "${MNT:-}" ]] || die "copy_built_modules_to_image: MNT is not set"
+  [[ -n "${KVER:-}" ]] || die "copy_built_modules_to_image: KVER is not set"
+
+  # Check if there are any modules to copy
+  local has_modules=0
+  if [[ -d "$MERGED/usr/lib/modules/$KVER/updates" ]]; then
+    has_modules=1
+  fi
+  if [[ -d "$WORKDIR/packages" ]] && compgen -G "$WORKDIR/packages/*.pkg.tar.*" >/dev/null; then
+    has_modules=1
+  fi
+
+  if [[ "$has_modules" -eq 0 ]]; then
+    log "No built modules — skipping module installation"
+    return 0
+  fi
+
+  log "Copying built modules from build overlay to image"
+
+  # Copy kernel modules from overlay to image
+  if [[ -d "$MERGED/usr/lib/modules/$KVER/updates" ]]; then
+    log "  Copying kernel module updates"
+    mkdir -p "$MNT/usr/lib/modules/$KVER"
+    rsync -a "$MERGED/usr/lib/modules/$KVER/updates" "$MNT/usr/lib/modules/$KVER/"
+  fi
+
+  # Copy any custom-built packages (from build recipes)
+  if [[ -d "$WORKDIR/packages" ]]; then
+    local pkg
+    for pkg in "$WORKDIR/packages"/*.pkg.tar.*; do
+      [[ -f "$pkg" ]] || continue
+      log "  Installing built package: $(basename "$pkg")"
+      install_build_artifact "$MNT" "$pkg"
+    done
+  fi
+
+  # Run depmod to update module dependencies (fatal if modules were installed)
+  log "  Running depmod"
+  if ! chroot "$MNT" depmod "$KVER" 2>/dev/null; then
+    die "depmod failed — module dependencies not generated for $KVER"
+  fi
+
+  log "Built modules copied to image"
 }

@@ -27,7 +27,7 @@ FORMAT="csv"
 HAVE_BASE_SET=0
 
 usage() {
-    cat <<'EOF_USAGE'
+  cat <<'EOF_USAGE'
 Usage:
   pacman-provenance-audit.sh --arch-conf FILE [OPTIONS] [PACKAGE...]
 
@@ -61,81 +61,81 @@ EOF_USAGE
 packages=()
 
 while (($#)); do
-    case "$1" in
-        --arch-conf)
-            ARCH_CONF="${2:?Missing value for --arch-conf}"
-            shift 2
-            ;;
-        --format)
-            FORMAT="${2:?Missing value for --format}"
-            shift 2
-            ;;
-        --csv)
-            FORMAT="csv"
-            shift
-            ;;
-        --json)
-            FORMAT="json"
-            shift
-            ;;
-        --tsv)
-            FORMAT="tsv"
-            shift
-            ;;
-        --table)
-            FORMAT="table"
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        --)
-            shift
-            packages+=("$@")
-            break
-            ;;
-        -*)
-            echo "Unknown option: $1" >&2
-            usage >&2
-            exit 2
-            ;;
-        *)
-            packages+=("$1")
-            shift
-            ;;
-    esac
+  case "$1" in
+    --arch-conf)
+      ARCH_CONF="${2:?Missing value for --arch-conf}"
+      shift 2
+      ;;
+    --format)
+      FORMAT="${2:?Missing value for --format}"
+      shift 2
+      ;;
+    --csv)
+      FORMAT="csv"
+      shift
+      ;;
+    --json)
+      FORMAT="json"
+      shift
+      ;;
+    --tsv)
+      FORMAT="tsv"
+      shift
+      ;;
+    --table)
+      FORMAT="table"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      packages+=("$@")
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      packages+=("$1")
+      shift
+      ;;
+  esac
 done
 
 case "$FORMAT" in
-    csv|json|tsv|table) ;;
-    *)
-        echo "ERROR: invalid output format: $FORMAT" >&2
-        echo "       expected one of: csv, json, tsv, table" >&2
-        exit 2
-        ;;
+  csv | json | tsv | table) ;;
+  *)
+    echo "ERROR: invalid output format: $FORMAT" >&2
+    echo "       expected one of: csv, json, tsv, table" >&2
+    exit 2
+    ;;
 esac
 
 [[ -n "$ARCH_CONF" ]] || {
-    echo "ERROR: --arch-conf is required" >&2
-    exit 2
+  echo "ERROR: --arch-conf is required" >&2
+  exit 2
 }
 
 [[ -f "$ARCH_CONF" ]] || {
-    echo "ERROR: Arch pacman config not found: $ARCH_CONF" >&2
-    exit 2
+  echo "ERROR: Arch pacman config not found: $ARCH_CONF" >&2
+  exit 2
 }
 
 for cmd in pacman pacman-conf awk sort vercmp; do
-    command -v "$cmd" >/dev/null || {
-        echo "ERROR: required command not found: $cmd" >&2
-        exit 1
-    }
+  command -v "$cmd" >/dev/null || {
+    echo "ERROR: required command not found: $cmd" >&2
+    exit 1
+  }
 done
 
 if [[ "$FORMAT" == "json" ]] && ! command -v python3 >/dev/null; then
-    echo "ERROR: --format json requires python3" >&2
-    exit 1
+  echo "ERROR: --format json requires python3" >&2
+  exit 1
 fi
 
 declare -A INSTALLED_VER=()
@@ -162,27 +162,27 @@ declare -A BASE_SET=()
 ###############################################################################
 
 is_valve_platform_repo() {
-    local repo="$1"
+  local repo="$1"
 
-    case "$repo" in
-        holo|holo-*|jupiter|jupiter-*)
-            return 0
-            ;;
-    esac
+  case "$repo" in
+    holo | holo-* | jupiter | jupiter-*)
+      return 0
+      ;;
+  esac
 
-    return 1
+  return 1
 }
 
 is_valve_base_repo() {
-    local repo="$1"
+  local repo="$1"
 
-    case "$repo" in
-        core|core-*|extra|extra-*|multilib|multilib-*)
-            return 0
-            ;;
-    esac
+  case "$repo" in
+    core | core-* | extra | extra-* | multilib | multilib-*)
+      return 0
+      ;;
+  esac
 
-    return 1
+  return 1
 }
 
 ###############################################################################
@@ -193,15 +193,15 @@ is_valve_base_repo() {
 ###############################################################################
 
 while IFS=$'\t' read -r name ver packager reason reqby; do
-    [[ -n "$name" ]] || continue
+  [[ -n "$name" ]] || continue
 
-    INSTALLED_VER["$name"]="$ver"
-    INSTALLED_PACKAGER["$name"]="$packager"
-    INSTALLED_REASON["$name"]="$reason"
-    INSTALLED_REQBY["$name"]="$reqby"
+  INSTALLED_VER["$name"]="$ver"
+  INSTALLED_PACKAGER["$name"]="$packager"
+  INSTALLED_REASON["$name"]="$reason"
+  INSTALLED_REQBY["$name"]="$reqby"
 done < <(
-    LC_ALL=C pacman -Qi |
-    awk '
+  LC_ALL=C pacman -Qi \
+    | awk '
         BEGIN {
             RS=""
             FS="\n"
@@ -269,85 +269,85 @@ done < <(
 echo "Loading Valve repository inventories..." >&2
 
 mapfile -t valve_repos < <(
-    LC_ALL=C pacman-conf --repo-list
+  LC_ALL=C pacman-conf --repo-list
 )
 
 for repo in "${valve_repos[@]}"; do
-    [[ -n "$repo" ]] || continue
+  [[ -n "$repo" ]] || continue
 
-    echo "  Valve: $repo" >&2
+  echo "  Valve: $repo" >&2
 
-    if ! repo_data="$(
-        LC_ALL=C pacman -Sl "$repo" 2>/dev/null
-    )"; then
-        echo "    WARNING: unable to read $repo" >&2
-        continue
+  if ! repo_data="$(
+    LC_ALL=C pacman -Sl "$repo" 2>/dev/null
+  )"; then
+    echo "    WARNING: unable to read $repo" >&2
+    continue
+  fi
+
+  while read -r actual_repo pkg ver _rest; do
+    [[ -n "$pkg" ]] || continue
+
+    # First occurrence follows pacman repository priority and is therefore
+    # the package Valve's configured repo order would normally resolve.
+    if [[ ! ${VALVE_PREF_REPO[$pkg]+isset} ]]; then
+      VALVE_PREF_REPO["$pkg"]="$actual_repo"
+      VALVE_PREF_VER["$pkg"]="$ver"
     fi
 
-    while read -r actual_repo pkg ver _rest; do
-        [[ -n "$pkg" ]] || continue
+    # Also retain the first platform and first ordinary base-repository
+    # copy independently. This exposes deliberate holo/jupiter shadowing.
+    if is_valve_platform_repo "$actual_repo" \
+      && [[ ! ${VALVE_PLATFORM_REPO[$pkg]+isset} ]]; then
+      VALVE_PLATFORM_REPO["$pkg"]="$actual_repo"
+      VALVE_PLATFORM_VER["$pkg"]="$ver"
+    fi
 
-        # First occurrence follows pacman repository priority and is therefore
-        # the package Valve's configured repo order would normally resolve.
-        if [[ ! ${VALVE_PREF_REPO[$pkg]+isset} ]]; then
-            VALVE_PREF_REPO["$pkg"]="$actual_repo"
-            VALVE_PREF_VER["$pkg"]="$ver"
-        fi
+    if is_valve_base_repo "$actual_repo" \
+      && [[ ! ${VALVE_BASE_REPO[$pkg]+isset} ]]; then
+      VALVE_BASE_REPO["$pkg"]="$actual_repo"
+      VALVE_BASE_VER["$pkg"]="$ver"
+    fi
 
-        # Also retain the first platform and first ordinary base-repository
-        # copy independently. This exposes deliberate holo/jupiter shadowing.
-        if is_valve_platform_repo "$actual_repo" &&
-           [[ ! ${VALVE_PLATFORM_REPO[$pkg]+isset} ]]; then
-            VALVE_PLATFORM_REPO["$pkg"]="$actual_repo"
-            VALVE_PLATFORM_VER["$pkg"]="$ver"
-        fi
+    if [[ -n ${VALVE_ALL[$pkg]-} ]]; then
+      VALVE_ALL["$pkg"]+=","
+    fi
 
-        if is_valve_base_repo "$actual_repo" &&
-           [[ ! ${VALVE_BASE_REPO[$pkg]+isset} ]]; then
-            VALVE_BASE_REPO["$pkg"]="$actual_repo"
-            VALVE_BASE_VER["$pkg"]="$ver"
-        fi
-
-        if [[ -n ${VALVE_ALL[$pkg]-} ]]; then
-            VALVE_ALL["$pkg"]+=","
-        fi
-
-        VALVE_ALL["$pkg"]+="${actual_repo}=${ver}"
-    done <<< "$repo_data"
+    VALVE_ALL["$pkg"]+="${actual_repo}=${ver}"
+  done <<<"$repo_data"
 done
 
 echo "Loading Arch repository inventories..." >&2
 
 mapfile -t arch_repos < <(
-    LC_ALL=C pacman-conf --config "$ARCH_CONF" --repo-list
+  LC_ALL=C pacman-conf --config "$ARCH_CONF" --repo-list
 )
 
 for repo in "${arch_repos[@]}"; do
-    [[ -n "$repo" ]] || continue
+  [[ -n "$repo" ]] || continue
 
-    echo "  Arch:  $repo" >&2
+  echo "  Arch:  $repo" >&2
 
-    if ! repo_data="$(
-        LC_ALL=C pacman --config "$ARCH_CONF" -Sl "$repo" 2>/dev/null
-    )"; then
-        echo "    WARNING: unable to read Arch repo $repo" >&2
-        continue
+  if ! repo_data="$(
+    LC_ALL=C pacman --config "$ARCH_CONF" -Sl "$repo" 2>/dev/null
+  )"; then
+    echo "    WARNING: unable to read Arch repo $repo" >&2
+    continue
+  fi
+
+  while read -r actual_repo pkg ver _rest; do
+    [[ -n "$pkg" ]] || continue
+
+    if [[ ! ${ARCH_PREF_REPO[$pkg]+isset} ]]; then
+      ARCH_PREF_REPO["$pkg"]="$actual_repo"
+      ARCH_PREF_VER["$pkg"]="$ver"
     fi
 
-    while read -r actual_repo pkg ver _rest; do
-        [[ -n "$pkg" ]] || continue
+    if [[ -n ${ARCH_ALL[$pkg]-} ]]; then
+      ARCH_ALL["$pkg"]+=","
+    fi
 
-        if [[ ! ${ARCH_PREF_REPO[$pkg]+isset} ]]; then
-            ARCH_PREF_REPO["$pkg"]="$actual_repo"
-            ARCH_PREF_VER["$pkg"]="$ver"
-        fi
-
-        if [[ -n ${ARCH_ALL[$pkg]-} ]]; then
-            ARCH_ALL["$pkg"]+=","
-        fi
-
-        ARCH_ALL["$pkg"]+="${actual_repo}=${ver}"
-    done <<< "$repo_data"
+    ARCH_ALL["$pkg"]+="${actual_repo}=${ver}"
+  done <<<"$repo_data"
 done
 
 ###############################################################################
@@ -359,26 +359,26 @@ done
 ###############################################################################
 
 if command -v pactree >/dev/null; then
-    echo "Building Arch base-package dependency set..." >&2
+  echo "Building Arch base-package dependency set..." >&2
 
-    while IFS= read -r pkg; do
-        [[ -n "$pkg" ]] || continue
-        BASE_SET["$pkg"]=1
-    done < <(
-        LC_ALL=C pactree -u base 2>/dev/null |
-            sed -E \
-                -e 's/^[^[:alnum:]@._+:-]*//' \
-                -e 's/[[:space:]].*$//' \
-                -e 's/[<>=].*$//' |
-            awk 'NF {print $1}' |
-            sort -u
-    )
+  while IFS= read -r pkg; do
+    [[ -n "$pkg" ]] || continue
+    BASE_SET["$pkg"]=1
+  done < <(
+    LC_ALL=C pactree -u base 2>/dev/null \
+      | sed -E \
+        -e 's/^[^[:alnum:]@._+:-]*//' \
+        -e 's/[[:space:]].*$//' \
+        -e 's/[<>=].*$//' \
+      | awk 'NF {print $1}' \
+      | sort -u
+  )
 
-    # The root metapackage itself is part of the set by definition.
-    BASE_SET[base]=1
-    HAVE_BASE_SET=1
+  # The root metapackage itself is part of the set by definition.
+  BASE_SET[base]=1
+  HAVE_BASE_SET=1
 else
-    echo "WARNING: pactree not installed (package: pacman-contrib); ARCH_BASE classification disabled" >&2
+  echo "WARNING: pactree not installed (package: pacman-contrib); ARCH_BASE classification disabled" >&2
 fi
 
 ###############################################################################
@@ -386,200 +386,200 @@ fi
 ###############################################################################
 
 version_delta() {
-    local installed="${1:-}"
-    local candidate="${2:-}"
+  local installed="${1:-}"
+  local candidate="${2:-}"
 
-    if [[ -z "$installed" || -z "$candidate" ]]; then
-        printf '%s' "-"
-        return
-    fi
+  if [[ -z "$installed" || -z "$candidate" ]]; then
+    printf '%s' "-"
+    return
+  fi
 
-    local cmp
-    cmp="$(vercmp "$candidate" "$installed")"
+  local cmp
+  cmp="$(vercmp "$candidate" "$installed")"
 
-    if ((cmp > 0)); then
-        printf '%s' "NEWER"
-    elif ((cmp < 0)); then
-        printf '%s' "OLDER"
-    else
-        printf '%s' "SAME"
-    fi
+  if ((cmp > 0)); then
+    printf '%s' "NEWER"
+  elif ((cmp < 0)); then
+    printf '%s' "OLDER"
+  else
+    printf '%s' "SAME"
+  fi
 }
 
 # Compare Valve's preferred platform override with Valve's own ordinary
 # core/extra/multilib copy. A same-pkgver but different pkgrel is called a
 # REBUILD, which is a useful signal that Valve deliberately rebuilt the package.
 valve_override_relation() {
-    local platform_ver="${1:-}"
-    local base_ver="${2:-}"
+  local platform_ver="${1:-}"
+  local base_ver="${2:-}"
 
-    if [[ -z "$platform_ver" || -z "$base_ver" ]]; then
-        printf '%s' "-"
-        return
-    fi
+  if [[ -z "$platform_ver" || -z "$base_ver" ]]; then
+    printf '%s' "-"
+    return
+  fi
 
-    if [[ "$platform_ver" == "$base_ver" ]]; then
-        printf '%s' "SAME"
-        return
-    fi
+  if [[ "$platform_ver" == "$base_ver" ]]; then
+    printf '%s' "SAME"
+    return
+  fi
 
-    local platform_pkgver="$platform_ver"
-    local base_pkgver="$base_ver"
+  local platform_pkgver="$platform_ver"
+  local base_pkgver="$base_ver"
 
-    if [[ "$platform_pkgver" == *-* ]]; then
-        platform_pkgver="${platform_pkgver%-*}"
-    fi
+  if [[ "$platform_pkgver" == *-* ]]; then
+    platform_pkgver="${platform_pkgver%-*}"
+  fi
 
-    if [[ "$base_pkgver" == *-* ]]; then
-        base_pkgver="${base_pkgver%-*}"
-    fi
+  if [[ "$base_pkgver" == *-* ]]; then
+    base_pkgver="${base_pkgver%-*}"
+  fi
 
-    if [[ "$platform_pkgver" == "$base_pkgver" ]]; then
-        printf '%s' "REBUILD"
-        return
-    fi
+  if [[ "$platform_pkgver" == "$base_pkgver" ]]; then
+    printf '%s' "REBUILD"
+    return
+  fi
 
-    local cmp
-    cmp="$(vercmp "$platform_ver" "$base_ver")"
+  local cmp
+  cmp="$(vercmp "$platform_ver" "$base_ver")"
 
-    if ((cmp > 0)); then
-        printf '%s' "PLATFORM_NEWER"
-    elif ((cmp < 0)); then
-        printf '%s' "PLATFORM_OLDER"
-    else
-        printf '%s' "SAME"
-    fi
+  if ((cmp > 0)); then
+    printf '%s' "PLATFORM_NEWER"
+  elif ((cmp < 0)); then
+    printf '%s' "PLATFORM_OLDER"
+  else
+    printf '%s' "SAME"
+  fi
 }
 
 repo_flags() {
-    local entries="$1"
-    local entry repo
+  local entries="$1"
+  local entry repo
 
-    local platform=0
-    local base_repo=0
-    local other=0
+  local platform=0
+  local base_repo=0
+  local other=0
 
-    IFS=',' read -ra parts <<< "$entries"
+  IFS=',' read -ra parts <<<"$entries"
 
-    for entry in "${parts[@]}"; do
-        [[ -n "$entry" ]] || continue
+  for entry in "${parts[@]}"; do
+    [[ -n "$entry" ]] || continue
 
-        repo="${entry%%=*}"
+    repo="${entry%%=*}"
 
-        if is_valve_platform_repo "$repo"; then
-            platform=1
-        elif is_valve_base_repo "$repo"; then
-            base_repo=1
-        else
-            other=1
-        fi
-    done
+    if is_valve_platform_repo "$repo"; then
+      platform=1
+    elif is_valve_base_repo "$repo"; then
+      base_repo=1
+    else
+      other=1
+    fi
+  done
 
-    printf '%s:%s:%s' "$platform" "$base_repo" "$other"
+  printf '%s:%s:%s' "$platform" "$base_repo" "$other"
 }
 
 source_class() {
-    local valve_entries="$1"
-    local arch_entries="$2"
+  local valve_entries="$1"
+  local arch_entries="$2"
 
-    local platform=0
-    local base_repo=0
-    local other=0
+  local platform=0
+  local base_repo=0
+  local other=0
 
-    if [[ -n "$valve_entries" ]]; then
-        IFS=: read -r platform base_repo other < <(
-            repo_flags "$valve_entries"
-        )
-    fi
+  if [[ -n "$valve_entries" ]]; then
+    IFS=: read -r platform base_repo other < <(
+      repo_flags "$valve_entries"
+    )
+  fi
 
-    if ((platform)); then
-        if [[ -n "$arch_entries" ]]; then
-            printf '%s' "VALVE_PLATFORM_OVERRIDE"
-        else
-            printf '%s' "VALVE_PLATFORM_ONLY"
-        fi
-        return
-    fi
-
-    if ((base_repo)); then
-        if [[ -n "$arch_entries" ]]; then
-            printf '%s' "SHARED_UPSTREAM"
-        else
-            printf '%s' "VALVE_BASE_REPO_ONLY"
-        fi
-        return
-    fi
-
-    if [[ -n "$valve_entries" ]]; then
-        if [[ -n "$arch_entries" ]]; then
-            printf '%s' "SHARED_OTHER"
-        else
-            printf '%s' "VALVE_OTHER_ONLY"
-        fi
-        return
-    fi
-
+  if ((platform)); then
     if [[ -n "$arch_entries" ]]; then
-        printf '%s' "ARCH_ONLY"
+      printf '%s' "VALVE_PLATFORM_OVERRIDE"
     else
-        printf '%s' "LOCAL_ONLY"
+      printf '%s' "VALVE_PLATFORM_ONLY"
     fi
+    return
+  fi
+
+  if ((base_repo)); then
+    if [[ -n "$arch_entries" ]]; then
+      printf '%s' "SHARED_UPSTREAM"
+    else
+      printf '%s' "VALVE_BASE_REPO_ONLY"
+    fi
+    return
+  fi
+
+  if [[ -n "$valve_entries" ]]; then
+    if [[ -n "$arch_entries" ]]; then
+      printf '%s' "SHARED_OTHER"
+    else
+      printf '%s' "VALVE_OTHER_ONLY"
+    fi
+    return
+  fi
+
+  if [[ -n "$arch_entries" ]]; then
+    printf '%s' "ARCH_ONLY"
+  else
+    printf '%s' "LOCAL_ONLY"
+  fi
 }
 
 package_flags() {
-    local pkg="$1"
-    local valve_entries="$2"
-    local reason="$3"
-    local reqby="$4"
-    local installed_ver="$5"
-    local valve_ver="$6"
-    local class="$7"
-    local arch_base="$8"
+  local pkg="$1"
+  local valve_entries="$2"
+  local reason="$3"
+  local reqby="$4"
+  local installed_ver="$5"
+  local valve_ver="$6"
+  local class="$7"
+  local arch_base="$8"
 
-    local flags=()
-    local platform=0 base_repo=0 other=0
+  local flags=()
+  local platform=0 base_repo=0 other=0
 
-    if [[ -n "$valve_entries" ]]; then
-        IFS=: read -r platform base_repo other < <(
-            repo_flags "$valve_entries"
-        )
+  if [[ -n "$valve_entries" ]]; then
+    IFS=: read -r platform base_repo other < <(
+      repo_flags "$valve_entries"
+    )
+  fi
+
+  if ((platform)); then
+    flags+=("VALVE_PLATFORM")
+  fi
+
+  if [[ "$arch_base" == "YES" ]]; then
+    flags+=("ARCH_BASE")
+  fi
+
+  if [[ "$reqby" =~ ^[0-9]+$ ]] && ((reqby >= 25)); then
+    flags+=("HIGH_RDEPS")
+  fi
+
+  # This describes pacman's install topology only; it deliberately does not
+  # imply that the package is safe to remove or replace.
+  if [[ "$reason" == "EXPLICIT" && "$reqby" == "0" ]]; then
+    flags+=("TOPLEVEL_EXPLICIT")
+
+    # A stronger bolt-on heuristic: explicit leaf + ordinary Valve
+    # upstream repo + not in Arch's base dependency closure.
+    if [[ "$class" == "SHARED_UPSTREAM" && "$arch_base" == "NO" ]]; then
+      flags+=("BOLT_ON_CANDIDATE")
     fi
+  fi
 
-    if ((platform)); then
-        flags+=("VALVE_PLATFORM")
-    fi
+  if [[ "$installed_ver" =~ (jupiter|steamos|neptune|valve) ]] \
+    || [[ "$valve_ver" =~ (jupiter|steamos|neptune|valve) ]]; then
+    flags+=("CUSTOM_VERSION")
+  fi
 
-    if [[ "$arch_base" == "YES" ]]; then
-        flags+=("ARCH_BASE")
-    fi
-
-    if [[ "$reqby" =~ ^[0-9]+$ ]] && ((reqby >= 25)); then
-        flags+=("HIGH_RDEPS")
-    fi
-
-    # This describes pacman's install topology only; it deliberately does not
-    # imply that the package is safe to remove or replace.
-    if [[ "$reason" == "EXPLICIT" && "$reqby" == "0" ]]; then
-        flags+=("TOPLEVEL_EXPLICIT")
-
-        # A stronger bolt-on heuristic: explicit leaf + ordinary Valve
-        # upstream repo + not in Arch's base dependency closure.
-        if [[ "$class" == "SHARED_UPSTREAM" && "$arch_base" == "NO" ]]; then
-            flags+=("BOLT_ON_CANDIDATE")
-        fi
-    fi
-
-    if [[ "$installed_ver" =~ (jupiter|steamos|neptune|valve) ]] ||
-       [[ "$valve_ver" =~ (jupiter|steamos|neptune|valve) ]]; then
-        flags+=("CUSTOM_VERSION")
-    fi
-
-    if ((${#flags[@]} == 0)); then
-        printf '%s' "-"
-    else
-        local IFS=','
-        printf '%s' "${flags[*]}"
-    fi
+  if ((${#flags[@]} == 0)); then
+    printf '%s' "-"
+  else
+    local IFS=','
+    printf '%s' "${flags[*]}"
+  fi
 }
 
 ###############################################################################
@@ -587,9 +587,9 @@ package_flags() {
 ###############################################################################
 
 if ((${#packages[@]} == 0)); then
-    mapfile -t packages < <(
-        printf '%s\n' "${!INSTALLED_VER[@]}" | sort
-    )
+  mapfile -t packages < <(
+    printf '%s\n' "${!INSTALLED_VER[@]}" | sort
+  )
 fi
 
 ###############################################################################
@@ -600,144 +600,144 @@ out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "PACKAGE" \
-    "INSTALLED" \
-    "VALVE_PREFERRED_REPO" \
-    "VALVE_PREFERRED_VERSION" \
-    "VALVE_DELTA" \
-    "VALVE_PLATFORM_REPO" \
-    "VALVE_PLATFORM_VERSION" \
-    "VALVE_BASE_REPO" \
-    "VALVE_BASE_VERSION" \
-    "VALVE_OVERRIDE_RELATION" \
-    "VALVE_ALL_REPOS" \
-    "ARCH_PREFERRED_REPO" \
-    "ARCH_PREFERRED_VERSION" \
-    "ARCH_DELTA" \
-    "ARCH_ALL_REPOS" \
-    "PACKAGER" \
-    "REASON" \
-    "REQBY" \
-    "ARCH_BASE" \
-    "SOURCE_CLASS" \
-    "FLAGS" \
-    > "$out"
+  "PACKAGE" \
+  "INSTALLED" \
+  "VALVE_PREFERRED_REPO" \
+  "VALVE_PREFERRED_VERSION" \
+  "VALVE_DELTA" \
+  "VALVE_PLATFORM_REPO" \
+  "VALVE_PLATFORM_VERSION" \
+  "VALVE_BASE_REPO" \
+  "VALVE_BASE_VERSION" \
+  "VALVE_OVERRIDE_RELATION" \
+  "VALVE_ALL_REPOS" \
+  "ARCH_PREFERRED_REPO" \
+  "ARCH_PREFERRED_VERSION" \
+  "ARCH_DELTA" \
+  "ARCH_ALL_REPOS" \
+  "PACKAGER" \
+  "REASON" \
+  "REQBY" \
+  "ARCH_BASE" \
+  "SOURCE_CLASS" \
+  "FLAGS" \
+  >"$out"
 
 for pkg in "${packages[@]}"; do
-    installed="${INSTALLED_VER[$pkg]-}"
-    packager="${INSTALLED_PACKAGER[$pkg]-}"
-    reason="${INSTALLED_REASON[$pkg]-}"
-    reqby="${INSTALLED_REQBY[$pkg]-}"
+  installed="${INSTALLED_VER[$pkg]-}"
+  packager="${INSTALLED_PACKAGER[$pkg]-}"
+  reason="${INSTALLED_REASON[$pkg]-}"
+  reqby="${INSTALLED_REQBY[$pkg]-}"
 
-    valve_repo="${VALVE_PREF_REPO[$pkg]-}"
-    valve_ver="${VALVE_PREF_VER[$pkg]-}"
-    valve_platform_repo="${VALVE_PLATFORM_REPO[$pkg]-}"
-    valve_platform_ver="${VALVE_PLATFORM_VER[$pkg]-}"
-    valve_base_repo="${VALVE_BASE_REPO[$pkg]-}"
-    valve_base_ver="${VALVE_BASE_VER[$pkg]-}"
-    valve_all="${VALVE_ALL[$pkg]-}"
+  valve_repo="${VALVE_PREF_REPO[$pkg]-}"
+  valve_ver="${VALVE_PREF_VER[$pkg]-}"
+  valve_platform_repo="${VALVE_PLATFORM_REPO[$pkg]-}"
+  valve_platform_ver="${VALVE_PLATFORM_VER[$pkg]-}"
+  valve_base_repo="${VALVE_BASE_REPO[$pkg]-}"
+  valve_base_ver="${VALVE_BASE_VER[$pkg]-}"
+  valve_all="${VALVE_ALL[$pkg]-}"
 
-    arch_repo="${ARCH_PREF_REPO[$pkg]-}"
-    arch_ver="${ARCH_PREF_VER[$pkg]-}"
-    arch_all="${ARCH_ALL[$pkg]-}"
+  arch_repo="${ARCH_PREF_REPO[$pkg]-}"
+  arch_ver="${ARCH_PREF_VER[$pkg]-}"
+  arch_all="${ARCH_ALL[$pkg]-}"
 
-    [[ -n "$installed" ]] || installed="-"
-    [[ -n "$packager" ]] || packager="-"
-    [[ -n "$reason" ]] || reason="-"
-    [[ -n "$reqby" ]] || reqby="-"
-    [[ -n "$valve_repo" ]] || valve_repo="-"
-    [[ -n "$valve_ver" ]] || valve_ver="-"
-    [[ -n "$valve_platform_repo" ]] || valve_platform_repo="-"
-    [[ -n "$valve_platform_ver" ]] || valve_platform_ver="-"
-    [[ -n "$valve_base_repo" ]] || valve_base_repo="-"
-    [[ -n "$valve_base_ver" ]] || valve_base_ver="-"
-    [[ -n "$valve_all" ]] || valve_all="-"
-    [[ -n "$arch_repo" ]] || arch_repo="-"
-    [[ -n "$arch_ver" ]] || arch_ver="-"
-    [[ -n "$arch_all" ]] || arch_all="-"
+  [[ -n "$installed" ]] || installed="-"
+  [[ -n "$packager" ]] || packager="-"
+  [[ -n "$reason" ]] || reason="-"
+  [[ -n "$reqby" ]] || reqby="-"
+  [[ -n "$valve_repo" ]] || valve_repo="-"
+  [[ -n "$valve_ver" ]] || valve_ver="-"
+  [[ -n "$valve_platform_repo" ]] || valve_platform_repo="-"
+  [[ -n "$valve_platform_ver" ]] || valve_platform_ver="-"
+  [[ -n "$valve_base_repo" ]] || valve_base_repo="-"
+  [[ -n "$valve_base_ver" ]] || valve_base_ver="-"
+  [[ -n "$valve_all" ]] || valve_all="-"
+  [[ -n "$arch_repo" ]] || arch_repo="-"
+  [[ -n "$arch_ver" ]] || arch_ver="-"
+  [[ -n "$arch_all" ]] || arch_all="-"
 
-    if [[ ${BASE_SET[$pkg]+isset} ]]; then
-        arch_base="YES"
-    elif ((HAVE_BASE_SET)); then
-        arch_base="NO"
-    else
-        arch_base="?"
-    fi
+  if [[ ${BASE_SET[$pkg]+isset} ]]; then
+    arch_base="YES"
+  elif ((HAVE_BASE_SET)); then
+    arch_base="NO"
+  else
+    arch_base="?"
+  fi
 
-    vdelta="$(
-        version_delta "${INSTALLED_VER[$pkg]-}" "${VALVE_PREF_VER[$pkg]-}"
-    )"
+  vdelta="$(
+    version_delta "${INSTALLED_VER[$pkg]-}" "${VALVE_PREF_VER[$pkg]-}"
+  )"
 
-    adelta="$(
-        version_delta "${INSTALLED_VER[$pkg]-}" "${ARCH_PREF_VER[$pkg]-}"
-    )"
+  adelta="$(
+    version_delta "${INSTALLED_VER[$pkg]-}" "${ARCH_PREF_VER[$pkg]-}"
+  )"
 
-    override_relation="$(
-        valve_override_relation \
-            "${VALVE_PLATFORM_VER[$pkg]-}" \
-            "${VALVE_BASE_VER[$pkg]-}"
-    )"
+  override_relation="$(
+    valve_override_relation \
+      "${VALVE_PLATFORM_VER[$pkg]-}" \
+      "${VALVE_BASE_VER[$pkg]-}"
+  )"
 
-    class="$(
-        source_class "${VALVE_ALL[$pkg]-}" "${ARCH_ALL[$pkg]-}"
-    )"
+  class="$(
+    source_class "${VALVE_ALL[$pkg]-}" "${ARCH_ALL[$pkg]-}"
+  )"
 
-    flags="$(
-        package_flags \
-            "$pkg" \
-            "${VALVE_ALL[$pkg]-}" \
-            "${INSTALLED_REASON[$pkg]-}" \
-            "${INSTALLED_REQBY[$pkg]-}" \
-            "${INSTALLED_VER[$pkg]-}" \
-            "${VALVE_PREF_VER[$pkg]-}" \
-            "$class" \
-            "$arch_base"
-    )"
+  flags_str="$(
+    package_flags \
+      "$pkg" \
+      "${VALVE_ALL[$pkg]-}" \
+      "${INSTALLED_REASON[$pkg]-}" \
+      "${INSTALLED_REQBY[$pkg]-}" \
+      "${INSTALLED_VER[$pkg]-}" \
+      "${VALVE_PREF_VER[$pkg]-}" \
+      "$class" \
+      "$arch_base"
+  )"
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$pkg" \
-        "$installed" \
-        "$valve_repo" \
-        "$valve_ver" \
-        "$vdelta" \
-        "$valve_platform_repo" \
-        "$valve_platform_ver" \
-        "$valve_base_repo" \
-        "$valve_base_ver" \
-        "$override_relation" \
-        "$valve_all" \
-        "$arch_repo" \
-        "$arch_ver" \
-        "$adelta" \
-        "$arch_all" \
-        "$packager" \
-        "$reason" \
-        "$reqby" \
-        "$arch_base" \
-        "$class" \
-        "$flags" \
-        >> "$out"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$pkg" \
+    "$installed" \
+    "$valve_repo" \
+    "$valve_ver" \
+    "$vdelta" \
+    "$valve_platform_repo" \
+    "$valve_platform_ver" \
+    "$valve_base_repo" \
+    "$valve_base_ver" \
+    "$override_relation" \
+    "$valve_all" \
+    "$arch_repo" \
+    "$arch_ver" \
+    "$adelta" \
+    "$arch_all" \
+    "$packager" \
+    "$reason" \
+    "$reqby" \
+    "$arch_base" \
+    "$class" \
+    "$flags_str" \
+    >>"$out"
 done
 
 case "$FORMAT" in
-    tsv)
-        cat "$out"
-        ;;
+  tsv)
+    cat "$out"
+    ;;
 
-    table)
-        if command -v column >/dev/null; then
-            column -t -s $'\t' "$out"
-        else
-            echo "WARNING: column not installed; falling back to TSV" >&2
-            cat "$out"
-        fi
-        ;;
+  table)
+    if command -v column >/dev/null; then
+      column -t -s $'\t' "$out"
+    else
+      echo "WARNING: column not installed; falling back to TSV" >&2
+      cat "$out"
+    fi
+    ;;
 
-    csv)
-        # RFC-4180-style quoting: quote every field and double embedded quotes.
-        # Internal fields are guaranteed not to contain tabs/newlines because
-        # they originate from pacman metadata normalized above.
-        awk -F '\t' '
+  csv)
+    # RFC-4180-style quoting: quote every field and double embedded quotes.
+    # Internal fields are guaranteed not to contain tabs/newlines because
+    # they originate from pacman metadata normalized above.
+    awk -F '\t' '
             {
                 for (i=1; i<=NF; i++) {
                     gsub(/"/, "\"\"", $i)
@@ -746,10 +746,10 @@ case "$FORMAT" in
                 printf "\n"
             }
         ' "$out"
-        ;;
+    ;;
 
-    json)
-        python3 - "$out" <<'PY'
+  json)
+    python3 - "$out" <<'PY'
 import csv
 import json
 import sys
@@ -777,5 +777,5 @@ for row in rows:
 json.dump(rows, sys.stdout, indent=2, ensure_ascii=False)
 sys.stdout.write("\n")
 PY
-        ;;
+    ;;
 esac

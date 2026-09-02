@@ -10,23 +10,84 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 # Discover the neptune kernel version in a rootfs.
-# Sets KVER global.  Dies if not found.
+# Sets KVER global.  Dies if not found or if ambiguous.
 # Args: $1 = root path (e.g. $MNT, $NEWROOT)
 discover_neptune_kver() {
   local root="${1:?discover_neptune_kver: missing root}"
   KVER=""
+
+  local -a _kernels=()
   for d in "$root/usr/lib/modules/"*neptune*; do
-    [[ -d "$d" ]] && KVER="$(basename "$d")" && break
+    [[ -d "$d" ]] && _kernels+=("$(basename "$d")")
   done
-  [[ -n "$KVER" ]] || die "No neptune kernel found in $root"
+
+  if ((${#_kernels[@]} == 0)); then
+    die "No neptune kernel found in $root/usr/lib/modules"
+  fi
+
+  if ((${#_kernels[@]} > 1)); then
+    warn "Multiple neptune kernel trees found:"
+    printf '  %s\n' "${_kernels[@]}" >&2
+    die "Expected exactly one neptune kernel in $root/usr/lib/modules"
+  fi
+
+  KVER="${_kernels[0]}"
 }
 
 # Check if nvidia.ko exists in a rootfs.
 # Args: $1 = root path, $2 = kernel version
+# Uses modinfo after depmod for stronger validation than filename globbing.
 nvidia_module_exists() {
   local root="${1:?nvidia_module_exists: missing root}"
   local kver="${2:?nvidia_module_exists: missing kver}"
-  compgen -G "$root/usr/lib/modules/$kver/updates/dkms/nvidia.ko*" >/dev/null
+  local mod
+
+  # Run depmod to update module dependency database
+  if [[ "$root" == "/" ]]; then
+    depmod "$kver" 2>/dev/null || true
+  else
+    chroot "$root" depmod "$kver" 2>/dev/null || true
+  fi
+
+  for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+    if [[ "$root" == "/" ]]; then
+      modinfo -k "$kver" "$mod" >/dev/null 2>&1 || return 1
+    else
+      chroot "$root" modinfo -k "$kver" "$mod" >/dev/null 2>&1 || return 1
+    fi
+  done
+  return 0
+}
+
+nvidia_modules_valid() {
+  local root="${1:?nvidia_modules_valid: missing root}"
+  local kver="${2:?nvidia_modules_valid: missing kver}"
+  local mod path
+
+  # Run depmod to update module dependency database
+  if [[ "$root" == "/" ]]; then
+    depmod "$kver" 2>/dev/null || true
+  else
+    chroot "$root" depmod "$kver" 2>/dev/null || true
+  fi
+
+  # Validate each module via modinfo and print resolved paths
+  local _ok=0
+  for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+    if [[ "$root" == "/" ]]; then
+      path="$(modinfo -k "$kver" -F filename "$mod" 2>/dev/null)" || true
+    else
+      path="$(chroot "$root" modinfo -k "$kver" -F filename "$mod" 2>/dev/null)" || true
+    fi
+    if [[ -n "$path" ]]; then
+      log "  $mod -> $path"
+    else
+      log "  $mod -> MISSING"
+      _ok=1
+    fi
+  done
+
+  return "$_ok"
 }
 
 # Kernel modules explicitly built by this run.

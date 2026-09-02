@@ -17,42 +17,42 @@
 # Map PCI vendor IDs to firmware package names.
 # These match the vendor-oriented split in Arch's linux-firmware.
 declare -A _PCI_VENDOR_FW=(
-  [8086]="linux-firmware-intel"      # Intel
-  [1002]="linux-firmware-amdgpu"     # AMD/ATI
-  [1022]="linux-firmware-amdgpu"     # AMD (also uses amdgpu)
-  [10de]="linux-firmware-nvidia"     # NVIDIA
-  [10ec]="linux-firmware-realtek"    # Realtek
-  [168c]="linux-firmware-atheros"    # Qualcomm Atheros
-  [17cb]="linux-firmware-atheros"    # Qualcomm (Atheros parent)
-  [14e4]="linux-firmware-broadcom"   # Broadcom
-  [14a4]="linux-firmware-broadcom"   # Broadcom (Cypress)
-  [14c3]="linux-firmware-mediatek"   # MediaTek
-  [1814]="linux-firmware-mediatek"   # Ralink (now MediaTek)
-  [1102]="linux-firmware-cirrus"     # Cirrus Logic
-  [1106]="linux-firmware-cirrus"     # Cirrus Logic (alt)
-  [11ab]="linux-firmware-marvell"    # Marvell
-  [15b3]="linux-firmware-mellanox"   # Mellanox
-  [19ee]="linux-firmware-nfp"        # Netronome
-  [1077]="linux-firmware-qlogic"     # QLogic
-  [17cb]="linux-firmware-qcom"       # Qualcomm SoC
+  [8086]="linux-firmware-intel"    # Intel
+  [1002]="linux-firmware-amdgpu"   # AMD/ATI
+  [1022]="linux-firmware-amdgpu"   # AMD (also uses amdgpu)
+  [10de]="linux-firmware-nvidia"   # NVIDIA
+  [10ec]="linux-firmware-realtek"  # Realtek
+  [168c]="linux-firmware-atheros"  # Qualcomm Atheros
+  [17cb]="linux-firmware-atheros"  # Qualcomm (Atheros parent)
+  [14e4]="linux-firmware-broadcom" # Broadcom
+  [14a4]="linux-firmware-broadcom" # Broadcom (Cypress)
+  [14c3]="linux-firmware-mediatek" # MediaTek
+  [1814]="linux-firmware-mediatek" # Ralink (now MediaTek)
+  [1102]="linux-firmware-cirrus"   # Cirrus Logic
+  [1106]="linux-firmware-cirrus"   # Cirrus Logic (alt)
+  [11ab]="linux-firmware-marvell"  # Marvell
+  [15b3]="linux-firmware-mellanox" # Mellanox
+  [19ee]="linux-firmware-nfp"      # Netronome
+  [1077]="linux-firmware-qlogic"   # QLogic
+  [17cb]="linux-firmware-qcom"     # Qualcomm SoC
 )
 
 # Map USB vendor IDs to firmware package names.
 declare -A _USB_VENDOR_FW=(
-  [0bda]="linux-firmware-realtek"    # Realtek
-  [0cf3]="linux-firmware-atheros"    # Qualcomm Atheros
-  [168c]="linux-firmware-atheros"    # Qualcomm Atheros
-  [0a5c]="linux-firmware-broadcom"   # Broadcom
-  [0489]="linux-firmware-mediatek"   # MediaTek/Ralink
-  [0e8d]="linux-firmware-mediatek"   # MediaTek
-  [12d1]="linux-firmware-qcom"       # Huawei/Qualcomm
+  [0bda]="linux-firmware-realtek"  # Realtek
+  [0cf3]="linux-firmware-atheros"  # Qualcomm Atheros
+  [168c]="linux-firmware-atheros"  # Qualcomm Atheros
+  [0a5c]="linux-firmware-broadcom" # Broadcom
+  [0489]="linux-firmware-mediatek" # MediaTek/Ralink
+  [0e8d]="linux-firmware-mediatek" # MediaTek
+  [12d1]="linux-firmware-qcom"     # Huawei/Qualcomm
 )
 
 # GPU vendor ID → driver packages (Nouveau intentionally excluded).
 declare -A _GPU_VENDOR_PKGS=(
-  [10de]="nvidia-open-dkms nvidia-utils lib32-nvidia-utils libva-nvidia-driver"  # NVIDIA
-  [8086]="intel-gmmlib intel-media-driver vulkan-intel lib32-vulkan-intel"       # Intel
-  [1002]="mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon"                     # AMD
+  [10de]="nvidia-open-dkms nvidia-utils lib32-nvidia-utils libva-nvidia-driver" # NVIDIA
+  [8086]="intel-gmmlib intel-media-driver vulkan-intel lib32-vulkan-intel"      # Intel
+  [1002]="mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon"                    # AMD
 )
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ _detect_gpu_packages() {
     # Only VGA/3D controllers (class 0300/0302).
     class_code=$(cat "/sys/bus/pci/devices/0000:${dev}/class" 2>/dev/null || echo "0x000000")
     case "${class_code:0:6}" in
-      0x0300|0x0302) ;;
+      0x0300 | 0x0302) ;;
       *) continue ;;
     esac
 

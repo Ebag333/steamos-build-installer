@@ -12,6 +12,18 @@
 
 set -euo pipefail
 
+# Inline pacman install (standalone script, doesn't need full library)
+_pacman_install() {
+  if [[ $EUID -eq 0 ]]; then
+    pacman --noconfirm --needed -S "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo pacman --noconfirm --needed -S "$@"
+  else
+    echo -e "${RED}Cannot install — no root/sudo access.${NC}"
+    exit 1
+  fi
+}
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -42,15 +54,19 @@ declare -A REQUIRED=(
   [depmod]="kmod"
   [gzip]="gzip"
   [losetup]="util-linux"
+  [lspci]="pciutils"
   [pacman]="pacman"
+  [pactree]="pacman-contrib"
   [partx]="util-linux"
   [pv]="pv"
   [python3]="python"
   [readelf]="binutils"
   [rsync]="rsync"
   [sed]="sed"
+  [sgdisk]="gptfdisk"
   [tar]="tar"
   [xz]="xz"
+  [yad]="yad"
   [zstd]="zstd"
 )
 
@@ -81,26 +97,26 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
   fi
 fi
 
-echo ""
-echo -e "${CYAN}Required tools:${NC}"
+REQUIRED_TOTAL=${#REQUIRED[@]}
+REQUIRED_PASSED=0
 
 for cmd in $(echo "${!REQUIRED[@]}" | tr ' ' '\n' | sort); do
   pkg="${REQUIRED[$cmd]}"
   if command -v "$cmd" >/dev/null 2>&1; then
-    echo -e "  ${GREEN}✓${NC} $cmd"
+    ((++REQUIRED_PASSED))
   else
     echo -e "  ${RED}✗${NC} $cmd ($pkg)"
     MISSING_REQUIRED+=("$pkg")
   fi
 done
 
-echo ""
-echo -e "${CYAN}Optional tools:${NC}"
+OPTIONAL_TOTAL=${#OPTIONAL[@]}
+OPTIONAL_PASSED=0
 
 for cmd in $(echo "${!OPTIONAL[@]}" | tr ' ' '\n' | sort); do
   IFS=':' read -r pkg desc <<<"${OPTIONAL[$cmd]}"
   if command -v "$cmd" >/dev/null 2>&1; then
-    echo -e "  ${GREEN}✓${NC} $cmd ($desc)"
+    ((++OPTIONAL_PASSED))
   else
     echo -e "  ${YELLOW}○${NC} $cmd ($desc)"
     MISSING_OPTIONAL+=("$pkg")
@@ -109,9 +125,26 @@ done
 
 echo ""
 
+# ---- summary ----
+if [[ ${#MISSING_REQUIRED[@]} -eq 0 ]]; then
+  echo -e "${GREEN}Dependency check: ${REQUIRED_PASSED}/${REQUIRED_TOTAL} required tools present${NC}"
+else
+  echo -e "${RED}Dependency check failed: ${REQUIRED_PASSED}/${REQUIRED_TOTAL} required tools present${NC}"
+fi
+
+if [[ ${#OPTIONAL[@]} -gt 0 ]]; then
+  if [[ ${#MISSING_OPTIONAL[@]} -eq 0 ]]; then
+    echo -e "${GREEN}Optional check: ${OPTIONAL_PASSED}/${OPTIONAL_TOTAL} optional tools present${NC}"
+  else
+    echo -e "${YELLOW}Optional check: ${OPTIONAL_PASSED}/${OPTIONAL_TOTAL} optional tools present${NC}"
+  fi
+fi
+
+echo ""
+
 # Deduplicate package lists — filter empty lines so empty arrays stay empty.
-mapfile -t REQUIRED_PKGS < <(printf '%s\n' "${MISSING_REQUIRED[@]}" | sort -u | grep -v '^$')
-mapfile -t OPTIONAL_PKGS < <(printf '%s\n' "${MISSING_OPTIONAL[@]}" | sort -u | grep -v '^$')
+mapfile -t REQUIRED_PKGS < <(printf '%s\n' "${MISSING_REQUIRED[@]}" | sort -u | awk 'NF')
+mapfile -t OPTIONAL_PKGS < <(printf '%s\n' "${MISSING_OPTIONAL[@]}" | sort -u | awk 'NF')
 
 # ---- exit early if nothing missing ----
 if [[ ${#REQUIRED_PKGS[@]} -eq 0 && ${#OPTIONAL_PKGS[@]} -eq 0 ]]; then
@@ -162,14 +195,7 @@ fi
 if [[ "$MODE" == "install" ]]; then
   TO_INSTALL=("${REQUIRED_PKGS[@]}" "${OPTIONAL_PKGS[@]}")
   echo "Installing: ${TO_INSTALL[*]}"
-  if [[ "$HAS_PERMS" == "root" ]]; then
-    pacman -S --noconfirm "${TO_INSTALL[@]}"
-  elif [[ "$HAS_PERMS" == "sudo" ]]; then
-    sudo pacman -S --noconfirm "${TO_INSTALL[@]}"
-  else
-    echo -e "${RED}Cannot install — no root/sudo access.${NC}"
-    exit 1
-  fi
+  _pacman_install "${TO_INSTALL[@]}"
   echo -e "${GREEN}Done.${NC}"
   exit 0
 fi
@@ -199,13 +225,6 @@ esac
 
 echo ""
 echo "Installing: ${TO_INSTALL[*]}"
-if [[ "$HAS_PERMS" == "root" ]]; then
-  pacman -S --noconfirm "${TO_INSTALL[@]}"
-elif [[ "$HAS_PERMS" == "sudo" ]]; then
-  sudo pacman -S --noconfirm "${TO_INSTALL[@]}"
-else
-  echo -e "${RED}Cannot install — no root/sudo access.${NC}"
-  exit 1
-fi
+_pacman_install "${TO_INSTALL[@]}"
 echo ""
 echo -e "${GREEN}Done. Run ./check-deps.sh again to verify.${NC}"

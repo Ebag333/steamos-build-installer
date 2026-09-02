@@ -36,12 +36,13 @@ GAMING_ITEMS=""        # space-separated: (all items now handled by optimization
 # shellcheck disable=SC2034  # consumed by lib/common_drivers.sh, lib/finalize.sh, and lib/flashless.sh
 TARGET_VARIANT="steamdeck" # steamdeck | steamdeck-oobe
 UPDATE_BRANCH="stable"     # stable | beta | preview | rc | bc | pc | main
+PACMAN_REPO="valve"        # valve | main
+BASE_OS_MODE="additive"    # additive | upgrade
 ROOTFS_SIZE=""
 OUTPUT_DIR="" # empty = same directory as source image
 WORKDIR=""
 WORKDIR_LOCATION="auto" # auto | ram | disk
 _WORKDIR_EXPLICIT=""
-PACMAN_REPO="valve-arch-valve" # valve-arch-valve | arch-valve | valve
 
 FLASH_CONFIRMED=0
 ALLOW_SYSTEM_DISK=0
@@ -58,10 +59,10 @@ UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 backend_usage() {
   cat <<'EOF'
 Usage:
-  backend.sh --action <build|flash|flashless|live|validate|list-images|list-devices|is-system-disk|reboot> [options]
+  backend.sh --action <build|flash|flashless|live|validate|preflight|list-images|list-devices|is-system-disk|reboot> [options]
 
 Common:
-  --action ACTION           Required: build, flash, flashless, live, validate, list-images, list-devices, is-system-disk, reboot
+  --action ACTION           Required: build, flash, flashless, live, validate, preflight, list-images, list-devices, is-system-disk, reboot
   --image FILE              Source image path (for build)
   --config FILE             Build configuration file (required for build, flash, live)
 
@@ -75,7 +76,7 @@ Flash:
   --allow-system-disk       Override system-disk protection
 
 Live:
-  Config file must set LIVE_ACTIONS (space-separated action names)
+  Config file uses the same format as build.
 
 No positional parameters are accepted.
 EOF
@@ -167,7 +168,7 @@ flash_discover_images() {
   local search_dirs=(
     "$PROJECT_DIR"
     "/home/image"
-    "/dev/shm/nvidia-build"
+    "/dev/shm/steamos-build"
     "$HOME/Downloads"
   )
   [[ -n "${OUTPUT_DIR:-}" ]] && search_dirs+=("$OUTPUT_DIR")
@@ -275,7 +276,7 @@ check_build_deps() {
 
   local missing=()
   local cmd
-  for cmd in losetup blkid btrfs bzip2 gzip xz pv rsync curl depmod sed awk tar zstd pacman python3 readelf sgdisk sfdisk; do
+  for cmd in losetup blkid btrfs bzip2 gzip xz pv rsync curl depmod sed awk tar zstd pacman pactree python3 readelf sgdisk sfdisk; do
     command -v "$cmd" >/dev/null || missing+=("$cmd")
   done
 
@@ -286,6 +287,7 @@ check_build_deps() {
         btrfs) pkgs+=(btrfs-progs) ;;
         readelf) pkgs+=(binutils) ;;
         depmod) pkgs+=(kmod) ;;
+        pactree) pkgs+=(pacman-contrib) ;;
         sgdisk) pkgs+=(gptfdisk) ;;
         *) pkgs+=("$cmd") ;;
       esac
@@ -313,6 +315,11 @@ normalize_build_options() {
   case "$UPDATE_MODE" in
     selfheal | hold | stock) ;;
     *) die "Invalid update mode: $UPDATE_MODE" ;;
+  esac
+
+  case "$BASE_OS_MODE" in
+    additive | upgrade) ;;
+    *) die "Invalid base OS mode: $BASE_OS_MODE" ;;
   esac
 
   if [[ -n "$ROOTFS_SIZE" ]]; then
@@ -438,7 +445,7 @@ EOF
     log "  $part: ${label:-<unknown>}"
     case "$label" in
       rootfs-A | rootfs) VALIDATE_ROOTFS="$part" ;;
-      var-A | var)        VALIDATE_VARPART="$part" ;;
+      var-A | var) VALIDATE_VARPART="$part" ;;
     esac
   done
 
@@ -548,6 +555,12 @@ backend_validate() {
   local rc=0
   run_pipeline || rc=$?
 
+  # Run cleanup before reporting final state
+  if [[ -n "$VALIDATE_MNT" ]]; then
+    validate_cleanup
+    trap - EXIT
+  fi
+
   if [[ -n "$VALIDATE_MNT" ]]; then
     log ""
     log "=== Mounts after ==="
@@ -564,39 +577,32 @@ backend_validate() {
 }
 
 backend_live() {
-  [[ $EUID -eq 0 ]] || {
-    echo "Live configuration requires root." >&2
-    exit 1
-  }
+  [[ $EUID -eq 0 ]] || die "Live configuration requires root."
 
-  # Load config file for LIVE_ACTIONS
-  [[ -n "$CONFIG_FILE" ]] || {
-    echo "--config is required for live configuration" >&2
-    exit 2
-  }
-  [[ -f "$CONFIG_FILE" ]] || {
-    echo "Config file not found: $CONFIG_FILE" >&2
-    exit 2
-  }
+  [[ -n "$CONFIG_FILE" ]] || die "--config is required for live configuration"
+  [[ -f "$CONFIG_FILE" ]] || die "Config file not found: $CONFIG_FILE"
   # shellcheck source=/dev/null
   source "$CONFIG_FILE"
 
-  local actions="${LIVE_ACTIONS:-}"
-  [[ -n "$actions" ]] || {
-    echo "LIVE_ACTIONS not set in config file" >&2
-    exit 2
-  }
+  # Validate config values (same checks as build)
+  case "${DEFAULT_SESSION:-}" in
+    "" | desktop | game) ;;
+    *) die "Invalid session: $DEFAULT_SESSION" ;;
+  esac
 
-  # shellcheck source=lib/library-loader.sh
-  source "$BACKEND_DIR/library-loader.sh"
-  load_workflow_libs "live" "$BACKEND_DIR"
+  case "${UPDATE_MODE:-selfheal}" in
+    selfheal | hold | stock) ;;
+    *) die "Invalid update mode: $UPDATE_MODE" ;;
+  esac
 
-  # Source the live pipeline
-  # shellcheck source=lib/pipelines/pipeline_live.sh
+  case "${BASE_OS_MODE:-additive}" in
+    additive | upgrade) ;;
+    *) die "Invalid base OS mode: $BASE_OS_MODE" ;;
+  esac
+
+  load_build_libs
+  # shellcheck source=/dev/null
   source "$BACKEND_DIR/pipelines/pipeline_live.sh"
-
-  # Export actions for the pipeline to read
-  export SELECTED_ACTIONS="$actions"
 
   register_live_pipeline
   if ! run_pipeline; then
@@ -629,7 +635,7 @@ backend_reboot() {
       rootfs-A) slot_a="$dev" ;;
       rootfs-B) slot_b="$dev" ;;
     esac
-  done < <(lsblk -dno NAME,PARTLABEL /dev/nvme[0-9]* 2>/dev/null)
+  done < <(lsblk -rno PATH,PARTLABEL 2>/dev/null | awk '$2 == "rootfs-A" || $2 == "rootfs-B"')
 
   [[ -n "$slot_a" ]] && options+=("A" "Root A ($slot_a)")
   [[ -n "$slot_b" ]] && options+=("B" "Root B ($slot_b)")
@@ -657,9 +663,9 @@ backend_reboot() {
 
     echo ""
     echo "Reboot to which slot?"
-    local idx=1
-    [[ -n "$slot_a" ]] && echo "  $((idx++))) Root A ($slot_a)"
-    [[ -n "$slot_b" ]] && echo "  $((idx++))) Root B ($slot_b)"
+    local idx=0
+    [[ -n "$slot_a" ]] && echo "  $((++idx))) Root A ($slot_a)"
+    [[ -n "$slot_b" ]] && echo "  $((++idx))) Root B ($slot_b)"
     read -rp "Choice: " choice
     if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#slot_labels[@]})); then
       selected="${slot_labels[$((choice - 1))]}"

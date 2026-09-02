@@ -29,86 +29,100 @@ finalize() {
       | awk '{print $2}' || true
   )"
 
-  [[ -n "$nvidia_ver" ]] \
-    || die "nvidia-utils missing from final image pacman database"
-  [[ -n "$lib32_ver" ]] \
-    || die "lib32-nvidia-utils missing from final image pacman database"
+  # Only verify nvidia packages if they were installed
+  if [[ -n "$nvidia_ver" ]]; then
+    [[ -n "$lib32_ver" ]] \
+      || die "lib32-nvidia-utils missing from final image pacman database"
+
+    log "  nvidia-utils:       $nvidia_ver"
+    log "  lib32-nvidia-utils: $lib32_ver"
+
+    # ── Module verification ────────────────────────────────────────────────
+    # Verify kmod can resolve each module for the target kernel, that it
+    # lands in our /updates tree (not stock), and that the version matches
+    # the pacman package.
+    for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+      local modfile
+      modfile="$(chroot "$MNT" modinfo -k "$KVER" -n "$mod" 2>/dev/null || true)"
+      [[ -n "$modfile" ]] \
+        || die "$mod not resolvable for kernel $KVER"
+      case "$modfile" in
+        */updates/*) ;;
+        *) die "$mod resolves to $modfile — stock module winning over our replacement" ;;
+      esac
+      local vermagic
+      vermagic="$(chroot "$MNT" modinfo -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
+        || die "modinfo cannot read vermagic for $mod"
+      [[ "$vermagic" == "$KVER "* ]] \
+        || die "$mod vermagic '$vermagic' does not match $KVER"
+      log "  ✓ $mod: $modfile"
+    done
+
+    # Cross-check: module version must match the pacman package version.
+    local module_ver
+    module_ver="$(chroot "$MNT" modinfo -k "$KVER" -F version nvidia 2>/dev/null || true)"
+    [[ -n "$module_ver" ]] \
+      || die "Could not determine NVIDIA kernel module version"
+    [[ "${nvidia_ver%-*}" == "$module_ver" ]] \
+      || die "NVIDIA version mismatch: pacman=$nvidia_ver module=$module_ver"
+    log "  NVIDIA kernel module: $module_ver for $KVER"
+
+    grep -q 'blacklist nouveau' "$MNT/etc/modprobe.d/99-nvidia-patch.conf" || die "modprobe conf is empty/missing"
+    compgen -G "$MNT/usr/lib/firmware/nvidia/*/gsp_*.bin" >/dev/null \
+      || die "GSP firmware not found — nvidia-open requires it"
+    [[ -f "$MNT/usr/share/vulkan/icd.d/nvidia_icd.json" ]] \
+      || die "Vulkan ICD json missing — Steam games will not find the GPU"
+  else
+    log "  Skipping nvidia verification (nvidia not installed)"
+  fi
+
   [[ -n "$fw_ver" ]] \
     || die "linux-firmware missing from final image pacman database"
-
-  log "  nvidia-utils:       $nvidia_ver"
-  log "  lib32-nvidia-utils: $lib32_ver"
   log "  linux-firmware:     $fw_ver"
 
-  # ── Module verification ────────────────────────────────────────────────
-  # Verify kmod can resolve each module for the target kernel, that it
-  # lands in our /updates tree (not stock), and that the version matches
-  # the pacman package.
-  for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
-    local modfile
-    modfile="$(chroot "$MNT" modinfo -k "$KVER" -n "$mod" 2>/dev/null || true)"
-    [[ -n "$modfile" ]] \
-      || die "$mod not resolvable for kernel $KVER"
-    case "$modfile" in
-      */updates/*) ;;
-      *) die "$mod resolves to $modfile — stock module winning over our replacement" ;;
-    esac
-    local vermagic
-    vermagic="$(chroot "$MNT" modinfo -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
-      || die "modinfo cannot read vermagic for $mod"
-    [[ "$vermagic" == "$KVER "* ]] \
-      || die "$mod vermagic '$vermagic' does not match $KVER"
-    log "  ✓ $mod: $modfile"
-  done
+  # HID module checks — only if logitech-hid was built and installed
+  if [[ -d "$MNT/usr/lib/modules/$KVER/updates/logitech" ]]; then
+    log "  Checking HID modules at: $MNT/usr/lib/modules/$KVER/updates/logitech/"
+    compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
+      || die "hid-logitech-dj.ko missing from image"
+    compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" >/dev/null \
+      || die "hid-logitech-hidpp.ko missing from image"
+    chroot "$MNT" modinfo -k "$KVER" -F alias hid-logitech-dj \
+      | grep -qi 'v0000046Dp0000C547' \
+      || die "image hid-logitech-dj module lacks the 046d:c547 alias"
 
-  # Cross-check: module version must match the pacman package version.
-  local module_ver
-  module_ver="$(chroot "$MNT" modinfo -k "$KVER" -F version nvidia 2>/dev/null || true)"
-  [[ -n "$module_ver" ]] \
-    || die "Could not determine NVIDIA kernel module version"
-  [[ "${nvidia_ver%-*}" == "$module_ver" ]] \
-    || die "NVIDIA version mismatch: pacman=$nvidia_ver module=$module_ver"
-  log "  NVIDIA kernel module: $module_ver for $KVER"
+    # Verify HID modules resolve to our /updates replacement, not stock.
+    for mod in hid-logitech-dj hid-logitech-hidpp; do
+      local path
+      path="$(chroot "$MNT" modinfo -k "$KVER" -n "$mod" 2>/dev/null)" \
+        || die "modinfo cannot resolve $mod for $KVER"
+      case "$path" in
+        /usr/lib/modules/"$KVER"/updates/logitech/* | /lib/modules/"$KVER"/updates/logitech/*) ;;
+        *) die "$mod resolves to $path — stock driver winning over our replacement" ;;
+      esac
+      local vermagic
+      vermagic="$(chroot "$MNT" modinfo -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
+        || die "modinfo cannot read vermagic for $mod"
+      [[ "$vermagic" == "$KVER "* ]] \
+        || die "$mod vermagic '$vermagic' does not match $KVER"
+    done
+  else
+    log "  Skipping HID module verification (logitech-hid not installed)"
+  fi
 
-  # HID module checks (always applied)
-  log "  Checking HID modules at: $MNT/usr/lib/modules/$KVER/updates/logitech/"
-  ls -la "$MNT/usr/lib/modules/$KVER/updates/logitech/" 2>/dev/null || log "  HID module directory does not exist"
-  compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
-    || die "hid-logitech-dj.ko missing from image"
-  compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" >/dev/null \
-    || die "hid-logitech-hidpp.ko missing from image"
-  chroot "$MNT" modinfo -F alias "/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko" \
-    | grep -qi 'v0000046Dp0000C547' \
-    || die "image hid-logitech-dj module lacks the 046d:c547 alias"
-
-  # Verify HID modules resolve to our /updates replacement, not stock.
-  for mod in hid-logitech-dj hid-logitech-hidpp; do
-    local path
-    path="$(chroot "$MNT" modinfo -k "$KVER" -n "$mod" 2>/dev/null)" \
-      || die "modinfo cannot resolve $mod for $KVER"
-    case "$path" in
-      /usr/lib/modules/"$KVER"/updates/logitech/* | /lib/modules/"$KVER"/updates/logitech/*) ;;
-      *) die "$mod resolves to $path — stock driver winning over our replacement" ;;
-    esac
-    local vermagic
-    vermagic="$(chroot "$MNT" modinfo -k "$KVER" -F vermagic "$mod" 2>/dev/null | head -1)" \
-      || die "modinfo cannot read vermagic for $mod"
-    [[ "$vermagic" == "$KVER "* ]] \
-      || die "$mod vermagic '$vermagic' does not match $KVER"
-  done
-
-  grep -q 'blacklist nouveau' "$MNT/etc/modprobe.d/99-nvidia-patch.conf" || die "modprobe conf is empty/missing"
   if [[ $UPDATE_MODE == selfheal ]]; then
     grep -q 'self-healing' "$MNT/usr/bin/steamos-update" || die "update wrapper missing"
     [[ -f "$MNT/usr/bin/steamos-update.orig" ]] || die "original steamos-update not preserved"
     grep -q 'repatch' "/home/.steamos-build/build_cache/lib/repatch.sh" || die "repatch tool missing"
     [[ -f "/home/.steamos-build/build_cache/lib/overlay.sh" ]] || die "overlay helper missing"
     [[ -f "$HOMEMNT/.steamos-build/build.conf" ]] || die "build.conf missing"
-    # Verify HID source bundle for self-heal (always applied)
-    for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
-      [[ -f "/home/.steamos-build/bundles/hid/$f" ]] \
-        || die "self-heal HID source missing: $f"
-    done
+    # Verify HID source bundle for self-heal (only if logitech-hid was installed)
+    if [[ -d "$MNT/usr/lib/modules/$KVER/updates/logitech" ]]; then
+      for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h usbhid/usbhid.h Makefile; do
+        [[ -f "/home/.steamos-build/bundles/hid/$f" ]] \
+          || die "self-heal HID source missing: $f"
+      done
+    fi
     # Check that atomupd isn't masked — a symlink to /dev/null specifically
     # means masked; a plain symlink doesn't.
     local atomupd="$MNT/etc/systemd/system/atomupd.service"
@@ -116,10 +130,6 @@ finalize() {
       die "atomupd must NOT be masked in selfheal mode"
     fi
   fi
-  compgen -G "$MNT/usr/lib/firmware/nvidia/*/gsp_*.bin" >/dev/null \
-    || die "GSP firmware not found — nvidia-open requires it"
-  [[ -f "$MNT/usr/share/vulkan/icd.d/nvidia_icd.json" ]] \
-    || die "Vulkan ICD json missing — Steam games will not find the GPU"
   AVAIL_AFTER="$(df -m --output=avail "$MNT" | tail -1 | tr -d ' ')"
   log "Rootfs free space after install: ${AVAIL_AFTER} MB"
 
@@ -132,8 +142,10 @@ finalize() {
   log "  /usr/share:  $(du -shx "$MNT/usr/share" 2>/dev/null | cut -f1)"
 
   # Per-package apparent size — files that landed in the image rootfs.
-  # Check against $MNT (where install_payload rsynced to), not $UPPER
-  # (overlay upper), because the overlay may be unmounted by now.
+  # NEW_PKGS is from the old overlay copy-back model; initialize if unset.
+  if [[ -z "${NEW_PKGS+x}" ]]; then
+    NEW_PKGS=()
+  fi
   if [[ ${#NEW_PKGS[@]} -gt 0 ]]; then
     log "  Per-package additions (apparent, in image rootfs):"
     local pkg total_payload_kb=0
@@ -175,11 +187,15 @@ finalize() {
   rm -f "$MNT/.final-rw-test"
 
   # ── System config verification ─────────────────────────────────────────
+  # ── Custom script ──────────────────────────────────────────────────────
+  run_custom_script "$MNT"
+
   # Verify that variant and update-branch are correctly stamped in the image.
   # These must be checked on the raw rootfs ($MNT) AFTER all modifications
-  # (overlay chroot, install_payload, customizations) but BEFORE sync/unmount.
-  # This catches cases where a write appeared to succeed but didn't persist
-  # (e.g. os-release written through an overlay upper that was later discarded).
+  # (overlay chroot, install_payload, customizations, custom script) but
+  # BEFORE sync/unmount.  This catches cases where a write appeared to
+  # succeed but didn't persist (e.g. os-release written through an overlay
+  # upper that was later discarded).
   #
   # Each location is checked individually.  Failures are collected and reported
   # together; we don't die until every check has run so the log shows the full
@@ -197,7 +213,7 @@ finalize() {
       log "  OK $_manifest_path variant=$_variant"
     else
       warn "  VERIFY FAILED: $_manifest_path variant != $_variant"
-      ((_verify_failures++)) || true
+      ((++_verify_failures)) || true
     fi
   done
 
@@ -207,7 +223,7 @@ finalize() {
     log "  OK /etc/os-release VARIANT_ID=$_variant"
   else
     warn "  VERIFY FAILED: /etc/os-release VARIANT_ID != $_variant"
-    ((_verify_failures++)) || true
+    ((++_verify_failures)) || true
   fi
 
   # ── Variant: OOBE neutralization ──────────────────────────────────────
@@ -216,7 +232,7 @@ finalize() {
       log "  OK OOBE neutralization applied"
     else
       warn "  VERIFY FAILED: OOBE neutralization not applied"
-      ((_verify_failures++)) || true
+      ((++_verify_failures)) || true
     fi
   fi
 
@@ -228,7 +244,7 @@ finalize() {
       log "  OK $_manifest_path default_update_branch=$_branch"
     else
       warn "  VERIFY FAILED: $_manifest_path default_update_branch != $_branch"
-      ((_verify_failures++)) || true
+      ((++_verify_failures)) || true
     fi
   done
 
@@ -237,7 +253,7 @@ finalize() {
     log "  OK /etc/os-release STEAMOS_DEFAULT_UPDATE_BRANCH=$_branch"
   else
     warn "  VERIFY FAILED: /etc/os-release STEAMOS_DEFAULT_UPDATE_BRANCH != $_branch"
-    ((_verify_failures++)) || true
+    ((++_verify_failures)) || true
   fi
 
   # ── Verdict ───────────────────────────────────────────────────────────
@@ -246,6 +262,19 @@ finalize() {
   fi
   log "System configuration verified: variant=$_variant branch=$_branch"
 
+  # ── Pacman repository config ───────────────────────────────────────────
+  # When Pacman repo is main, point all repos at the -main variants
+  if [[ "${PACMAN_REPO:-valve}" == "main" ]]; then
+    log "Switching pacman repos to main branch"
+    sed -Ei \
+      -e 's/^\[jupiter-[^]]+\][[:space:]]*$/[jupiter-main]/' \
+      -e 's/^\[holo-[^]]+\][[:space:]]*$/[holo-main]/' \
+      -e 's/^\[core-[^]]+\][[:space:]]*$/[core-main]/' \
+      -e 's/^\[extra-[^]]+\][[:space:]]*$/[extra-main]/' \
+      -e 's/^\[multilib-[^]]+\][[:space:]]*$/[multilib-main]/' \
+      "$MNT/etc/pacman.conf"
+  fi
+
   # Flush all pending writes BEFORE flipping the subvolume read-only —
   # flipping with delalloc data still queued can silently produce 0-byte files.
   log "Syncing filesystems"
@@ -253,6 +282,11 @@ finalize() {
   sync -f "$MNT"
   sync -f "$HOMEMNT"
   sync -f "$EFIMNT"
+
+  # Restore btrfs rootfs to read-only to match Valve's source image.
+  # The build process clears this property for modifications; restore it now
+  # that all writes (including user custom script) are complete.
+  restore_rootfs_readonly "$MNT"
 
   # Publish: rename .building to final output BEFORE tearing down mounts.
   # When WORKDIR is in RAM (/dev/shm), OUT lives inside WORKDIR, so
@@ -331,7 +365,7 @@ finalize() {
         _backing="$(losetup -l -O BACK-FILE "$_loop" 2>/dev/null | tail -1 | tr -d ' ')"
         if losetup -d "$_loop" 2>/dev/null; then
           log "  Detached $_loop (${_backing:-unknown})"
-          ((_detached++)) || true
+          ((++_detached)) || true
         else
           warn "  Could not detach $_loop (${_backing:-unknown})"
         fi
@@ -394,35 +428,56 @@ finalize() {
 
   log "DONE — $OUT"
 
-  local update_text="" install_text=""
-  case "$UPDATE_MODE" in
-    selfheal)
-      update_text="  Updates: SELF-HEALING — updating from within Steam works; the
-           driver is rebuilt for each new OS version automatically
-           (adds 10-20 min per update; failed rebuilds cancel the update,
-           system stays working). For a NEWER driver later: rerun this
-           script and reinstall from the fresh USB image."
-      ;;
-    hold)
-      update_text="  Updates: OS updates HELD (atomupd + OOBE migration masked, CLIs stubbed)."
-      ;;
-    stock)
-      update_text="  Updates: STOCK behaviour — an OS update will REMOVE the NVIDIA driver!"
-      ;;
-  esac
+  # Use the already-validated $KVER (discovery from the image would fail
+  # here because $MNT has been unmounted during cleanup).
+  local final_kver="$KVER"
+
+  local driver_text="" update_text="" install_text=""
+
+  # Driver line — show what was actually installed
+  if nvidia_is_selected; then
+    driver_text="  Driver:  nvidia-open (DKMS) for kernel $final_kver"
+  else
+    driver_text="  Kernel:  $final_kver"
+  fi
+
+  # Update mode text — only relevant when custom drivers are installed
+  if nvidia_is_selected; then
+    case "$UPDATE_MODE" in
+      selfheal)
+        update_text="  Updates: SELF-HEALING — updating from within Steam works; the
+             driver is rebuilt for each new OS version automatically
+             (adds 10-20 min per update; failed rebuilds cancel the update,
+             system stays working). For a NEWER driver later: rerun this
+             script and reinstall from the fresh USB image."
+        ;;
+      hold)
+        update_text="  Updates: OS updates HELD (atomupd + OOBE migration masked, CLIs stubbed)."
+        ;;
+      stock)
+        update_text="  Updates: STOCK behaviour — an OS update will REMOVE the NVIDIA driver!"
+        ;;
+    esac
+  fi
 
   if ((ADD_INSTALLER == 1)); then
     install_text='  Install: boot the USB → double-click "Install SteamOS (NVIDIA) to
-           Hard Drive" → pick disk → machine powers off → remove USB, boot.'
+             Hard Drive" → pick disk → machine powers off → remove USB, boot.'
   fi
 
   cat <<EOF
 
-  Driver:  nvidia-open (DKMS) for kernel $KVER
+$driver_text
 $update_text
 $install_text
 
   Flash:   sudo dd if="$OUT" of=/dev/sdX bs=4M status=progress conv=fsync
+EOF
+
+  # Only show nvidia requirements when nvidia is installed
+  if nvidia_is_selected; then
+    cat <<EOF
   Needs:   UEFI + Secure Boot off; RTX 20xx or newer (nvidia-open = Turing+).
 EOF
+  fi
 }

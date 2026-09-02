@@ -8,7 +8,7 @@
 # Examples:
 #   ./steamos-build.sh --action build \
 #       --image /home/image/steamdeck-repair.img.bz2 \
-#       --workingdir /tmp/nvidia-build \
+#       --workingdir /tmp/steamos-build \
 #       --rootfs-size 10G
 #
 #   ./steamos-build.sh --action flash \
@@ -56,7 +56,7 @@ Usage:
   steamos-build.sh --action build --image FILE --config FILE [options]
   steamos-build.sh --action flash --image FILE --device /dev/sdX
   steamos-build.sh --action live --config FILE
-  steamos-build.sh --action validate [--config FILE]
+  steamos-build.sh --action validate [--config FILE] [--image FILE] [--output FILE]
   steamos-build.sh --action reboot
   steamos-build.sh --setup
 
@@ -64,14 +64,19 @@ Setup:
   --setup                  Install host dependencies required by this tool
 
 Named arguments:
-  --action ACTION          build | flash | live | reboot
+  --action ACTION          build | flash | live | validate | reboot
   --image FILE             Base SteamOS repair image
   --device DEVICE          Target flash device (flash only)
   --config FILE            Build config file (all build options go here)
   --output-dir DIR         Where to write output image
+  --output FILE            Write validation JSON report to file (validate only)
 
 Flash:
   --allow-system-disk      Permit a target detected as the current system disk
+
+Output control:
+  --verbose                Show additional detail (package names, command output)
+  --debug                  Show debug diagnostics (implies --verbose)
 
 All build options (rootfs size, session, update mode, packages, tweaks, etc.)
 are set via --config. See docs/customization_build_config.md for the full list.
@@ -136,7 +141,7 @@ require_action_dependencies() {
     build)
       missing_cmds="$(missing_commands \
         losetup blkid btrfs bzip2 gzip xz pv rsync curl depmod sed awk tar \
-        zstd pacman python3 readelf sgdisk sfdisk partx unshare lspci modinfo || true)"
+        zstd pacman pactree python3 readelf sgdisk sfdisk partx unshare lspci modinfo || true)"
       ;;
     flash)
       missing_cmds="$(missing_commands \
@@ -145,6 +150,9 @@ require_action_dependencies() {
     configure)
       # post-install configuration is GUI-driven.
       missing_cmds="$(missing_commands yad || true)"
+      ;;
+    validate)
+      # validate has minimal dependencies
       ;;
     reboot | list-images | list-devices | is-system-disk | preflight) ;;
   esac
@@ -231,30 +239,11 @@ run_setup() {
   # Keep the canonical dependency list in lib/check-deps.sh when available.
   # This installs build dependencies and lets that helper evolve independently
   # of the frontend.
-  if [[ -f "$SCRIPT_DIR/lib/check-deps.sh" ]]; then
-    bash "$SCRIPT_DIR/lib/check-deps.sh" --install
-  else
-    echo "WARNING: lib/check-deps.sh is missing; installing the known baseline." >&2
-    pacman -S --needed --noconfirm \
-      gawk util-linux btrfs-progs bzip2 curl kmod gzip pv python binutils \
-      rsync sed tar xz zstd
-  fi
-
-  # Frontend/flash dependencies not guaranteed by check-deps.sh.
-  pacman -S --needed --noconfirm yad gptfdisk pciutils
-
-  # Verify the common GUI + build + flash surface rather than claiming success
-  # solely because pacman returned zero.
-  local missing
-  missing="$(missing_commands \
-    yad losetup blkid btrfs bzip2 gzip xz pv rsync curl depmod sed awk tar \
-    zstd pacman python3 readelf sgdisk sfdisk partx unshare lspci modinfo lsblk \
-    blockdev findmnt mountpoint udevadm || true)"
-
-  if [[ -n "$missing" ]]; then
-    echo "Setup completed, but these commands are still missing: $missing" >&2
+  if [[ ! -f "$SCRIPT_DIR/lib/check-deps.sh" ]]; then
+    echo "ERROR: lib/check-deps.sh is missing — cannot install dependencies." >&2
     exit 1
   fi
+  bash "$SCRIPT_DIR/lib/check-deps.sh" --install
 
   echo
   echo "Setup complete. Run the script again normally:"
@@ -323,11 +312,15 @@ build_backend_args() {
   [[ -n "$CONFIG_FILE" ]] && BACKEND_ARGS+=(--config "$CONFIG_FILE")
   [[ -n "${OUTPUT_DIR:-}" ]] && BACKEND_ARGS+=(--output-dir "$OUTPUT_DIR")
   [[ "${ALLOW_SYSTEM_DISK:-0}" -eq 1 ]] && BACKEND_ARGS+=(--allow-system-disk)
+  [[ -n "${VALIDATE_OUTPUT_FILE:-}" ]] && BACKEND_ARGS+=(--output "$VALIDATE_OUTPUT_FILE")
+  [[ "${DEBUG:-0}" -eq 1 ]] && BACKEND_ARGS+=(--debug)
+  [[ "${VERBOSE:-0}" -eq 1 ]] && BACKEND_ARGS+=(--verbose)
+  return 0
 }
 
 backend_needs_root() {
   case "$1" in
-    build | flash | flashless | reboot) return 0 ;;
+    build | flash | flashless | validate | reboot) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -355,25 +348,39 @@ backend_action_from_args() {
 
 run_backend_cli() {
   build_backend_args
+  echo "[cli] ACTION=$ACTION EUID=$EUID" >&2
 
   if backend_needs_mount_namespace "$ACTION"; then
+    echo "[cli] needs mount namespace" >&2
     command -v unshare >/dev/null 2>&1 || {
       echo "unshare is required for build mount isolation." >&2
       exit 1
     }
     if [[ $EUID -ne 0 ]]; then
-      exec sudo unshare --mount --propagation private -- \
+      sudo unshare --mount --propagation private -- \
         bash "$BACKEND" "${BACKEND_ARGS[@]}"
+      return $?
     fi
-    exec unshare --mount --propagation private -- \
+    unshare --mount --propagation private -- \
       bash "$BACKEND" "${BACKEND_ARGS[@]}"
+    return $?
   fi
 
+  echo "[cli] checking root" >&2
   if backend_needs_root "$ACTION" && [[ $EUID -ne 0 ]]; then
-    exec sudo bash "$BACKEND" "${BACKEND_ARGS[@]}"
+    echo "[cli] needs root, checking sudo" >&2
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "Error: $ACTION requires root. Run with sudo or as root." >&2
+      exit 1
+    fi
+    echo "[cli] running with sudo" >&2
+    sudo bash "$BACKEND" "${BACKEND_ARGS[@]}"
+    return $?
   fi
 
-  exec bash "$BACKEND" "${BACKEND_ARGS[@]}"
+  echo "[cli] running directly" >&2
+  bash "$BACKEND" "${BACKEND_ARGS[@]}"
+  return $?
 }
 
 ui_error() {
@@ -844,29 +851,33 @@ eGPU users: recommended not to select video/display drivers.</span>" \
 
 # Parse a hardware manifest file and append rows to the caller's 'rows' array.
 # Bad lines are appended to the caller's 'bad_lines' array.
-# Args: $1 = conf file path, $2 = source label (e.g. "valve" or "arch")
+# Args: $1 = conf file path, $2 = type filter (e.g. "pacman")
 _ui_parse_hw_manifest() {
   local conf="$1"
-  local source="$2"
-  local line_num=0 line rest group pkg version default desc
+  local filter_type="$2"
+  local line_num=0 line rest type group pkg version default desc
 
   # shellcheck disable=SC2094  # Read-only: $conf is only read; bad_lines is an array, not a file
   while IFS= read -r line; do
     ((++line_num))
     [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
-    if [[ "$line" != *"|"*"|"*"|"*"|"* ]]; then
+    if [[ "$line" != *"|"*"|"*"|"*"|"*"|"*"|"* ]]; then
       bad_lines+=("  $(basename "$conf"):$line_num: $line")
       continue
     fi
-    group="${line%%|*}"
+    type="${line%%|*}"
     rest="${line#*|}"
+    [[ -n "$filter_type" && "$type" != "$filter_type" ]] && continue
+    group="${rest%%|*}"
+    rest="${rest#*|}"
     pkg="${rest%%|*}"
     rest="${rest#*|}"
     version="${rest%%|*}"
     rest="${rest#*|}"
     default="${rest%%|*}"
-    desc="${rest#*|}"
-    rows+=("$default" "$group" "$pkg" "$version" "$source" "$desc")
+    rest="${rest#*|}"
+    desc="${rest%%|*}"
+    rows+=("$default" "$group" "$pkg" "$version" "$type" "$desc")
   done <"$conf"
 }
 
@@ -882,16 +893,12 @@ _ui_detect_hw() {
 # Prints space-separated item list to stdout; empty if cancelled.
 # Items: logitech-hid linux-firmware libfprint fprintd bolt
 ui_select_hw_support() {
-  local arch_conf="$SCRIPT_DIR/lib/configs/hw-packages-arch.conf"
-  local valve_conf="$SCRIPT_DIR/lib/configs/hw-packages-valve.conf"
+  local conf="$SCRIPT_DIR/lib/configs/hw-packages.conf"
   local -a rows=()
   local -a bad_lines=()
 
-  # Read Valve manifest.
-  [[ -f "$valve_conf" ]] && _ui_parse_hw_manifest "$valve_conf" "valve"
-
-  # Read Arch manifest.
-  [[ -f "$arch_conf" ]] && _ui_parse_hw_manifest "$arch_conf" "arch"
+  # Read packages from unified manifest.
+  [[ -f "$conf" ]] && _ui_parse_hw_manifest "$conf" "pacman"
 
   if ((${#bad_lines[@]} > 0)); then
     ui_error "Malformed lines in hardware config:
@@ -918,13 +925,13 @@ Example: Firmware|linux-firmware|latest|TRUE|Full firmware suite"
   if [[ -n "$detected" ]]; then
     local -a new_rows=()
     local i
-    for ((i=0; i<${#rows[@]}; i+=6)); do
+    for ((i = 0; i < ${#rows[@]}; i += 6)); do
       local default="${rows[$i]}"
-      local group="${rows[$i+1]}"
-      local pkg="${rows[$i+2]}"
-      local version="${rows[$i+3]}"
-      local source="${rows[$i+4]}"
-      local desc="${rows[$i+5]}"
+      local group="${rows[$i + 1]}"
+      local pkg="${rows[$i + 2]}"
+      local version="${rows[$i + 3]}"
+      local source="${rows[$i + 4]}"
+      local desc="${rows[$i + 5]}"
 
       # If package is detected, pre-select it.
       if [[ " $detected " == *" $pkg "* ]]; then
@@ -1029,58 +1036,6 @@ ui_select_system_tweaks() {
   echo "$selected"
 }
 
-# Package and driver builds selection dialog.
-# Reads items from configs/hw-packages-build.conf.
-# Prints space-separated driver list to stdout; empty if cancelled.
-ui_select_package_builds() {
-  local conf="$SCRIPT_DIR/lib/configs/hw-packages-build.conf"
-  if [[ ! -r "$conf" ]]; then
-    echo "Drivers config not found: $conf" >&2
-    echo ""
-    return
-  fi
-
-  # Build yad arguments from config file
-  local -a yad_args=()
-  local type name version default desc
-
-  while IFS='|' read -r type name version default desc; do
-    # Skip comments and empty lines
-    [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
-
-    # Add to yad dialog (show name, not type)
-    yad_args+=("$default" "$name" "$desc")
-  done <"$conf"
-
-  # If no drivers, return empty
-  if [[ ${#yad_args[@]} -eq 0 ]]; then
-    echo ""
-    return
-  fi
-
-  # Show dialog
-  local selected
-  selected="$(yad --list --checklist \
-    --title="Custom Software and Drivers" \
-    --text="<b>Select software and drivers to build and install.</b>" \
-    --column="Enable" \
-    --column="Software/Driver" \
-    --column="Description" \
-    --separator=" " \
-    --print-column=2 \
-    --center \
-    --width=600 \
-    --height=400 \
-    --button="Cancel":1 \
-    --button="OK":0 \
-    "${yad_args[@]}" \
-    2>/dev/null)" || selected=""
-
-  selected="${selected%%|*}"
-  selected="${selected% }"
-  echo "$selected"
-}
-
 # Common yad --field definitions and default values for the build settings form.
 # Populates _BF_FIELDS and _BF_DEFAULTS arrays for use by callers.
 _build_form_common_args() {
@@ -1091,12 +1046,14 @@ _build_form_common_args() {
     --field="Update mode:CB"
     --field="Workspace location:CB"
     --field="Working directory!Use automatic unless you want an explicit build directory"
-    --field="Pacman repository!Which package repos to use and in what priority:CB"
+    --field="Pacman repository!Which package repos to use:CB"
+    --field="Base OS packages:CB"
     --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK"
     --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK"
     --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK"
-    --field="Package & driver builds!Build and install custom drivers (Logitech HID, AoTofu VA-API, etc.):CHK"
     --field="Add one-click installer!Adds desktop icon to install SteamOS to internal drive:CHK"
+    --field="Custom finalize script!Optional .sh to run after image is built:FL"
+    --field="Persist builder to /home!Copy steamos-build to /home/.steamos-build for re-use:CHK"
     --button="Cancel":1
     --button="OK":0
   )
@@ -1107,11 +1064,13 @@ _build_form_common_args() {
     "^selfheal!hold!stock"
     "^auto!ram!disk"
     "automatic"
-    "^Valve + Arch (Valve priority)!Valve + Arch (Arch priority)!Valve only"
+    "^Valve default!main"
+    "^Add selected packages only!Upgrade base OS first"
     "TRUE"
     "FALSE"
     "TRUE"
     "TRUE"
+    ""
     "TRUE"
   )
 }
@@ -1129,7 +1088,7 @@ ui_collect_build_args() {
     --text="<b>Build settings</b>
 
 Select the clean SteamOS repair image and adjust any settings you want.
-NVIDIA packages follow the version policy in hw-packages-arch.conf." \
+NVIDIA packages follow the version policy in hw-packages.conf." \
     --columns=1 \
     --separator="$sep" \
     --item-separator="!" \
@@ -1137,7 +1096,7 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     --center \
     --scroll \
     --width=1000 \
-    --height=600 \
+    --height=700 \
     --field="Base image!Clean SteamOS repair image (.img or compressed):FL" \
     "${_BF_FIELDS[@]}" \
     "" \
@@ -1145,11 +1104,13 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     2>/dev/null)" || return 1
 
   local base_image update_branch rootfs session update workspace workdir
-  local pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer
+  local pacman_repo hw_support initramfs_support system_tweaks add_installer
+  local custom_finalize persist_builder
 
   IFS="$sep" read -r \
     base_image update_branch rootfs session update workspace workdir \
-    pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer \
+    pacman_repo base_os_mode hw_support initramfs_support system_tweaks add_installer \
+    custom_finalize persist_builder \
     <<<"$form"
 
   rootfs="${rootfs:-10240}"
@@ -1177,11 +1138,15 @@ NVIDIA packages follow the version policy in hw-packages-arch.conf." \
     workdir=""
   fi
 
-  # Map pacman repo dropdown to internal key
+  # Map pacman repo dropdown to config value
   case "$pacman_repo" in
-    "Valve + Arch (Valve priority)") pacman_repo="valve-arch-valve" ;;
-    "Valve + Arch (Arch priority)")  pacman_repo="arch-valve" ;;
-    "Valve only")                    pacman_repo="valve" ;;
+    "Valve default") pacman_repo="valve" ;;
+    "main") pacman_repo="main" ;;
+  esac
+
+  case "$base_os_mode" in
+    "Add selected packages only") base_os_mode="additive" ;;
+    "Upgrade base OS first") base_os_mode="upgrade" ;;
   esac
 
   # Write build config to a temporary file
@@ -1197,11 +1162,12 @@ DEFAULT_SESSION="$session"
 UPDATE_MODE="$update"
 WORKDIR_LOCATION="$workspace"
 PACMAN_REPO="$pacman_repo"
+BASE_OS_MODE="$base_os_mode"
 EOF
 
   [[ -n "$workdir" ]] && echo "WORKDIR=\"$workdir\"" >>"$conf_file"
 
-  local hw_items="" gaming_items="" drivers="" initramfs_mods=""
+  local hw_items="" gaming_items="" initramfs_mods=""
 
   if [[ "${hw_support^^}" == "TRUE" ]]; then
     hw_items="$(ui_select_hw_support)"
@@ -1221,16 +1187,6 @@ EOF
     gaming_items="$(echo "$gaming_items" | tr '\n' ' ' | xargs)"
   fi
 
-  # Package & driver builds — show selection dialog if checkbox is checked.
-  if [[ "${package_builds^^}" == "TRUE" ]]; then
-    drivers="$(ui_select_package_builds)"
-    if [[ -z "$drivers" ]]; then
-      rm -f "$conf_file"
-      return 1
-    fi
-    drivers="$(echo "$drivers" | tr '\n' ' ' | xargs)"
-  fi
-
   if [[ "${initramfs_support^^}" == "TRUE" ]]; then
     initramfs_mods="$(ui_select_initramfs_modules)"
     if [[ -z "$initramfs_mods" ]]; then
@@ -1243,9 +1199,9 @@ EOF
   {
     echo "HW_SUPPORT_ITEMS=\"$hw_items\""
     echo "GAMING_ITEMS=\"$gaming_items\""
-    echo "CUSTOM_DRIVERS=\"$drivers\""
-    echo "CUSTOM_DRIVERS_SET=1"
     echo "INITRAMFS_MODULES=\"$initramfs_mods\""
+    [[ -n "$custom_finalize" ]] && echo "CUSTOM_FINALIZE_SCRIPT=\"$custom_finalize\""
+    [[ "${persist_builder^^}" != "TRUE" ]] && echo "PERSIST_BUILDER=0"
   } >>"$conf_file"
 
   [[ "${add_installer^^}" != "TRUE" ]] && echo "ADD_INSTALLER=0" >>"$conf_file"
@@ -1285,7 +1241,7 @@ ui_build() {
       --print-column=1 \
       --separator="" \
       --center \
-    --width=1000 \
+      --width=1000 \
       --height=320 \
       --button="Cancel":1 \
       --button="Build":2 \
@@ -1299,12 +1255,12 @@ ui_build() {
       return 0
     elif ((rc == 2)); then
       # Build pressed — validate all inputs
-      local missing=""
-      [[ -f "$conf_file" ]] || missing+="  - Build configuration\n"
-      [[ -f "$source_img" ]] || missing+="  - Source image\n"
-      [[ -d "$output_dir" ]] || missing+="  - Output directory\n"
-      if [[ -n "$missing" ]]; then
-        ui_error "<b>Please select all inputs before building:</b>\n\n$missing"
+      local -a missing=()
+      [[ -f "$conf_file" ]] || missing+=("  - Build configuration")
+      [[ -f "$source_img" ]] || missing+=("  - Source image")
+      [[ -d "$output_dir" ]] || missing+=("  - Output directory")
+      if [[ ${#missing[@]} -gt 0 ]]; then
+        ui_error "<b>Please select all inputs before building:</b>\n\n$(printf '%s\n' "${missing[@]}")"
         continue
       fi
       break
@@ -1387,51 +1343,140 @@ $GUI_LAST_LOG"
 
 ui_generate_conf() {
   local sep=$'\x1f'
-  local form
-  local -a _BF_FIELDS _BF_DEFAULTS
-  _build_form_common_args
 
-  # Show settings form (without image selection)
-  form="$(yad --form \
-    --title="Generate Build Configuration" \
-    --text="<b>Build settings</b>
-
-Configure the build options below. The image will be selected when you build." \
-    --columns=1 \
-    --separator="$sep" \
-    --item-separator="!" \
-    --align=left \
+  # Mode selector — choose between Build and Live OS config generation
+  local gen_mode
+  gen_mode="$(yad --list \
+    --title="Generate Configuration" \
+    --text="<b>What type of configuration do you want to generate?</b>" \
+    --column="Mode" \
+    --column="Description" \
+    --print-column=1 \
+    --separator="" \
     --center \
-    --scroll \
-    --width=900 \
-    --height=500 \
-    "${_BF_FIELDS[@]}" \
-    "${_BF_DEFAULTS[@]}" \
+    --width=500 \
+    --height=250 \
+    --button="Cancel":1 \
+    --button="OK":0 \
+    "Build" "Create a custom SteamOS image from a source image" \
+    "Live OS" "Apply configuration to the running system" \
     2>/dev/null)" || return 0
 
-  local update_branch rootfs session update workspace workdir
-  local pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer
+  gen_mode="$(echo "$gen_mode" | tr -d '|' | xargs)"
 
-  IFS="$sep" read -r \
-    update_branch rootfs session update workspace workdir \
-    pacman_repo hw_support initramfs_support system_tweaks package_builds add_installer \
-    <<<"$form"
+  local is_live=0
+  [[ "$gen_mode" == "Live OS" ]] && is_live=1
 
-  rootfs="${rootfs:-10240}"
-  session="${session:-game}"
-  update="${update:-selfheal}"
-  workspace="${workspace:-auto}"
-  update_branch="${update_branch:-stable}"
+  # Shared settings form fields (used by both modes)
+  local -a _SHARED_FIELDS=(
+    --field="Branch:CB"
+    --field="Default session:CB"
+    --field="Update mode:CB"
+    --field="Pacman repository!Which package repos to use:CB"
+    --field="Base OS packages:CB"
+    --field="Hardware support!Install Logitech HID modules, firmware, fingerprint libs, and Thunderbolt support:CHK"
+    --field="Initramfs support!Select which kernel modules to force into the initramfs for early boot:CHK"
+    --field="System tweaks!PCI realloc, resizable BAR, gamemode, keyring, and more:CHK"
+  )
+  local -a _SHARED_DEFAULTS=(
+    "^stable!beta!preview!rc!bc!pc!main"
+    "^game!desktop"
+    "^selfheal!hold!stock"
+    "^Valve default!main"
+    "^Add selected packages only!Upgrade base OS first"
+    "TRUE"
+    "FALSE"
+    "TRUE"
+  )
 
-  # Map pacman repo dropdown to internal key
+  local form
+  local -a form_fields form_defaults
+
+  if ((is_live)); then
+    form_fields=("${_SHARED_FIELDS[@]}")
+    form_defaults=("${_SHARED_DEFAULTS[@]}")
+
+    form="$(yad --form \
+      --title="Generate Live OS Configuration" \
+      --text="<b>Live OS settings</b>
+
+Configure the options below. This config will be applied directly to your running system." \
+      --columns=1 \
+      --separator="$sep" \
+      --item-separator="!" \
+      --align=left \
+      --center \
+      --scroll \
+      --width=900 \
+      --height=500 \
+      "${form_fields[@]}" \
+      "${form_defaults[@]}" \
+      2>/dev/null)" || return 0
+
+    local update_branch session update pacman_repo base_os_mode
+    local hw_support initramfs_support system_tweaks
+
+    IFS="$sep" read -r \
+      update_branch session update \
+      pacman_repo base_os_mode \
+      hw_support initramfs_support system_tweaks \
+      <<<"$form"
+
+    session="${session:-game}"
+    update="${update:-selfheal}"
+    update_branch="${update_branch:-stable}"
+  else
+    # Build mode — use the full form with build-specific fields
+    local -a _BF_FIELDS _BF_DEFAULTS
+    _build_form_common_args
+
+    form="$(yad --form \
+      --title="Generate Build Configuration" \
+      --text="<b>Build settings</b>
+
+Configure the build options below. The image will be selected when you build." \
+      --columns=1 \
+      --separator="$sep" \
+      --item-separator="!" \
+      --align=left \
+      --center \
+      --scroll \
+      --width=900 \
+      --height=500 \
+      "${_BF_FIELDS[@]}" \
+      "${_BF_DEFAULTS[@]}" \
+      2>/dev/null)" || return 0
+
+    local update_branch rootfs session update workspace workdir
+    local pacman_repo hw_support initramfs_support system_tweaks add_installer
+    local custom_finalize persist_builder
+
+    IFS="$sep" read -r \
+      update_branch rootfs session update workspace workdir \
+      pacman_repo base_os_mode hw_support initramfs_support system_tweaks add_installer \
+      custom_finalize persist_builder \
+      <<<"$form"
+
+    rootfs="${rootfs:-10240}"
+    session="${session:-game}"
+    update="${update:-selfheal}"
+    workspace="${workspace:-auto}"
+    update_branch="${update_branch:-stable}"
+  fi
+
+  # Map pacman repo dropdown to config value
   case "$pacman_repo" in
-    "Valve + Arch (Valve priority)") pacman_repo="valve-arch-valve" ;;
-    "Valve + Arch (Arch priority)")  pacman_repo="arch-valve" ;;
-    "Valve only")                    pacman_repo="valve" ;;
+    "Valve default") pacman_repo="valve" ;;
+    "main") pacman_repo="main" ;;
+  esac
+
+  case "$base_os_mode" in
+    "Add selected packages only") base_os_mode="additive" ;;
+    "Upgrade base OS first") base_os_mode="upgrade" ;;
   esac
 
   # Show sub-dialogs for optional items
-  local hw_items="" gaming_items="" drivers="" initramfs_mods=""
+  local hw_items="" gaming_items="" initramfs_mods=""
 
   if [[ "${hw_support^^}" == "TRUE" ]]; then
     hw_items="$(ui_select_hw_support)"
@@ -1443,12 +1488,6 @@ Configure the build options below. The image will be selected when you build." \
     gaming_items="$(ui_select_system_tweaks)"
     [[ -n "$gaming_items" ]] || return 0
     gaming_items="$(echo "$gaming_items" | tr '\n' ' ' | xargs)"
-  fi
-
-  if [[ "${package_builds^^}" == "TRUE" ]]; then
-    drivers="$(ui_select_package_builds)"
-    [[ -n "$drivers" ]] || return 0
-    drivers="$(echo "$drivers" | tr '\n' ' ' | xargs)"
   fi
 
   if [[ "${initramfs_support^^}" == "TRUE" ]]; then
@@ -1486,7 +1525,7 @@ Configure the build options below. The image will be selected when you build." \
       local i=0
       for item in "${arr[@]}"; do
         line+="$item "
-        ((i++))
+        ((++i))
         if ((i % 4 == 0)) || ((i == count)); then
           result+="${prefix}${line}\n"
           line=""
@@ -1499,26 +1538,37 @@ Configure the build options below. The image will be selected when you build." \
   }
 
   # Build confirmation summary
+  local summary_title="BUILD CONFIGURATION"
+  ((is_live)) && summary_title="LIVE OS CONFIGURATION"
+
   local summary=""
   summary+="═══════════════════════════════════════════════════════════\n"
-  summary+="                    BUILD CONFIGURATION\n"
+  summary+="                    $summary_title\n"
   summary+="═══════════════════════════════════════════════════════════\n\n"
 
   summary+="┌─ General Settings ─────────────────────────────────────┐\n"
   summary+="│  Update Branch:   $update_branch\n"
-  summary+="│  Rootfs Size:     ${rootfs} MB\n"
+  ((!is_live)) && summary+="│  Rootfs Size:     ${rootfs} MB\n"
   summary+="│  Default Session: ${session:-game}\n"
   summary+="│  Update Mode:     $update\n"
-  summary+="│  Workspace:       $workspace\n"
-  [[ -n "$workdir" && "$workdir" != "automatic" ]] && summary+="│  Working Dir:     $workdir\n"
+  local base_os_label
+  case "${base_os_mode:-additive}" in
+    additive) base_os_label="Add selected packages only" ;;
+    upgrade) base_os_label="Upgrade base OS first" ;;
+  esac
+  summary+="│  Base OS mode:  $base_os_label\n"
+  ((!is_live)) && summary+="│  Workspace:       $workspace\n"
+  if ((!is_live)) && [[ -n "${workdir:-}" && "$workdir" != "automatic" ]]; then
+    summary+="│  Working Dir:     $workdir\n"
+  fi
   summary+="└────────────────────────────────────────────────────────┘\n\n"
 
   summary+="┌─ Enabled Features ─────────────────────────────────────┐\n"
-  [[ "${add_installer^^}" == "TRUE" ]] && summary+="│  ✓ One-click installer\n"
+  ((!is_live)) && [[ "${add_installer^^}" == "TRUE" ]] && summary+="│  ✓ One-click installer\n"
   [[ -n "$hw_items" ]] && summary+="│  ✓ Hardware support\n"
   [[ -n "$gaming_items" ]] && summary+="│  ✓ System tweaks\n"
-  [[ -n "$drivers" ]] && summary+="│  ✓ Package & driver builds\n"
   [[ -n "$initramfs_mods" ]] && summary+="│  ✓ Initramfs modules\n"
+  ((!is_live)) && [[ -n "${custom_finalize:-}" ]] && summary+="│  ✓ Custom finalize script\n"
   summary+="└────────────────────────────────────────────────────────┘\n\n"
 
   summary+="┌─ Hardware Support ─────────────────────────────────────┐\n"
@@ -1537,14 +1587,6 @@ Configure the build options below. The image will be selected when you build." \
   fi
   summary+="└────────────────────────────────────────────────────────┘\n\n"
 
-  summary+="┌─ Custom Drivers and Build Packages ────────────────────┐\n"
-  if [[ -n "$drivers" ]]; then
-    summary+="$(_format_items "$drivers")\n"
-  else
-    summary+="│  (none selected)\n"
-  fi
-  summary+="└────────────────────────────────────────────────────────┘\n\n"
-
   summary+="┌─ Initramfs Modules ────────────────────────────────────┐\n"
   if [[ -n "$initramfs_mods" ]]; then
     summary+="$(_format_items "$initramfs_mods")\n"
@@ -1556,7 +1598,7 @@ Configure the build options below. The image will be selected when you build." \
   # Show confirmation dialog with scrollable text view
   yad --text-info \
     --title="Confirm Configuration" \
-    --text="<b>Review your build configuration before saving.</b>" \
+    --text="<b>Review your $gen_mode configuration before saving.</b>" \
     --filename=<(printf '%b' "$summary") \
     --button="Cancel":1 \
     --button="Save":0 \
@@ -1568,31 +1610,41 @@ Configure the build options below. The image will be selected when you build." \
 
   # Build config content
   local conf_content
-  conf_content="# steamos-build build config — generated $(date -Iseconds)\n"
-  conf_content+="# Image path will be set when building\n\n"
-  conf_content+="ROOTFS_SIZE=\"$rootfs\"\n"
+  conf_content="# steamos-build config — generated $(date -Iseconds)\n"
+  ((is_live)) && conf_content+="# For use with: --action live --config <this file>\n" \
+    || conf_content+="# Image path will be set when building\n"
+  conf_content+="\n"
+  ((!is_live)) && conf_content+="ROOTFS_SIZE=\"$rootfs\"\n"
   conf_content+="TARGET_VARIANT=\"$target_variant\"\n"
   conf_content+="UPDATE_BRANCH=\"$update_branch\"\n"
   conf_content+="DEFAULT_SESSION=\"${session:-game}\"\n"
   conf_content+="UPDATE_MODE=\"${update:-selfheal}\"\n"
-  conf_content+="WORKDIR_LOCATION=\"$workspace\"\n"
+  ((!is_live)) && conf_content+="WORKDIR_LOCATION=\"${workspace:-auto}\"\n"
   conf_content+="PACMAN_REPO=\"$pacman_repo\"\n"
+  conf_content+="BASE_OS_MODE=\"${base_os_mode:-additive}\"\n"
 
-  [[ -n "$workdir" && "$workdir" != "automatic" ]] && conf_content+="WORKDIR=\"$workdir\"\n"
-  [[ "${add_installer^^}" != "TRUE" ]] && conf_content+="ADD_INSTALLER=0\n"
+  if ((!is_live)); then
+    [[ -n "${workdir:-}" && "$workdir" != "automatic" ]] && conf_content+="WORKDIR=\"$workdir\"\n"
+    [[ "${add_installer^^}" != "TRUE" ]] && conf_content+="ADD_INSTALLER=0\n"
+  fi
 
   # Always write all selection keys (empty if not selected)
   conf_content+="HW_SUPPORT_ITEMS=\"${hw_items:-}\"\n"
   conf_content+="GAMING_ITEMS=\"${gaming_items:-}\"\n"
-  conf_content+="CUSTOM_DRIVERS=\"${drivers:-}\"\n"
-  conf_content+="CUSTOM_DRIVERS_SET=1\n"
   conf_content+="INITRAMFS_MODULES=\"${initramfs_mods:-}\"\n"
+  if ((!is_live)); then
+    [[ -n "${custom_finalize:-}" ]] && conf_content+="CUSTOM_FINALIZE_SCRIPT=\"$custom_finalize\"\n"
+    [[ "${persist_builder^^}" != "TRUE" ]] && conf_content+="PERSIST_BUILDER=0\n"
+  fi
 
   # Show file save dialog
+  local default_name="steamos-build.conf"
+  ((is_live)) && default_name="steamos-live.conf"
+
   local outfile
   outfile="$(yad --file --save \
-    --title="Save Build Configuration" \
-    --filename="steamos-build.conf" \
+    --title="Save Configuration" \
+    --filename="$default_name" \
     --file-filter="Config files (*.conf) | *.conf" \
     --center \
     --width=600 \
@@ -1617,15 +1669,18 @@ Do you want to overwrite it?" \
   printf '%b' "$conf_content" >"$outfile"
   chmod 644 "$outfile"
 
+  local action_hint="build"
+  ((is_live)) && action_hint="live"
+
   ui_info "<b>Configuration saved.</b>
 
 <b>Path:</b>
 $outfile
 
-Press OK to return to the home screen and build an image or apply to a live OS.
+Press OK to return to the home screen.
 
 <b>Command line usage:</b>
-<tt>./steamos-build.sh --action build --config $outfile</tt>"
+<tt>./steamos-build.sh --action $action_hint --config $outfile</tt>"
 }
 
 ui_flash_pick_image() {
@@ -1781,17 +1836,22 @@ Do not continue unless you have explicitly verified that overwriting it is inten
   tran="$(lsblk -dno TRAN "$device" 2>/dev/null | xargs)"
 
   # Run preflight checks (needs root for blockdev/sgdisk).
+  # Cache sudo credentials first so the command substitution doesn't hang on a password prompt.
+  if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+    _gui_cache_sudo_password "flash-preflight" "Enter your password to run preflight checks:" || return 0
+  fi
+
   echo "[ui_flash] running preflight..." >&2
   local preflight_output preflight_rc=0
   set +e
   if [[ $EUID -eq 0 ]]; then
-    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device" 2>&1)"
+    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device")"
   elif command -v sudo >/dev/null 2>&1; then
-    preflight_output="$(sudo bash "$BACKEND" --action preflight --image "$image" --device "$device" 2>&1)"
+    preflight_output="$(sudo bash "$BACKEND" --action preflight --image "$image" --device "$device")"
   elif command -v pkexec >/dev/null 2>&1; then
-    preflight_output="$(pkexec bash "$BACKEND" --action preflight --image "$image" --device "$device" 2>&1)"
+    preflight_output="$(pkexec bash "$BACKEND" --action preflight --image "$image" --device "$device")"
   else
-    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device" 2>&1)"
+    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device")"
   fi
   preflight_rc=$?
   set -e
@@ -1799,21 +1859,28 @@ Do not continue unless you have explicitly verified that overwriting it is inten
   echo "$preflight_output" >&2
 
   if [[ $preflight_rc -ne 0 ]]; then
+    # Extract failure summary for the dialog header.
+    local failure_summary
+    failure_summary="$(echo "$preflight_output" | sed -n '/^Checks:.*failed$/,/^Flash aborted\.$/p' | awk '!/^Checks:/ && !/^Flash aborted\.$/' | sed 's/^  - /• /')"
+
+    local header="<b>Preflight check failed — high risk action.</b>"
+    if [[ -n "$failure_summary" ]]; then
+      header+=$'\n\n'"$failure_summary"
+    fi
+    header+=$'\n\n'"<b>Resolve all preflight issues before flashing.</b>"
+    header+=$'\n'"Proceeding anyway may result in a corrupted flash or data loss."
+
     yad --form \
       --title="Preflight Check Failed" \
-      --text="<b>Preflight check failed — high risk action.</b>
-
-<b>Resolve all preflight issues before flashing.</b>
-
-Proceeding anyway may result in a corrupted flash or data loss." \
-      --field="Preflight Results:TXT" "$preflight_output" \
+      --text="$header" \
+      --field="Full Results:TXT" "$preflight_output" \
       --button="Cancel":1 \
       --button="Accept Risk":0 \
       --center \
       --width=700 \
       --height=500 \
       --fontname="monospace" \
-      2>/dev/null || return 1
+      2>/dev/null || return 0
   fi
 
   # Require the user to confirm the target serial number.
@@ -1935,55 +2002,146 @@ If it fails to boot, SteamOS will automatically fall back." \
 ui_live() {
   require_action_dependencies build || return 0
 
-  # Show action checklist
-  local selected
-  selected="$(yad --list --checklist \
-    --title="Live OS Configuration" \
-    --text="<b>Select configuration changes to apply to the running system.</b>
+  local conf_file=""
 
-These changes are applied directly to your current SteamOS installation.
-Requires administrator privileges." \
-    --column="Apply" \
-    --column="Action" \
-    --column="Description" \
-    --separator=" " \
-    --print-column=2 \
-    --center \
-    --width=600 \
-    --height=500 \
+  # Selection loop — same pattern as ui_build
+  while true; do
+    local choice rc=0
+    choice="$(yad --list \
+      --title="Live OS Configuration" \
+      --text="<b>Select a configuration file, then press Apply.</b>
+
+This will apply the configuration directly to your running SteamOS installation.
+Requires administrator privileges.
+
+Generate a config first using <b>Generate Config</b> from the main menu." \
+      --column="Input" \
+      --column="Selection" \
+      --print-column=1 \
+      --separator="" \
+      --center \
+      --width=700 \
+      --height=300 \
+      --button="Cancel":1 \
+      --button="Apply":2 \
+      "Configuration file" "${conf_file:-<i>not selected</i>}" \
+      2>/dev/null)" || rc=$?
+
+    if ((rc == 1)); then
+      return 0
+    elif ((rc == 2)); then
+      [[ -f "$conf_file" ]] || {
+        ui_error "<b>Please select a configuration file before applying.</b>"
+        continue
+      }
+      break
+    fi
+
+    local _tmp=""
+    case "$choice" in
+      "Configuration file")
+        _tmp="$(yad --file \
+          --title="Select Configuration" \
+          --text="Select a configuration file:" \
+          --file-filter="Config files (*.conf) | *.conf" \
+          --center \
+          --width=700 \
+          --height=500 \
+          2>/dev/null)" || true
+        [[ -n "$_tmp" ]] && conf_file="$_tmp"
+        ;;
+    esac
+  done
+
+  # Source config to check for dangerous actions
+  # shellcheck disable=SC1090
+  source "$conf_file"
+
+  # Build list of dangerous/risky actions present in the config
+  local -a warnings=()
+
+  if [[ "${BASE_OS_MODE:-additive}" == "upgrade" ]]; then
+    warnings+=("  \u2022 <b>Base OS upgrade</b> — full pacman -Syu; may break packages or pull in unwanted updates")
+  fi
+  if [[ -n "${GAMING_ITEMS:-}" ]]; then
+    [[ " $GAMING_ITEMS " == *" password "* ]] \
+      && warnings+=("  \u2022 <b>Set user password</b> — will prompt to change the deck user password")
+    [[ " $GAMING_ITEMS " == *" disable-autologin "* ]] \
+      && warnings+=("  \u2022 <b>Disable autologin</b> — system will require password at every boot")
+    [[ " $GAMING_ITEMS " == *" fix-keyring "* ]] \
+      && warnings+=("  \u2022 <b>Fix keyring</b> — reinitializes pacman keyrings")
+    [[ " $GAMING_ITEMS " == *" skip-sigcheck "* ]] \
+      && warnings+=("  \u2022 <b>Skip signature checks</b> — disables pacman package verification")
+  fi
+
+  # Show warning dialog if there are risky items
+  if [[ ${#warnings[@]} -gt 0 ]]; then
+    local warning_text=""
+    warning_text+="The following potentially destructive actions are in your config:\n\n"
+    for w in "${warnings[@]}"; do
+      warning_text+="$w\n"
+    done
+    warning_text+="\nAre you sure you want to continue?"
+
+    yad --question \
+      --title="Warning — Destructive Actions Detected" \
+      --text="$warning_text" \
+      --button="Cancel":1 \
+      --button="Continue":0 \
+      --center \
+      --width=600 \
+      --height=300 \
+      2>/dev/null || return 0
+  fi
+
+  # Build confirmation summary
+  local summary=""
+  summary+="\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n"
+  summary+="                    LIVE OS CONFIGURATION\n"
+  summary+="\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n\n"
+  summary+="\u250c\u2500 Config \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n"
+  summary+="\u2502  $conf_file\n"
+  summary+="\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\n"
+
+  summary+="\u250c\u2500 Settings \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n"
+  summary+="\u2502  Session:       ${DEFAULT_SESSION:-game}\n"
+  summary+="\u2502  Update mode:   ${UPDATE_MODE:-selfheal}\n"
+  summary+="\u2502  Base OS mode:  ${BASE_OS_MODE:-additive}\n"
+  summary+="\u2502  Update branch: ${UPDATE_BRANCH:-stable}\n"
+  summary+="\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\n"
+
+  if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then
+    summary+="\u250c\u2500 Hardware Support \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n"
+    summary+="\u2502  ${HW_SUPPORT_ITEMS}\n"
+    summary+="\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\n"
+  fi
+
+  if [[ -n "${GAMING_ITEMS:-}" ]]; then
+    summary+="\u250c\u2500 System Tweaks \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n"
+    summary+="\u2502  ${GAMING_ITEMS}\n"
+    summary+="\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\n"
+  fi
+
+  if [[ -n "${INITRAMFS_MODULES:-}" ]]; then
+    summary+="\u250c\u2500 Initramfs Modules \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n"
+    summary+="\u2502  ${INITRAMFS_MODULES}\n"
+    summary+="\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\n"
+  fi
+
+  yad --text-info \
+    --title="Confirm Live Configuration" \
+    --text="<b>Review configuration before applying to the running system.</b>" \
+    --filename=<(printf '%b' "$summary") \
     --button="Cancel":1 \
     --button="Apply":0 \
-    TRUE resize "Expand root filesystems to fill partitions" \
-    TRUE thunderbolt "Configure Thunderbolt dock and hotplug support" \
-    TRUE desktop "Set Desktop Mode as default" \
-    TRUE gamemode "Add deck user to gamemode group" \
-    TRUE disable-autologin "Disable automatic login" \
-    TRUE scx-lavd "Enable scx_lavd scheduler (autopilot)" \
-    TRUE vm-tunables "Tune vm.swappiness for zram/disk swap" \
-    TRUE cpu-performance "Set CPU governor to performance" \
-    TRUE gpu-power-limit "Raise GPU power limit to vendor ceiling" \
-    FALSE initramfs "Configure initramfs modules" \
-    FALSE logitech-hid "Build Logitech HID++ kernel modules" \
-    TRUE keyring "Fix pacman keyring" \
-    FALSE password "Set user password" \
-    TRUE cleanup "Clean pacman cache, temp files, journal" \
-    2>/dev/null)" || return 0
-
-  # Clean selection - strip trailing separators
-  selected="$(echo "$selected" | tr -d '|' | xargs)"
-  [[ -n "$selected" ]] || return 0
-
-  # Write config file
-  local conf_file
-  conf_file="$(mktemp /tmp/steamos-live-XXXXXX.conf)"
-  cat >"$conf_file" <<EOF
-# steamos-build live configuration — generated $(date -Iseconds)
-LIVE_ACTIONS="$selected"
-EOF
+    --center \
+    --width=700 \
+    --height=500 \
+    --fontname="monospace" \
+    2>/dev/null || return 0
 
   # Run live pipeline
   run_backend_gui "Applying live configuration..." --action live --config "$conf_file"
-  rm -f "$conf_file"
 }
 
 ui_validate() {
@@ -2309,9 +2467,9 @@ _check_persisted_sync() {
         local only_dir="${line#Only in }"
         only_dir="${only_dir%%:*}"
         if [[ "$only_dir" == "$current"* ]]; then
-          ((count_missing++)) || true # exists in current, missing from cache
+          ((++count_missing)) || true # exists in current, missing from cache
         else
-          ((count_extra++)) || true # exists in cache, not in current
+          ((++count_extra)) || true # exists in cache, not in current
         fi
         continue
       fi
@@ -2324,11 +2482,11 @@ _check_persisted_sync() {
       [[ -f "$persisted/lib/$relpath" ]] && per_mtime="$(stat -c '%Y' "$persisted/lib/$relpath" 2>/dev/null)"
       if [[ -n "$cur_mtime" && -n "$per_mtime" ]]; then
         if ((cur_mtime > per_mtime)); then
-          ((count_newer++)) || true
+          ((++count_newer)) || true
         elif ((cur_mtime < per_mtime)); then
-          ((count_older++)) || true
+          ((++count_older)) || true
         else
-          ((count_same++)) || true
+          ((++count_same)) || true
         fi
       fi
     done <<<"$diff_detail"
@@ -2573,6 +2731,9 @@ case "$ACTION" in
       exec sudo bash "$BACKEND" --action reboot
     fi
     exec bash "$BACKEND" --action reboot
+    ;;
+  validate)
+    run_backend_cli
     ;;
   *)
     echo "Unsupported action: $ACTION" >&2

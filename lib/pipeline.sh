@@ -72,7 +72,7 @@ run_pipeline() {
   local phase_num=0
   local phase
   for phase in "${phases_to_run[@]}"; do
-    ((phase_num++))
+    ((++phase_num))
     _PIPELINE_CURRENT_PHASE="$phase"
 
     # Check if phase is registered
@@ -84,8 +84,7 @@ run_pipeline() {
     local func="${_PIPELINE_PHASES[$phase]}"
     local desc="${_PIPELINE_PHASE_DESC[$phase]:-$phase}"
 
-    log "Phase $phase_num/$total_phases: $desc"
-    step "$desc"
+    log "[$phase_num/$total_phases] $desc"
 
     # Guard: $func must be a declared function, not a shell fragment string.
     if [[ -z "$func" ]] || ! declare -F "$func" >/dev/null 2>&1; then
@@ -103,7 +102,7 @@ run_pipeline() {
       phase_end=$(date +%s)
       local phase_duration=$((phase_end - phase_start))
 
-      warn "Phase '$phase' failed after ${phase_duration}s"
+      warn "[$phase_num/$total_phases] $desc failed after ${phase_duration}s"
       _pipeline_report_failure "$phase" "$phase_num" "$total_phases"
       return 1
     fi
@@ -112,7 +111,7 @@ run_pipeline() {
     phase_end=$(date +%s)
     local phase_duration=$((phase_end - phase_start))
 
-    log "Phase '$phase' completed in ${phase_duration}s"
+    log "[$phase_num/$total_phases] $desc completed in ${phase_duration}s"
   done
 
   local pipeline_end
@@ -134,7 +133,8 @@ _pipeline_report_failure() {
   pipeline_end=$(date +%s)
   local total_duration=$((pipeline_end - _PIPELINE_START_TIME))
 
-  warn "Pipeline failed at phase $phase_num/$total_phases: $failed_phase"
+  local failed_desc="${_PIPELINE_PHASE_DESC[$failed_phase]:-$failed_phase}"
+  warn "Pipeline failed at [$phase_num/$total_phases] $failed_desc"
   warn "Total duration before failure: ${total_duration}s"
 
   # Report remaining phases

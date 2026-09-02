@@ -83,6 +83,7 @@ flash_is_system_disk() {
 flash_preflight() {
   local img="$1" target="$2"
   local checks_passed=0 checks_failed=0
+  local -a failed_reasons=()
   local _saved_opts="$-"
   set +e # diagnostic function — don't die on individual command failures
 
@@ -267,6 +268,7 @@ flash_preflight() {
       done
     fi
     checks_failed=$((checks_failed + 1))
+    failed_reasons+=("Image GPT is invalid")
   fi
 
   if ((img_parts_ok)); then
@@ -276,6 +278,7 @@ flash_preflight() {
     echo "  Partitions:  ✗ expected esp, efi-A, rootfs-A, var-A, home"
     echo "    Found:     $img_parts_found"
     checks_failed=$((checks_failed + 1))
+    failed_reasons+=("Image missing required partitions")
   fi
 
   if ((img_loop_ok)); then
@@ -295,6 +298,7 @@ flash_preflight() {
       printf '%s' "$img_loop_detail"
     fi
     checks_failed=$((checks_failed + 1))
+    failed_reasons+=("Image has active loop/mount users")
   fi
 
   echo "  Quiescent:   ✓ synced"
@@ -325,6 +329,7 @@ flash_preflight() {
   else
     echo "  Holders:     ✗ target is in use (swap/LVM/dm-crypt/RAID)"
     checks_failed=$((checks_failed + 1))
+    failed_reasons+=("Target device is in use (swap/LVM/dm-crypt/RAID)")
   fi
 
   if ((target_system_ok)); then
@@ -333,6 +338,7 @@ flash_preflight() {
   else
     echo "  System disk: ✗ target contains /, /boot, /efi, /home, or build workspace"
     checks_failed=$((checks_failed + 1))
+    failed_reasons+=("Target is the system disk")
   fi
 
   # ── Capacity ──────────────────────────────────────────────────────────
@@ -345,6 +351,7 @@ flash_preflight() {
   if ((IMG_BYTES > TARGET_BYTES)); then
     echo "  Result:      ✗ IMAGE DOES NOT FIT"
     checks_failed=$((checks_failed + 1))
+    failed_reasons+=("Image is larger than target device")
   else
     local headroom=$((TARGET_BYTES - IMG_BYTES))
     local headroom_human
@@ -372,6 +379,9 @@ flash_preflight() {
   echo "Checks: $checks_passed passed, $checks_failed failed"
 
   if ((checks_failed > 0)); then
+    for reason in "${failed_reasons[@]}"; do
+      echo "  - $reason"
+    done
     echo ""
     echo "Flash aborted."
     [[ "$_saved_opts" == *e* ]] && set -e

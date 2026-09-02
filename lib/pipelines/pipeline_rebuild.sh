@@ -19,6 +19,7 @@ register_rebuild_pipeline() {
   define_pipeline \
     "mount" \
     "discover" \
+    "sysupgrade" \
     "overlay" \
     "install" \
     "configure" \
@@ -26,6 +27,7 @@ register_rebuild_pipeline() {
 
   register_phase "mount" "phase_rebuild_mount" "Mount target rootfs"
   register_phase "discover" "phase_rebuild_discover" "Discover kernel and packages"
+  register_phase "sysupgrade" "phase_rebuild_sysupgrade" "System upgrade (pacman -Syu)"
   register_phase "overlay" "phase_rebuild_overlay" "Create overlay chroot"
   register_phase "install" "phase_rebuild_install" "Install drivers and packages"
   register_phase "configure" "phase_rebuild_configure" "Configure system and GRUB"
@@ -249,6 +251,61 @@ phase_rebuild_discover() {
   return 0
 }
 
+# Phase: System upgrade (pacman -Syu directly on target)
+phase_rebuild_sysupgrade() {
+  # Generate machine-id if invalid — systemd-tmpfiles needs it to expand %m
+  # EUCLEAN ("Structure needs cleaning") means invalid format, not just empty
+  # This is temporary for build-time; restored during finalization
+  local _machine_id="$NEWROOT/etc/machine-id"
+  _MACHINE_ID_WAS_EMPTY=0
+
+  # Debug: log what Valve's image contains
+  printf 'machine-id before Syu: <%s>\n' "$(cat "$_machine_id" 2>/dev/null)" >&2
+
+  if ! grep -Eq '^[0-9a-fA-F]{32}$' "$_machine_id" 2>/dev/null; then
+    _MACHINE_ID_WAS_EMPTY=1
+    log "Provisioning temporary build machine-id (current value invalid or missing)"
+    : >"$_machine_id"
+    if ! systemd-machine-id-setup --root="$NEWROOT" 2>/dev/null; then
+      # 16 random bytes = 128 bits = 32 hex characters
+      od -An -N16 -tx1 /dev/urandom | tr -d ' \n' >"$_machine_id"
+      printf '\n' >>"$_machine_id"
+    fi
+  fi
+
+  step "System upgrade"
+  system_upgrade_prepare
+
+  local _upgrade_ok=0 _attempt
+  for _attempt in 1 2 3; do
+    if system_upgrade; then
+      _upgrade_ok=1
+      break
+    fi
+    warn "System upgrade attempt $_attempt failed"
+    sleep "$((_attempt * 2))"
+  done
+
+  if ((_upgrade_ok)); then
+    log "System upgrade completed successfully"
+    patch_record "System upgrade" "ok"
+  else
+    die "System upgrade failed after retries"
+  fi
+
+  system_upgrade_cleanup
+
+  # Re-discover kernel version — -Syu may have upgraded it
+  discover_neptune_kver "$MNT"
+  discover_kernel_pkg "$MNT"
+  construct_hdr_url "$MNT"
+  log "Post-upgrade kernel: $KVER ($(basename "$HDR_URL"))"
+
+  progress_emit sysupgrade
+
+  return 0
+}
+
 # Phase: Create overlay chroot
 phase_rebuild_overlay() {
   # Prepare temporary ext4 overlay workspace
@@ -328,10 +385,10 @@ phase_rebuild_install() {
   in_chroot "curl -sfL '$HDR_URL' -o /tmp/headers.pkg.tar.zst"
 
   log "Refreshing Valve package database for header dependencies"
-  in_chroot "pacman --config '$PACCONF' -Sy"
+  pacman_sync_db
 
   log "Installing exact-match kernel headers"
-  in_chroot "pacman --config '$PACCONF' -U $PACOPTS /tmp/headers.pkg.tar.zst"
+  pacman_install_local -- /tmp/headers.pkg.tar.zst
 
   # Install hardware packages (NVIDIA + optional)
   install_hw_libs
@@ -353,82 +410,6 @@ phase_rebuild_install() {
       patch_record "Thunderbolt support" "fail" "_install_thunderbolt_files not implemented"
     fi
   fi
-
-  # Build custom kernel modules from hw-packages-build.conf
-  local kernel_modules
-  kernel_modules="$(get_build_items "kernel-module")"
-  if [[ -n "$kernel_modules" ]]; then
-    for module in $kernel_modules; do
-      local recipe_name
-      recipe_name="$(get_build_recipe "$module")" || recipe_name=""
-      local recipe_dir=""
-      if [[ -n "$recipe_name" ]]; then
-        recipe_dir="$SCRIPT_DIR/lib/configs/build_recipes/$recipe_name"
-      fi
-
-      # Check for INSTALL_CMD (direct install mode)
-      local _install_cmd=""
-      if [[ -d "$recipe_dir" ]]; then
-        _install_cmd="$(sed -n 's/^INSTALL_CMD=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
-      fi
-
-      if [[ -n "$_install_cmd" ]]; then
-        # Direct install mode (e.g., logitech-hid)
-        log "Building $module via recipe (direct install)"
-        local _install_args=""
-        _install_args="$(sed -n 's/^INSTALL_ARGS=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
-
-        # Copy recipe sources into chroot
-        mkdir -p "$MERGED/tmp/build/sources"
-        if [[ -d "$recipe_dir/sources" ]]; then
-          cp -a "$recipe_dir/sources/." "$MERGED/tmp/build/sources/"
-        fi
-
-        # Run the install script in chroot
-        local _script_name
-        _script_name="$(basename "$_install_cmd")"
-        if [[ -f "$MERGED/tmp/build/sources/$_script_name" ]]; then
-          chmod +x "$MERGED/tmp/build/sources/$_script_name"
-          if in_chroot "cd /tmp/build/sources && ./${_script_name} ${_install_args}"; then
-            log "$module built and installed via recipe"
-            # Copy built modules from overlay to target
-            if [[ -d "$MERGED/usr/lib/modules/$KVER/updates" ]]; then
-              mkdir -p "$NEWROOT/usr/lib/modules/$KVER/updates"
-              rsync -a "$MERGED/usr/lib/modules/$KVER/updates/" "$NEWROOT/usr/lib/modules/$KVER/updates/"
-            fi
-            register_built_module "updates/logitech/hid-logitech-dj.ko"
-            register_built_module "updates/logitech/hid-logitech-hidpp.ko"
-            verify_built_modules "$MERGED" "$KVER" die
-            patch_record "$module" "ok"
-          else
-            warn "FAILED: $module build via recipe failed"
-            patch_record "$module" "fail"
-          fi
-        else
-          warn "Install script not found: $_script_name in $recipe_dir/sources/"
-          patch_record "$module" "fail"
-        fi
-      elif declare -F "apply_${module//-/_}_rebuild" >/dev/null 2>&1; then
-        # Legacy function mode (e.g., aotofu-vaapi)
-        local _fn="apply_${module//-/_}_rebuild"
-        log "Building $module via $_fn"
-        if "$_fn"; then
-          log "$module rebuilt successfully"
-          patch_record "$module" "ok"
-        else
-          warn "FAILED: $module rebuild failed"
-          patch_record "$module" "fail"
-        fi
-      else
-        warn "No recipe or rebuild function found for $module"
-        patch_record "$module" "fail"
-      fi
-    done
-  fi
-
-  # Install flatpak packages from hw-packages-build.conf
-  step "Installing flatpak packages"
-  install_flatpak_packages "$NEWROOT" patch_record
 
   # Copy payload
   step "Copying reconciled payload into $PARTSET rootfs"
@@ -463,10 +444,15 @@ phase_rebuild_configure() {
   fi
 
   # Enable nvidia power services
-  if enable_nvidia_power_services "$NEWROOT"; then
-    patch_record "nvidia-power" "ok"
+  if nvidia_is_selected; then
+    if enable_nvidia_power_services "$NEWROOT"; then
+      patch_record "nvidia-power" "ok"
+    else
+      patch_record "nvidia-power" "fail" "could not enable nvidia power services"
+    fi
   else
-    patch_record "nvidia-power" "fail" "could not enable nvidia power services"
+    log "Skipping nvidia power services (nvidia not selected)"
+    patch_record "nvidia-power" "skip" "nvidia not selected"
   fi
 
   return 0
@@ -486,7 +472,7 @@ phase_rebuild_reconcile() {
   cp -a /usr/bin/steamos-update "$NEWROOT/usr/bin/steamos-update"
 
   # Configure desktop session
-  configure_desktop_session "$NEWROOT" "desktop"
+  configure_desktop_session "$NEWROOT" "${DEFAULT_SESSION:-game}"
 
   # Run custom script
   run_custom_script "$NEWROOT"
@@ -499,6 +485,12 @@ phase_rebuild_reconcile() {
   # Reconcile GRUB
   step "Reconciling GRUB configuration"
   reconcile_grub "$NEWROOT" "$EFIDEV" "$PARTSET"
+
+  # Restore empty machine-id before finishing — don't bake build-time ID into image
+  if [[ "${_MACHINE_ID_WAS_EMPTY:-0}" -eq 1 ]]; then
+    log "Restoring empty machine-id (build-time ID was temporary)"
+    : >"$NEWROOT/etc/machine-id"
+  fi
 
   return 0
 }

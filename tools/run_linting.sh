@@ -8,7 +8,7 @@
 #
 # Options:
 #   --repo-root DIR  Repository root (auto-detected if omitted)
-#   --fix            Auto-fix what can be fixed (shfmt formatting)
+#   --fix            Auto-fix what can be fixed (shfmt formatting, executable permissions)
 #
 # Exit codes:
 #   0 — all checks passed
@@ -53,6 +53,9 @@ root_args=()
 shfmt_args=("${root_args[@]}")
 [[ "$FIX_MODE" == true ]] && shfmt_args+=(--fix)
 
+exec_args=("${root_args[@]}")
+[[ "$FIX_MODE" == true ]] && exec_args+=(--fix)
+
 failed=0
 
 run_check() {
@@ -68,12 +71,15 @@ run_check() {
 }
 
 run_check "shfmt" "$LINT_DIR/shfmt.sh" "${shfmt_args[@]}"
+run_check "executable" "$LINT_DIR/executable.sh" "${exec_args[@]}"
 
 if [[ "$FIX_MODE" != true ]]; then
   run_check "bash -n" "$LINT_DIR/bash-n.sh" "${root_args[@]}"
   run_check "shellcheck" "$LINT_DIR/shellcheck.sh" "${root_args[@]}"
   run_check "single-source" "$LINT_DIR/single-source.sh" "${root_args[@]}"
   run_check "no-shadow" "$LINT_DIR/no-shadow.sh" "${root_args[@]}"
+  run_check "no-post-incr" "$LINT_DIR/no-post-incr.sh" "${root_args[@]}"
+  run_check "strict-mode" "$LINT_DIR/strict-mode.sh" "${root_args[@]}"
 fi
 
 if [[ $failed -gt 0 ]]; then

@@ -87,28 +87,52 @@ _apply_gamemode() {
 
 sddm_disable_autologin() {
   local root="${1:?sddm_disable_autologin: missing root}"
-  local sddm_conf="${root}/etc/sddm.conf.d/steamos.conf"
 
-  if [[ ! -f "$sddm_conf" ]]; then
-    warn "sddm.conf not found — cannot disable auto login"
-    return 1
+  local sddm_confs
+  sddm_confs="$(find "$root" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
+
+  if [[ -z "$sddm_confs" ]]; then
+    # No steamos.conf found — check if sddm is installed
+    local sddm_conf_dirs
+    sddm_conf_dirs="$(find "$root" -type d -name "sddm.conf.d" 2>/dev/null)"
+    if [[ -n "$sddm_conf_dirs" ]]; then
+      local new_conf="$root/etc/sddm.conf.d/steamos.conf"
+      log "No steamos.conf found but sddm is installed — creating $new_conf with autologin disabled"
+      mkdir -p "$(dirname "$new_conf")"
+      cat >"$new_conf" <<EOF
+[Autologin]
+User=
+Relogin=false
+Session=
+EOF
+      return 0
+    else
+      warn "No steamos.conf found and no sddm.conf.d directories — sddm not installed?"
+      return 1
+    fi
   fi
+
+  local count
+  count="$(echo "$sddm_confs" | wc -l)"
+  log "Found $count steamos.conf file(s)"
 
   local changed=0
 
-  # Clear User= to disable initial autologin
-  if grep -q '^User=' "$sddm_conf"; then
-    log "Disabling initial autologin (clearing User=)"
-    sed -i 's/^User=.*/User=/' "$sddm_conf"
-    changed=1
-  fi
+  while IFS= read -r sddm_conf; do
+    # Clear User= to disable initial autologin
+    if grep -q '^User=' "$sddm_conf"; then
+      log "Disabling initial autologin (clearing User=) in $sddm_conf"
+      sed -i 's/^User=.*/User=/' "$sddm_conf"
+      changed=1
+    fi
 
-  # Set Relogin=false to prevent auto re-login after session exit
-  if grep -q '^Relogin=true' "$sddm_conf"; then
-    log "Disabling re-login (Relogin=false)"
-    sed -i 's/^Relogin=true/Relogin=false/' "$sddm_conf"
-    changed=1
-  fi
+    # Set Relogin=false to prevent auto re-login after session exit
+    if grep -q '^Relogin=true' "$sddm_conf"; then
+      log "Disabling re-login (Relogin=false) in $sddm_conf"
+      sed -i 's/^Relogin=true/Relogin=false/' "$sddm_conf"
+      changed=1
+    fi
+  done <<<"$sddm_confs"
 
   if [[ $changed -eq 0 ]]; then
     log "Auto login already disabled"
@@ -150,8 +174,44 @@ _verify_gamemode() {
 _verify_disable_autologin() {
   local root
   root="$(get_root)"
-  local sddm_conf="${root}/etc/sddm.conf.d/steamos.conf"
-  [[ -f "$sddm_conf" ]] || return 1
-  # User= must be empty (no initial autologin) and Relogin must not be true
-  grep -q '^User=$' "$sddm_conf" && ! grep -q '^Relogin=true' "$sddm_conf"
+
+  local sddm_confs
+  sddm_confs="$(find "$root" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
+
+  # No steamos.conf — check if sddm is installed
+  if [[ -z "$sddm_confs" ]]; then
+    local sddm_conf_dirs
+    sddm_conf_dirs="$(find "$root" -type d -name "sddm.conf.d" 2>/dev/null)"
+    if [[ -n "$sddm_conf_dirs" ]]; then
+      warn "  sddm installed but no steamos.conf found — autologin not explicitly disabled"
+      return 1
+    fi
+    return 1
+  fi
+
+  local all_ok=1
+
+  # All steamos.conf files must have autologin disabled
+  while IFS= read -r sddm_conf; do
+    local user_line relogin_line
+    user_line="$(grep '^User=' "$sddm_conf" 2>/dev/null | head -1)"
+    relogin_line="$(grep '^Relogin=' "$sddm_conf" 2>/dev/null | head -1)"
+
+    local file_ok=1
+    if [[ -n "$user_line" && "$user_line" != "User=" ]]; then
+      file_ok=0
+    fi
+    if [[ "$relogin_line" == "Relogin=true" ]]; then
+      file_ok=0
+    fi
+
+    if [[ "$file_ok" -eq 0 ]]; then
+      warn "  Autologin not disabled in $sddm_conf:"
+      [[ -n "$user_line" && "$user_line" != "User=" ]] && warn "    $user_line"
+      [[ "$relogin_line" == "Relogin=true" ]] && warn "    $relogin_line"
+      all_ok=0
+    fi
+  done <<<"$sddm_confs"
+
+  return $((1 - all_ok))
 }

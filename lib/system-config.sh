@@ -51,6 +51,18 @@ verify_system_config() {
   esac
 }
 
+read_system_config() {
+  local item="${1:?read_system_config: missing item name}"
+  local root="${2:?read_system_config: missing root}"
+
+  case "$item" in
+    variant) _read_variant "$root" ;;
+    update-branch) _read_update_branch "$root" ;;
+    default-session) _read_default_session "$root" ;;
+    *) echo "" ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # update-branch
 # ---------------------------------------------------------------------------
@@ -204,6 +216,34 @@ _verify_update_branch() {
   return $verify_failed
 }
 
+_read_variant() {
+  local root="${1:?_read_variant: missing root}"
+  local os_release="$root/etc/os-release"
+  if [[ -f "$os_release" ]]; then
+    local variant
+    variant="$(sed -n 's/^VARIANT_ID=//p' "$os_release" | head -1)"
+    if [[ -n "$variant" ]]; then
+      echo "$variant"
+      return
+    fi
+  fi
+  echo ""
+}
+
+_read_update_branch() {
+  local root="${1:?_read_update_branch: missing root}"
+  local os_release="$root/etc/os-release"
+  if [[ -f "$os_release" ]]; then
+    local branch
+    branch="$(sed -n 's/^STEAMOS_DEFAULT_UPDATE_BRANCH=//p' "$os_release" | head -1)"
+    if [[ -n "$branch" ]]; then
+      echo "$branch"
+      return
+    fi
+  fi
+  echo ""
+}
+
 # ---------------------------------------------------------------------------
 # default-session
 # ---------------------------------------------------------------------------
@@ -224,56 +264,206 @@ _apply_default_session() {
     *) sddm_session="plasma.desktop" ;;
   esac
 
-  # Live mode: configure steamosctl and state.toml
+  local configured=0
+
+  # Live mode: configure steamosctl and always write state.toml
   if is_live; then
     if command -v steamosctl >/dev/null 2>&1; then
       steamosctl set-default-login-mode desktop 2>/dev/null \
         || warn "steamosctl set-default-login-mode failed (non-fatal)"
       steamosctl set-default-desktop-session "$sddm_session" 2>/dev/null \
         || warn "steamosctl set-default-desktop-session failed (non-fatal)"
-    else
-      # Fallback: write config directly
-      log "steamosctl not available, writing config directly"
-      local config_dir="/home/deck/.config/steamos-manager"
-      install -d -m755 "$config_dir" || return 1
-      cat >"$config_dir/state.toml" <<EOF
+    fi
+
+    # Always write state.toml directly (even if steamosctl ran)
+    log "  Writing state.toml"
+    local config_dir="/home/deck/.config/steamos-manager"
+    install -d -m755 "$config_dir" || return 1
+    cat >"$config_dir/state.toml" <<EOF
 version = 1
 
 [services]
 
 [session_manager]
 default_login_mode = "Desktop"
+desktop_session = "$sddm_session"
 default_desktop_session = "$sddm_session"
 EOF
-      chown 1000:1000 "$config_dir/state.toml"
+    chown 1000:1000 "$config_dir/state.toml"
+    configured=1
+  fi
+
+  # sddm.conf — find steamos.conf in sddm.conf.d directories and patch Session=
+  local sddm_confs
+  sddm_confs="$(find "$root" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
+
+  if [[ -n "$sddm_confs" ]]; then
+    local count
+    count="$(echo "$sddm_confs" | wc -l)"
+    log "  Found $count steamos.conf file(s)"
+    while IFS= read -r sddm_conf; do
+      if grep -q '^Session=' "$sddm_conf"; then
+        log "  Setting sddm session to $sddm_session in $sddm_conf"
+        sed -i "s/^Session=.*/Session=$sddm_session/" "$sddm_conf"
+        configured=1
+      else
+        warn "  $sddm_conf exists but has no Session= line, skipping"
+      fi
+    done <<<"$sddm_confs"
+  fi
+
+  # If no steamos.conf with Session= was found, check if sddm is installed
+  # and create one in /etc/sddm.conf.d/ (local override location)
+  if [[ "$configured" -eq 0 ]]; then
+    local sddm_conf_dirs
+    sddm_conf_dirs="$(find "$root" -type d -name "sddm.conf.d" 2>/dev/null)"
+    if [[ -n "$sddm_conf_dirs" ]]; then
+      local new_conf="$root/etc/sddm.conf.d/steamos.conf"
+      log "  Creating $new_conf with Session=$sddm_session"
+      mkdir -p "$(dirname "$new_conf")"
+      cat >"$new_conf" <<EOF
+[Autologin]
+User=
+Relogin=false
+Session=$sddm_session
+EOF
+      configured=1
+    else
+      warn "  No steamos.conf found and no sddm.conf.d directories — sddm not installed?"
     fi
   fi
 
-  # sddm.conf — set Session= based on config
-  local sddm_conf="$root/etc/sddm.conf.d/steamos.conf"
-  if [[ -f "$sddm_conf" ]]; then
-    # Update Session= line
-    if grep -q '^Session=' "$sddm_conf"; then
-      log "  Setting sddm session to $sddm_session"
-      sed -i "s/^Session=.*/Session=$sddm_session/" "$sddm_conf"
-    fi
+  if [[ "$configured" -eq 1 ]]; then
+    log "  Default session configured: $session ($sddm_session)"
+  else
+    warn "  Default session NOT configured"
   fi
-
-  log "  Default session configured: $session ($sddm_session)"
 }
 
 _verify_default_session() {
   local root="${1:?_verify_default_session: missing root}"
   local expected="${2:?_verify_default_session: missing expected value}"
 
-  local sddm_conf="$root/etc/sddm.conf.d/steamos.conf"
-  if [[ ! -f "$sddm_conf" ]]; then
-    return 1
+  local found_values=()
+  local found_paths=()
+  local verify_ok=0
+
+  # Check all steamos.conf files in sddm.conf.d
+  local sddm_confs
+  sddm_confs="$(find "$root" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
+  if [[ -n "$sddm_confs" ]]; then
+    while IFS= read -r sddm_conf; do
+      local session_line
+      session_line="$(sed -n 's/^Session=//p' "$sddm_conf" | head -1)"
+      if [[ -n "$session_line" ]]; then
+        found_values+=("$session_line")
+        found_paths+=("$sddm_conf")
+        case "$expected" in
+          game) [[ "$session_line" == gamescope* ]] && verify_ok=1 ;;
+          desktop) [[ "$session_line" == plasma* ]] && verify_ok=1 ;;
+        esac
+      fi
+    done <<<"$sddm_confs"
   fi
 
-  case "$expected" in
-    game) grep -q '^Session=gamescope' "$sddm_conf" ;;
-    desktop) grep -q '^Session=plasma' "$sddm_conf" ;;
-    *) return 1 ;;
-  esac
+  # Check state.toml
+  local state_toml="$root/home/deck/.config/steamos-manager/state.toml"
+  if [[ -f "$state_toml" ]]; then
+    local toml_session
+    toml_session="$(sed -n 's/^desktop_session.*=.*"\(.*\)"/\1/p' "$state_toml" | head -1)"
+    if [[ -z "$toml_session" ]]; then
+      toml_session="$(sed -n 's/^default_desktop_session.*=.*"\(.*\)"/\1/p' "$state_toml" | head -1)"
+    fi
+    if [[ -n "$toml_session" ]]; then
+      found_values+=("$toml_session")
+      found_paths+=("$state_toml")
+      case "$expected" in
+        game) [[ "$toml_session" == gamescope* ]] && verify_ok=1 ;;
+        desktop) [[ "$toml_session" == plasma* ]] && verify_ok=1 ;;
+      esac
+    fi
+  fi
+
+  # Warn if multiple sources disagree
+  if [[ ${#found_values[@]} -gt 1 ]]; then
+    local unique
+    unique="$(printf '%s\n' "${found_values[@]}" | sort -u | wc -l)"
+    if [[ "$unique" -gt 1 ]]; then
+      warn "  Session values differ across sources (expected: $expected):"
+      local i
+      for i in "${!found_paths[@]}"; do
+        warn "    ${found_paths[$i]} -> ${found_values[$i]}"
+      done
+    fi
+  fi
+
+  [[ "$verify_ok" -eq 1 ]] && return 0
+  return 1
+}
+
+_read_default_session() {
+  local root="${1:?_read_default_session: missing root}"
+
+  local found_values=()
+  local found_paths=()
+  local first_value=""
+
+  # Try all steamos.conf files in sddm.conf.d
+  local sddm_confs
+  sddm_confs="$(find "$root" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
+  if [[ -n "$sddm_confs" ]]; then
+    while IFS= read -r sddm_conf; do
+      local session_line
+      session_line="$(sed -n 's/^Session=//p' "$sddm_conf" | head -1)"
+      if [[ -n "$session_line" ]]; then
+        local mapped=""
+        case "$session_line" in
+          gamescope*) mapped="game" ;;
+          plasma*) mapped="desktop" ;;
+        esac
+        if [[ -n "$mapped" ]]; then
+          found_values+=("$mapped")
+          found_paths+=("$sddm_conf")
+          [[ -z "$first_value" ]] && first_value="$mapped"
+        fi
+      fi
+    done <<<"$sddm_confs"
+  fi
+
+  # Fallback: check state.toml
+  local state_toml="$root/home/deck/.config/steamos-manager/state.toml"
+  if [[ -f "$state_toml" ]]; then
+    local toml_session
+    toml_session="$(sed -n 's/^desktop_session.*=.*"\(.*\)"/\1/p' "$state_toml" | head -1)"
+    if [[ -z "$toml_session" ]]; then
+      toml_session="$(sed -n 's/^default_desktop_session.*=.*"\(.*\)"/\1/p' "$state_toml" | head -1)"
+    fi
+    if [[ -n "$toml_session" ]]; then
+      local mapped=""
+      case "$toml_session" in
+        gamescope*) mapped="game" ;;
+        plasma*) mapped="desktop" ;;
+      esac
+      if [[ -n "$mapped" ]]; then
+        found_values+=("$mapped")
+        found_paths+=("$state_toml")
+        [[ -z "$first_value" ]] && first_value="$mapped"
+      fi
+    fi
+  fi
+
+  # Warn if multiple sources disagree
+  if [[ ${#found_values[@]} -gt 1 ]]; then
+    local unique
+    unique="$(printf '%s\n' "${found_values[@]}" | sort -u | wc -l)"
+    if [[ "$unique" -gt 1 ]]; then
+      warn "  Session values differ across sources:"
+      local i
+      for i in "${!found_paths[@]}"; do
+        warn "    ${found_paths[$i]} -> ${found_values[$i]}"
+      done
+    fi
+  fi
+
+  echo "$first_value"
 }

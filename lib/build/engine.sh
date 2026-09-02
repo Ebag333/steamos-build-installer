@@ -441,7 +441,7 @@ validate_build_artifact() {
           rc=1
         elif [[ "$line" =~ ^[[:space:]]([^[:space:]]+\.so[^[:space:]]*) ]]; then
           local lib_name="${BASH_REMATCH[1]}"
-          ((dep_ok++)) || true
+          ((++dep_ok)) || true
         fi
       done <<<"$ldd_output"
 

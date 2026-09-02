@@ -255,9 +255,9 @@ if run_pipeline; then
   for _entry in "${PATCH_RESULTS[@]}"; do
     IFS='|' read -r _name _status _detail <<<"$_entry"
     if [[ "$_status" == "ok" ]]; then
-      ((_ok_count++)) || true
+      ((++_ok_count)) || true
     else
-      ((_fail_count++)) || true
+      ((++_fail_count)) || true
     fi
   done
 

@@ -71,7 +71,7 @@ overlay_mount() {
   mount --make-rslave "$MERGED/sys"
   track_mount "$MERGED/sys"
 
-  # /dev: non-recursive bind to avoid cloning /dev/shm/nvidia-build mounts.
+  # /dev: non-recursive bind to avoid cloning /dev/shm/steamos-build mounts.
   mount --bind /dev "$MERGED/dev"
   mount --make-private "$MERGED/dev"
   track_mount "$MERGED/dev"
@@ -83,7 +83,7 @@ overlay_mount() {
   track_mount "$MERGED/dev/pts"
 
   # Private shared-memory filesystem — pacman/GnuPG use /dev/shm,
-  # but the chroot must NOT see /dev/shm/nvidia-build (our build mounts).
+  # but the chroot must NOT see /dev/shm/steamos-build (our build mounts).
   mkdir -p "$MERGED/dev/shm"
   mount -t tmpfs tmpfs "$MERGED/dev/shm" -o mode=1777,nosuid,nodev
   track_mount "$MERGED/dev/shm"
@@ -106,7 +106,7 @@ overlay_mount() {
 
   # Sanity check: verify no build mounts leaked into chroot /dev.
   if findmnt -R "$MERGED/dev" -n -o TARGET 2>/dev/null \
-    | grep -Fq "$MERGED/dev/shm/nvidia-build/"; then
+    | grep -Fq "$MERGED/dev/shm/steamos-build/"; then
     warn "Build workspace mount tree leaked into chroot /dev:"
     findmnt -R "$MERGED/dev" -o TARGET,SOURCE,FSTYPE,PROPAGATION >&2 2>/dev/null || true
     die "Build workspace mounts leaked into chroot /dev"
@@ -644,11 +644,40 @@ setup_clear_stale_state() {
     if ! strict_detach_loop "$dev"; then
       die "Could not safely detach stale image loop $dev"
     fi
+
+    # Kill jbd2 thread if the loop is still visible after detach (AUTOCLEAR=1).
+    # Same issue as overlay loops — jbd2 holds the ext4 superblock alive.
+    local _dev_name="${dev##/dev/}" _jbd2_pid
+    _jbd2_pid="$(pgrep -f "jbd2/${_dev_name}-" 2>/dev/null || true)"
+    if [[ -n "$_jbd2_pid" ]]; then
+      log "Killing jbd2 thread for stale image loop $dev (pid $_jbd2_pid)"
+      kill "$_jbd2_pid" 2>/dev/null || true
+      local _wait_i
+      for _wait_i in $(seq 1 30); do
+        losetup "$dev" >/dev/null 2>&1 || break
+        if [[ "$_wait_i" -eq 10 ]]; then
+          kill -9 "$_jbd2_pid" 2>/dev/null || true
+        fi
+        sleep 0.2
+      done
+    fi
   done <<<"$image_loops"
 
   image_loops="$(loops_for_file "$OUT")"
   if [[ -n "$image_loops" ]]; then
-    die "Stale loop device still references $OUT; refusing to delete the backing image"
+    # Check if all remaining loops are AUTOCLEAR=1 (kernel will clean up)
+    local _all_ac=1
+    while IFS="" read -r m; do
+      [[ -n "$m" ]] || continue
+      local _ac
+      _ac="$(losetup -l -O AUTOCLEAR "$m" 2>/dev/null | tail -1 | tr -d ' ')"
+      [[ "$_ac" == "1" ]] || _all_ac=0
+    done <<<"$image_loops"
+    if ((_all_ac == 1)); then
+      log "Stale image loops still visible but all AUTOCLEAR=1 — kernel will auto-detach"
+    else
+      die "Stale loop device still references $OUT; refusing to delete the backing image"
+    fi
   fi
 
   # ============================================================
@@ -774,7 +803,7 @@ _cleanup_stale_build_roots() {
 # Find and detach loop devices from ANY previous run whose back-file matches
 # build-related patterns.  Unlike the rest of setup_clear_stale_state() which
 # only looks under $WORKDIR, this catches loops left behind by runs that used a
-# different $WORKDIR (e.g. /dev/shm/nvidia-build vs /home/image/.nvidia-usb-work).
+# different $WORKDIR (e.g. /dev/shm/steamos-build vs /home/image/.nvidia-usb-work).
 # Called from setup_clear_stale_state().
 _cleanup_stale_build_loops() {
   local json
@@ -921,31 +950,39 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   if [[ -n "${MERGED:-}" ]] \
     && mountpoint -q "$MERGED" 2>/dev/null; then
-    echo "=== PRE-MERGED-UNMOUNT ==="
-    findmnt -R "$MERGED" 2>/dev/null || true
-    fuser -vm "$MERGED" 2>/dev/null || true
-    grep -F "$MERGED" /proc/self/mountinfo 2>/dev/null || true
-    if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-      findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
-      [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-        && echo "${OVL_LOOPDEV##/dev/} ext4 still alive before MERGED unmount"
+    if [[ "${DEBUG:-0}" == 1 ]]; then
+      echo "=== PRE-MERGED-UNMOUNT ==="
+      findmnt -R "$MERGED" 2>/dev/null || true
+      fuser -vm "$MERGED" 2>/dev/null || true
+      grep -F "$MERGED" /proc/self/mountinfo 2>/dev/null || true
+      if [[ -n "${OVL_LOOPDEV:-}" ]]; then
+        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
+          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive before MERGED unmount"
+      fi
     fi
 
-    echo "=== UNMOUNT MERGED ==="
     local umount_merged_rc=0
     umount -v "$MERGED" 2>&1 || umount_merged_rc=$?
-    echo "umount MERGED rc=$umount_merged_rc"
 
     if ((umount_merged_rc == 0)); then
       untrack_mount "$MERGED" 2>/dev/null || true
+    else
+      # Dump diagnostics on failure
+      warn "overlay_cleanup: MERGED unmount failed (rc=$umount_merged_rc)"
+      findmnt -R "$MERGED" 2>/dev/null || true
+      fuser -vm "$MERGED" 2>/dev/null || true
+      grep -F "$MERGED" /proc/self/mountinfo 2>/dev/null || true
     fi
 
-    echo "=== AFTER MERGED ==="
-    findmnt -R "$MERGED" 2>/dev/null || true
-    if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-      findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
-      [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-        && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after MERGED unmount"
+    if [[ "${DEBUG:-0}" == 1 ]]; then
+      echo "=== AFTER MERGED ==="
+      findmnt -R "$MERGED" 2>/dev/null || true
+      if [[ -n "${OVL_LOOPDEV:-}" ]]; then
+        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
+          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after MERGED unmount"
+      fi
     fi
 
     if ((umount_merged_rc != 0)); then
@@ -968,23 +1005,29 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   if [[ -n "${OVL_MNT:-}" ]] \
     && mountpoint -q "$OVL_MNT" 2>/dev/null; then
-    echo "=== PRE-OVL_MNT-UNMOUNT ==="
-    findmnt -R "$OVL_MNT" 2>/dev/null || true
-    fuser -vm "$OVL_MNT" 2>/dev/null || true
-    grep -F "$OVL_MNT" /proc/self/mountinfo 2>/dev/null || true
-    if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-      findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
-      [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-        && echo "${OVL_LOOPDEV##/dev/} ext4 still alive before OVL_MNT unmount"
+    if [[ "${DEBUG:-0}" == 1 ]]; then
+      echo "=== PRE-OVL_MNT-UNMOUNT ==="
+      findmnt -R "$OVL_MNT" 2>/dev/null || true
+      fuser -vm "$OVL_MNT" 2>/dev/null || true
+      grep -F "$OVL_MNT" /proc/self/mountinfo 2>/dev/null || true
+      if [[ -n "${OVL_LOOPDEV:-}" ]]; then
+        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
+          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive before OVL_MNT unmount"
+      fi
     fi
 
-    echo "=== UNMOUNT OVL_MNT ==="
     local umount_ovl_rc=0
     umount -v "$OVL_MNT" 2>&1 || umount_ovl_rc=$?
-    echo "umount OVL_MNT rc=$umount_ovl_rc"
 
     if ((umount_ovl_rc == 0)); then
       untrack_mount "$OVL_MNT" 2>/dev/null || true
+    else
+      # Dump diagnostics on failure
+      warn "overlay_cleanup: OVL_MNT unmount failed (rc=$umount_ovl_rc)"
+      findmnt -R "$OVL_MNT" 2>/dev/null || true
+      fuser -vm "$OVL_MNT" 2>/dev/null || true
+      grep -F "$OVL_MNT" /proc/self/mountinfo 2>/dev/null || true
     fi
 
     # Flush pending writes so the jbd2 thread releases the superblock
@@ -993,12 +1036,14 @@ overlay_cleanup() {
       blockdev --flushbufs "$OVL_LOOPDEV" 2>/dev/null || true
     fi
 
-    echo "=== AFTER OVL_MNT ==="
-    findmnt -R "$OVL_MNT" 2>/dev/null || true
-    if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-      findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
-      [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-        && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after OVL_MNT unmount"
+    if [[ "${DEBUG:-0}" == 1 ]]; then
+      echo "=== AFTER OVL_MNT ==="
+      findmnt -R "$OVL_MNT" 2>/dev/null || true
+      if [[ -n "${OVL_LOOPDEV:-}" ]]; then
+        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
+          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after OVL_MNT unmount"
+      fi
     fi
 
     if ((umount_ovl_rc != 0)); then
@@ -1041,6 +1086,25 @@ overlay_cleanup() {
       # losetup -d may succeed even if the superblock appears alive.
       if losetup -d "$m" 2>/dev/null; then
         log "overlay_cleanup: $m detached successfully despite live superblock"
+        # Kill the jbd2 journal thread so the ext4 superblock releases.
+        # Without this, loops_for_file still sees the loop as attached.
+        local _loop_name="${m##/dev/}" _jbd2_pid
+        _jbd2_pid="$(pgrep -f "jbd2/${_loop_name}-" 2>/dev/null || true)"
+        if [[ -n "$_jbd2_pid" ]]; then
+          log "overlay_cleanup: killing jbd2 thread for $m (pid $_jbd2_pid)"
+          kill "$_jbd2_pid" 2>/dev/null || true
+          # Wait for the loop to fully disappear from losetup
+          local _wait_i
+          for _wait_i in $(seq 1 30); do
+            losetup "$m" >/dev/null 2>&1 || break
+            # Escalate to SIGKILL if SIGTERM didn't work
+            if [[ "$_wait_i" -eq 10 ]]; then
+              log "overlay_cleanup: jbd2 still alive, sending SIGKILL to $m"
+              kill -9 "$_jbd2_pid" 2>/dev/null || true
+            fi
+            sleep 0.2
+          done
+        fi
       else
         warn "overlay_cleanup: losetup -d failed for $m, trying force detach"
         if ! losetup -D 2>/dev/null; then

@@ -3,8 +3,10 @@
 # steamos-build-installer — lib/rootfs-etc.sh
 # Btrfs rootfs rebuild and /etc overlay management.
 #
-# Handles two interchangeable writable-rootfs strategies: a native in-place
-# Btrfs ro-property transition and the legacy mkfs.btrfs rebuild fallback.
+# Handles two writable-rootfs strategies: a native in-place Btrfs ro-property
+# transition (preferred, preserves original Btrfs topology) and a legacy
+# mkfs.btrfs rebuild fallback (produces a writable rootfs but uses its own
+# data/metadata profiles rather than preserving the source's).
 # Also manages /etc overlay preservation for the rebuild path and mounts the
 # effective /etc for initramfs configuration work.
 #
@@ -104,20 +106,20 @@ log_rootfs_btrfs_diagnostics() {
   local root="${1:?log_rootfs_btrfs_diagnostics: missing root}"
   local label="${2:-rootfs}"
 
-  log "$label: mount information"
-  findmnt -T "$root" -o TARGET,SOURCE,FSTYPE,OPTIONS >&2 || true
+  debug_cmd findmnt -T "$root" -o TARGET,SOURCE,FSTYPE,OPTIONS \
+    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
 
-  log "$label: filesystem usage"
-  btrfs filesystem usage -T "$root" >&2 || true
+  debug_cmd btrfs filesystem usage -T "$root" \
+    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
 
-  log "$label: subvolume list"
-  btrfs subvolume list "$root" >&2 || true
+  debug_cmd btrfs subvolume list "$root" \
+    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
 
   log "$label: default subvolume"
   btrfs subvolume get-default "$root" >&2 || true
 
-  log "$label: subvolume details"
-  btrfs subvolume show "$root" >&2 || true
+  debug_cmd btrfs subvolume show "$root" \
+    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
 
   log "$label: read-only property"
   btrfs property get -ts "$root" ro >&2 || true
@@ -321,6 +323,9 @@ prepare_writable_rootfs_rebuild() {
 
   log "Detected FS_TREE root item: ${root_item:-<not found>}"
 
+  [[ -n "$root_item" ]] \
+    || die "Could not read FS_TREE root item from $ROOTPART"
+
   if [[ "$root_item" != *"(RDONLY)"* ]]; then
     log "Rootfs FS_TREE is already writable; preserving the original filesystem and overlay state"
     log "No rootfs-internal overlay cleanup is performed on the already-writable path"
@@ -355,8 +360,8 @@ prepare_writable_rootfs_rebuild() {
   log_rootfs_btrfs_diagnostics "$srcmnt" "Original rootfs"
 
   log "Original rootfs disk usage:"
-  du -sh "$srcmnt" >&2 || true
-  du -sh --apparent-size "$srcmnt" >&2 || true
+  debug_cmd du -sh "$srcmnt" >&2 || true
+  debug_cmd du -sh --apparent-size "$srcmnt" >&2 || true
 
   # Snapshot the effective /etc BEFORE mkfs destroys the old lower filesystem.
   snapshot_runtime_etc "$srcmnt"
@@ -387,6 +392,11 @@ prepare_writable_rootfs_rebuild() {
     die "Failed to rebuild writable Btrfs rootfs"
   fi
 
+  # The replacement intentionally reuses the original Btrfs identity.
+  # Never expose it to Btrfs while the original filesystem is mounted.
+  strict_unmount "$srcmnt" "original rootfs source" \
+    || die "Failed to unmount original rootfs source"
+
   # mkfs.btrfs --rootdir copies any hidden /var/lib/overlays state contained
   # in rootfs-A.  When a separate SteamOS var partition exists, runtime state
   # lives there and the hidden rootfs copy must not survive reconstruction.
@@ -405,9 +415,6 @@ prepare_writable_rootfs_rebuild() {
   else
     warn "No verified var partition; preserving any rootfs-internal /var/lib/overlays state"
   fi
-
-  strict_unmount "$srcmnt" "original rootfs source" \
-    || die "Failed to unmount original rootfs source"
 
   new_bytes="$(stat -c '%s' "$root_tmp")"
   log "Rebuilt rootfs image size: $new_bytes bytes (partition: $root_bytes bytes)"
@@ -502,6 +509,9 @@ prepare_writable_rootfs_native() {
   log "Native writable-rootfs method selected"
   log "Detected FS_TREE root item: ${root_item:-<not found>}"
 
+  [[ -n "$root_item" ]] \
+    || die "Could not read FS_TREE root item from $ROOTPART"
+
   # Preserve the exact behavior of the legacy method for an already-writable
   # image: do nothing to the filesystem or its overlay state.
   if [[ "$root_item" != *"(RDONLY)"* ]]; then
@@ -532,8 +542,8 @@ prepare_writable_rootfs_native() {
   super_before="$(btrfs inspect-internal dump-super "$ROOTPART" 2>/dev/null \
     | grep -E '^(magic|generation|flags|root |total_bytes|bytes_used|nodesize|sectorsize|fsid|dev_item\.fsid)' \
     | sort)" || true
-  log "Native rootfs superblock before conversion:"
-  printf '%s\n' "$super_before" >&2
+  debug_cmd log "Native rootfs superblock before conversion:"
+  debug_cmd printf '%s\n' "$super_before" >&2
 
   # A read-only subvolume can still live on a filesystem mounted rw.  The
   # subvolume ro property is what rejects writes, so mount the top-level tree
@@ -716,14 +726,14 @@ prepare_writable_rootfs_native() {
   super_after="$(btrfs inspect-internal dump-super "$ROOTPART" 2>/dev/null \
     | grep -E '^(magic|generation|flags|root |total_bytes|bytes_used|nodesize|sectorsize|fsid|dev_item\.fsid)' \
     | sort)" || true
-  log "Native rootfs superblock after conversion:"
-  printf '%s\n' "$super_after" >&2
+  debug_cmd log "Native rootfs superblock after conversion:"
+  debug_cmd printf '%s\n' "$super_after" >&2
 
   if [[ "$super_before" != "$super_after" ]]; then
-    log "Native rootfs superblock diff (expected: generation may change):"
-    diff <(printf '%s\n' "$super_before") <(printf '%s\n' "$super_after") >&2 || true
+    debug_cmd log "Native rootfs superblock diff (expected: generation may change):"
+    debug_cmd diff <(printf '%s\n' "$super_before") <(printf '%s\n' "$super_after") >&2 || true
   else
-    log "Native rootfs superblock: identical"
+    debug_cmd log "Native rootfs superblock: identical"
   fi
 
   log "Native writable-rootfs conversion completed without rebuilding the filesystem"
@@ -748,6 +758,8 @@ prepare_image_rootfs_size() {
     || die "sfdisk not found — install util-linux"
   command -v partx >/dev/null 2>&1 \
     || die "partx not found — install util-linux"
+
+  : >"$PARTITION_DEBUG_LOG"
 
   # ── 1. Capture original geometry ──────────────────────────────────────
 
@@ -937,9 +949,12 @@ prepare_image_rootfs_size() {
     local p_lbl="${part_labels[$pnum]:-part$pnum}"
 
     log "Moving ${p_lbl} (partition ${pnum}): start ${old_start} → ${new_start}"
-    printf 'start=%s, size=%s\n' "$new_start" "$psize_sectors" \
+    if ! printf 'start=%s, size=%s\n' "$new_start" "$psize_sectors" \
       | sfdisk --move-data --move-use-fsync -N "$pnum" "$LOOPDEV" \
-      || die "Failed to move partition ${pnum} (${p_lbl})"
+        >>"$PARTITION_DEBUG_LOG" 2>&1; then
+      cat "$PARTITION_DEBUG_LOG" >&2
+      die "Failed to move partition ${pnum} (${p_lbl})"
+    fi
 
     # Verify GPT geometry first — this is the authoritative on-disk value.
     sgdisk_partition_info "$pnum" "$LOOPDEV"
@@ -959,6 +974,8 @@ prepare_image_rootfs_size() {
 
     [[ "$kernel_start" == "$new_start" ]] \
       || die "Kernel has stale geometry for $pdev: expected $new_start, got ${kernel_start:-<missing>}"
+
+    log "    ✓ kernel geometry updated"
 
     # Verify identity — GPT from sgdisk, FS from blkid.
     sgdisk_partition_info "$pnum" "$LOOPDEV"
@@ -994,9 +1011,12 @@ prepare_image_rootfs_size() {
 
   log "Growing rootfs-A: ${root_size_sectors} → ${target_root_sectors} sectors"
 
-  printf 'start=%s, size=%s\n' "$root_start" "$target_root_sectors" \
+  if ! printf 'start=%s, size=%s\n' "$root_start" "$target_root_sectors" \
     | sfdisk -N "$root_partnum" "$LOOPDEV" \
-    || die "Failed to grow rootfs-A partition"
+      >>"$PARTITION_DEBUG_LOG" 2>&1; then
+    cat "$PARTITION_DEBUG_LOG" >&2
+    die "Failed to grow rootfs-A partition"
+  fi
 
   udevadm settle --timeout=10 2>/dev/null || true
 
@@ -1017,6 +1037,8 @@ prepare_image_rootfs_size() {
 
   [[ "$kernel_root_bytes" == "$expected_root_bytes" ]] \
     || die "Kernel rootfs geometry is stale: expected ${expected_root_bytes} bytes, got ${kernel_root_bytes}"
+
+  log "    ✓ kernel geometry updated"
 
   # Verify trailing partitions weren't disturbed by the rootfs resize.
   # GPT properties from sgdisk (kernel-independent); FS UUID from blkid.
@@ -1109,27 +1131,31 @@ grow_rootfs_filesystem_to_partition() {
   log "  Partition: ${partition_bytes} bytes"
   log "  Btrfs before: ${before_bytes:-<unknown>} bytes"
 
-  log "Growing Btrfs rootfs to partition maximum"
-  if ! btrfs filesystem resize max "$mnt"; then
-    strict_unmount "$mnt" "rootfs after failed filesystem resize" || true
-    die "Failed to grow Btrfs rootfs to fill partition"
+  if [[ "$before_bytes" == "$partition_bytes" ]]; then
+    log "Btrfs already fills partition — no resize needed"
+  else
+    log "Growing Btrfs rootfs to partition maximum"
+    if ! btrfs filesystem resize max "$mnt"; then
+      strict_unmount "$mnt" "rootfs after failed filesystem resize" || true
+      die "Failed to grow Btrfs rootfs to fill partition"
+    fi
+
+    sync -f "$mnt" 2>/dev/null || sync
+
+    after_bytes="$(get_btrfs_device_size "$mnt")"
+
+    if [[ ! "$after_bytes" =~ ^[0-9]+$ ]]; then
+      strict_unmount "$mnt" "rootfs after unverifiable resize" || true
+      die "Could not determine Btrfs device size after resize"
+    fi
+
+    if [[ "$after_bytes" != "$partition_bytes" ]]; then
+      strict_unmount "$mnt" "rootfs after incomplete resize" || true
+      die "Btrfs does not fill rootfs partition: filesystem=$after_bytes partition=$partition_bytes"
+    fi
+
+    log "  Btrfs after:  ${after_bytes} bytes ✓"
   fi
-
-  sync -f "$mnt" 2>/dev/null || sync
-
-  after_bytes="$(get_btrfs_device_size "$mnt")"
-
-  if [[ ! "$after_bytes" =~ ^[0-9]+$ ]]; then
-    strict_unmount "$mnt" "rootfs after unverifiable resize" || true
-    die "Could not determine Btrfs device size after resize"
-  fi
-
-  if [[ "$after_bytes" != "$partition_bytes" ]]; then
-    strict_unmount "$mnt" "rootfs after incomplete resize" || true
-    die "Btrfs does not fill rootfs partition: filesystem=$after_bytes partition=$partition_bytes"
-  fi
-
-  log "  Btrfs after:  ${after_bytes} bytes ✓"
 
   strict_unmount "$mnt" "rootfs after filesystem expansion" \
     || die "Failed to unmount rootfs after filesystem expansion"
