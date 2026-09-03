@@ -121,31 +121,4 @@ verify_package_abi_compat() {
   return 0
 }
 
-# Generate SHA256 checksum for a package.
-# Args: $1 = package path
-# Prints: checksum
-verify_package_checksum() {
-  local pkg="${1:?}"
 
-  sha256sum "$pkg" | awk '{print $1}'
-}
-
-# Inspect package contents.
-# Args: $1 = package path
-# Prints: package info and file list
-verify_package_inspect() {
-  local pkg="${1:?}"
-
-  echo "=== Package Info ==="
-  pacman -Qip "$pkg" 2>/dev/null
-
-  echo ""
-  echo "=== Package Contents ==="
-  pacman -Qlp "$pkg" 2>/dev/null | head -20
-
-  local total
-  total="$(pacman -Qlp "$pkg" 2>/dev/null | wc -l)"
-  if ((total > 20)); then
-    echo "  ... and $((total - 20)) more files"
-  fi
-}

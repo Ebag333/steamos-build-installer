@@ -90,21 +90,6 @@ get_all_initramfs_modules() {
   _collect_and_dedup_modules "${groups[@]}"
 }
 
-# Get all modules from all groups regardless of default (deduplicated).
-# Args: $@ = groups to include (empty = all groups)
-# Output: space-separated module list
-get_all_initramfs_modules_force() {
-  local -a groups=("$@")
-
-  if [[ ${#groups[@]} -eq 0 ]]; then
-    for group in "${!_INITRAMFS_GROUP_MODULES[@]}"; do
-      groups+=("$group")
-    done
-  fi
-
-  _collect_and_dedup_modules "${groups[@]}"
-}
-
 # Get modules from a space-separated list of group names.
 # Args: $1 = space-separated group names
 # Output: space-separated module list

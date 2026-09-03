@@ -40,6 +40,29 @@ _pacman_resolve_config() {
 }
 
 # ---------------------------------------------------------------------------
+# Internal: Query installed packages and return --ignore argument to freeze them.
+#
+# Used in additive mode to prevent upgrading already-installed packages.
+#
+# Args: $1 = context ("chroot" | "host" | "auto")
+# Prints: --ignore pkg1,pkg2,... or empty string on failure
+# ---------------------------------------------------------------------------
+_pacman_frozen_installed_args() {
+  local context="${1:-auto}"
+  local installed_pkgs=""
+
+  installed_pkgs=$(_pacman_exec "$context" "pacman -Qq 2>/dev/null") || return 1
+
+  if [[ -z "$installed_pkgs" ]]; then
+    return 1
+  fi
+
+  local ignore_list
+  ignore_list=$(echo "$installed_pkgs" | paste -sd, -)
+  printf -- '--ignore %s' "$ignore_list"
+}
+
+# ---------------------------------------------------------------------------
 # Internal: Execute pacman in the correct context.
 #
 # Handles chroot vs host execution based on _is_install_chroot or explicit flag.
@@ -127,17 +150,18 @@ pacman_sync_db() {
 
   log "Syncing package databases"
   local sync_rc=0
+  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional
   case "$context" in
     root)
       _pacman_run_in_root "$root" "pacman $config_args -Sy $noconfirm" \
-        > >(_pacman_filter_stdout) \
-        2> >(_pacman_filter_stderr >&2) || sync_rc=$?
+        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2) || sync_rc=$?
       ;;
     *)
       _pacman_exec "$context" "pacman $config_args -Sy $noconfirm" \
-        > >(_pacman_filter_stdout) \
-        2> >(_pacman_filter_stderr >&2) || sync_rc=$?
+        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2) || sync_rc=$?
       ;;
   esac
 
@@ -151,13 +175,13 @@ pacman_sync_db() {
   case "$context" in
     root)
       _pacman_run_in_root "$root" "pacman $config_args -Fy $noconfirm" \
-        > >(_pacman_filter_stdout) \
-        2> >(_pacman_filter_stderr >&2)
+        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
       ;;
     *)
       _pacman_exec "$context" "pacman $config_args -Fy $noconfirm" \
-        > >(_pacman_filter_stdout) \
-        2> >(_pacman_filter_stderr >&2)
+        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
       ;;
   esac
 }
@@ -239,12 +263,13 @@ pacman_upgrade_all() {
 #   --no-needed      Reinstall even if already installed
 #   --yes            Pipe yes to handle conflict prompts
 #   --cachedir PATH  Override package cache directory
+#   --freeze-installed  Freeze already-installed packages (additive mode)
 #   --               End of options; remaining args are package names
 #
 # Returns: 0 on success, 1 on failure
 # ---------------------------------------------------------------------------
 pacman_install() {
-  local config="" context="auto" noconfirm="--noconfirm" needed="--needed" cachedir="" yes_prefix=""
+  local config="" context="auto" noconfirm="--noconfirm" needed="--needed" cachedir="" yes_prefix="" freeze_installed=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -281,6 +306,10 @@ pacman_install() {
         cachedir="--cachedir '$2'"
         shift 2
         ;;
+      --freeze-installed)
+        freeze_installed=1
+        shift
+        ;;
       --)
         shift
         break
@@ -298,11 +327,20 @@ pacman_install() {
     return 1
   fi
 
+  local freeze_args=""
+  if ((freeze_installed)); then
+    freeze_args="$(_pacman_frozen_installed_args "$context")"
+    if [[ -z "$freeze_args" ]]; then
+      warn "pacman_install: --freeze-installed requested but could not query installed packages"
+    fi
+  fi
+
   log "Installing packages: ${pkgs[*]}"
+  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
-  _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir ${pkgs[*]}" \
-    > >(_pacman_filter_stdout) \
-    2> >(_pacman_filter_stderr >&2)
+  _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args ${pkgs[*]}" \
+    > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
+    2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
 }
 
 # ---------------------------------------------------------------------------
@@ -361,10 +399,11 @@ pacman_install_local() {
   fi
 
   log "Installing local packages: ${pkgs[*]}"
+  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   _pacman_exec "$context" "pacman $config_args -U $noconfirm $needed ${pkgs[*]}" \
-    > >(_pacman_filter_stdout) \
-    2> >(_pacman_filter_stderr >&2)
+    > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
+    2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
 }
 
 # ---------------------------------------------------------------------------
@@ -378,12 +417,13 @@ pacman_install_local() {
 #   --needed         Only download if not already installed (default)
 #   --yes            Pipe yes to handle conflict prompts
 #   --cachedir PATH  Override package cache directory
+#   --freeze-installed  Freeze already-installed packages (additive mode)
 #   --               End of options; remaining args are package names
 #
 # Returns: 0 on success, 1 on failure
 # ---------------------------------------------------------------------------
 pacman_download() {
-  local config="" context="auto" noconfirm="--noconfirm" needed="--needed" cachedir="" yes_prefix=""
+  local config="" context="auto" noconfirm="--noconfirm" needed="--needed" cachedir="" yes_prefix="" freeze_installed=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -416,6 +456,10 @@ pacman_download() {
         cachedir="--cachedir '$2'"
         shift 2
         ;;
+      --freeze-installed)
+        freeze_installed=1
+        shift
+        ;;
       --)
         shift
         break
@@ -433,113 +477,22 @@ pacman_download() {
     return 1
   fi
 
+  local freeze_args=""
+  if ((freeze_installed)); then
+    freeze_args="$(_pacman_frozen_installed_args "$context")"
+    if [[ -z "$freeze_args" ]]; then
+      warn "pacman_download: --freeze-installed requested but could not query installed packages"
+    fi
+  fi
+
   log "Downloading packages: ${pkgs[*]}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
-  _pacman_exec "$context" "${yes_prefix}pacman $config_args -Sw $noconfirm $needed $cachedir ${pkgs[*]}" \
+  _pacman_exec "$context" "${yes_prefix}pacman $config_args -Sw $noconfirm $needed $cachedir $freeze_args ${pkgs[*]}" \
     > >(_pacman_filter_stdout) \
     2> >(_pacman_filter_stderr >&2)
 }
 
-# ---------------------------------------------------------------------------
-# Clean package cache.
-#
-# Args:
-#   --chroot         Force chroot context
-#   --host           Force host context
-#   --noconfirm      Skip confirmation prompts (default)
-#
-# Returns: 0 on success, 1 on failure
-# ---------------------------------------------------------------------------
-pacman_clean_cache() {
-  local context="auto" noconfirm="--noconfirm"
 
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --chroot)
-        context="chroot"
-        shift
-        ;;
-      --host)
-        context="host"
-        shift
-        ;;
-      --noconfirm)
-        noconfirm="--noconfirm"
-        shift
-        ;;
-      *) break ;;
-    esac
-  done
-
-  log "Cleaning package cache"
-  # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
-  _pacman_exec "$context" "pacman -Sc $noconfirm" \
-    > >(_pacman_filter_stdout) \
-    2> >(_pacman_filter_stderr >&2)
-}
-
-# ---------------------------------------------------------------------------
-# Check for required commands and install missing packages.
-#
-# Args:
-#   --noconfirm      Skip confirmation prompts
-#   --check-only     Only check, don't install
-#   --               End of options; remaining args are "cmd:pkg" pairs
-#
-# The cmd:pkg pairs map command names to their package names.
-# Example: "awk:gawk" "blkid:util-linux" "yad:yad"
-#
-# Returns: 0 if all commands present, 1 if any required missing
-# ---------------------------------------------------------------------------
-pacman_check_and_install_deps() {
-  local noconfirm="--noconfirm" check_only=0
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --noconfirm)
-        noconfirm="--noconfirm"
-        shift
-        ;;
-      --check-only)
-        check_only=1
-        shift
-        ;;
-      --)
-        shift
-        break
-        ;;
-      *) break ;;
-    esac
-  done
-
-  local -a missing_pkgs=()
-  local entry cmd pkg
-
-  for entry in "$@"; do
-    IFS=':' read -r cmd pkg <<<"$entry"
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-      log "  Missing: $cmd ($pkg)"
-      missing_pkgs+=("$pkg")
-    fi
-  done
-
-  if [[ ${#missing_pkgs[@]} -eq 0 ]]; then
-    log "All dependencies satisfied"
-    return 0
-  fi
-
-  if [[ "$check_only" -eq 1 ]]; then
-    warn "Missing packages: ${missing_pkgs[*]}"
-    return 1
-  fi
-
-  # Deduplicate
-  local -a unique_pkgs
-  mapfile -t unique_pkgs < <(printf '%s\n' "${missing_pkgs[@]}" | sort -u)
-
-  log "Installing missing dependencies: ${unique_pkgs[*]}"
-  pacman_install --host $noconfirm -- "${unique_pkgs[@]}"
-}
 
 # ---------------------------------------------------------------------------
 # Conflict resolution config
@@ -618,66 +571,6 @@ _pacman_load_provider_resolutions() {
   fi
 
   return 0
-}
-
-# ---------------------------------------------------------------------------
-# Pacman dry-run: preview what -S --needed would do without modifying the system.
-#
-# Runs pacman -S --needed --print and captures the planned transaction.
-#
-# Args:
-#   --config PATH    Override pacman config
-#   --chroot         Force chroot context (uses $MERGED)
-#   --host           Force host context
-#   --root PATH      Use specific root directory for chroot
-#
-# Prints: one package name per line (packages that would be installed/upgraded)
-# Returns: 0 on success, 1 on failure
-# ---------------------------------------------------------------------------
-pacman_dry_run() {
-  # Redirect stdout to stderr so log() calls don't pollute the output pipe.
-  exec 7>&1 1>&2
-
-  local config="" context="auto" root=""
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --config)
-        config="$2"
-        shift 2
-        ;;
-      --chroot)
-        context="chroot"
-        shift
-        ;;
-      --host)
-        context="host"
-        shift
-        ;;
-      --root)
-        context="root"
-        root="$2"
-        shift 2
-        ;;
-      *) break ;;
-    esac
-  done
-
-  local config_args
-  config_args="$(_pacman_resolve_config "$config")"
-
-  log "Running pacman dry-run (--print)"
-
-  # Restore stdout for the actual pacman output
-  exec 1>&7 7>&-
-
-  if [[ "$context" == "root" && -n "$root" ]]; then
-    chroot "$root" /bin/bash -c "pacman $config_args -Syu --print --print-format '%n' --noconfirm --ask=4 2>/dev/null" \
-      | awk 'NF{print $1}'
-  else
-    _pacman_exec "$context" "pacman $config_args -Syu --print --print-format '%n' --noconfirm --ask=4 2>/dev/null" \
-      | awk 'NF{print $1}'
-  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -903,6 +796,20 @@ pacman_preflight_check() {
       >"$dry_output" 2>"$dry_stderr" || dry_rc=$?
   fi
 
+  # ── Step 1a-bis: Write combined dry-run log ─────────────────────────────
+  local dry_combined_log="$WORKDIR/pacman-dry-run-combined.log"
+  {
+    echo "=== pacman dry-run combined log ==="
+    echo "=== timestamp: $(date -Iseconds) ==="
+    echo "=== rc: $dry_rc ==="
+    echo ""
+    echo "--- stdout ($dry_output) ---"
+    cat "$dry_output"
+    echo ""
+    echo "--- stderr ($dry_stderr) ---"
+    cat "$dry_stderr"
+  } >"$dry_combined_log"
+
   # ── Step 1b: Filter dry-run output ───────────────────────────────────────
   # pacman --print writes package names to stdout, but also emits error/warning
   # lines like ":: installing X (ver) breaks dependency 'Y' required by Z".
@@ -930,14 +837,20 @@ pacman_preflight_check() {
   # Each unique breaker counts as one unresolved ABI transition.
   local -a dep_break_pkgs=()
   local -a dep_break_details=()
+  local -a dep_break_raw_lines=()
   local dep_unresolved=0
 
   if [[ -s "$dry_errors" ]]; then
     log "Pre-flight: scanning dry-run output for dependency breakage errors"
+    debug "Pre-flight: raw dry-run errors ($(wc -l <"$dry_errors") lines):"
+    while IFS= read -r _de_line; do
+      debug "  | $_de_line"
+    done <"$dry_errors"
     local _prev_breaker="" _dependents=""
     # Store regex in variable to avoid bash parsing issues with parentheses
     local _dep_break_re='^::[[:space:]]+installing[[:space:]]+([a-zA-Z0-9@._+-]+)[[:space:]]+\([^)]+\)[[:space:]]+breaks dependency'
     local _dep_required_re='required by[[:space:]]+([a-zA-Z0-9@._+-]+)'
+    local _raw_lines=""
 
     while IFS= read -r line; do
       if [[ "$line" =~ $_dep_break_re ]]; then
@@ -948,14 +861,17 @@ pacman_preflight_check() {
         fi
         if [[ "$_breaker" == "$_prev_breaker" ]]; then
           _dependents+=" $_dependent"
+          _raw_lines+=$'\n'"$line"
         else
           if [[ -n "$_prev_breaker" ]]; then
             dep_break_pkgs+=("$_prev_breaker")
             dep_break_details+=("$_dependents")
+            dep_break_raw_lines+=("$_raw_lines")
             ((++dep_unresolved)) || true
           fi
           _prev_breaker="$_breaker"
           _dependents="$_dependent"
+          _raw_lines="$line"
         fi
       fi
     done <"$dry_errors"
@@ -964,11 +880,16 @@ pacman_preflight_check() {
     if [[ -n "$_prev_breaker" ]]; then
       dep_break_pkgs+=("$_prev_breaker")
       dep_break_details+=("$_dependents")
+      dep_break_raw_lines+=("$_raw_lines")
       ((++dep_unresolved)) || true
     fi
 
     for _i in "${!dep_break_pkgs[@]}"; do
       warn "Pre-flight: ${dep_break_pkgs[$_i]} breaks dependency — affects:${dep_break_details[$_i]}"
+      debug "Pre-flight: raw error lines for ${dep_break_pkgs[$_i]}:"
+      while IFS= read -r _raw; do
+        debug "  $_raw"
+      done <<<"${dep_break_raw_lines[$_i]}"
     done
   fi
 
@@ -1365,12 +1286,16 @@ pacman_preflight_check() {
   if ((dry_rc != 0 && dep_unresolved == 0 && unresolved == 0)); then
     warn "Pre-flight: pacman dry-run failed with unrecognized error (rc=$dry_rc)"
     cat "$dry_stderr" >&2
+    warn "Pre-flight: injecting dry-run log for diagnostics"
+    cat "$dry_combined_log" >&2
     exec 1>&7 7>&-
     return 1
   fi
 
   if ((unresolved > 0)); then
     warn "Pre-flight: $unresolved conflict(s) require manual intervention"
+    warn "Pre-flight: injecting dry-run log for diagnostics"
+    cat "$dry_combined_log" >&2
     exec 1>&7 7>&-
     return 1
   fi
@@ -1410,8 +1335,8 @@ pacman_preflight_check() {
 # ---------------------------------------------------------------------------
 # Pre-flight with automatic fallback from upgrade to additive mode.
 #
-# Handles dependency-breakage resolution by tracing breakages back to their
-# root HW_SUPPORT_ITEMS entry via pactree and removing it.
+# Handles dependency-breakage resolution by individually preflighting each
+# package and iteratively removing offenders if bulk install fails.
 #
 # Args:
 #   $1 = nameref to package array (modified in place — offending entries removed)
@@ -1507,231 +1432,179 @@ pacman_preflight_with_fallback() {
     fi
   fi
 
-  # ── Phase 2: Additive mode ──────────────────────────────────────────────
+  # ── Phase 2: Additive mode — individual preflight per package ────────
   if ((${#_pff_packages[@]} == 0)); then
+    _pff_packages=()
+    _pff_result_already_installed=0
+    _pff_result_conflict_skipped=0
+    _pff_result_installable=0
     return 0
   fi
 
   local requested_count=${#_pff_packages[@]}
 
-  # ── Layer 1: Remove already-installed targets ───────────────────────────
-  # In additive mode, packages that are already installed should be preserved
-  # at their current version — don't target them for upgrade.
+  # Layer 1: Remove already-installed targets
   local -a filtered_packages=()
   local already_installed=0
   for pkg in "${_pff_packages[@]}"; do
-    if _pacman_run_in_root "${MERGED:-}" \
-      "pacman -Q '$pkg' >/dev/null 2>&1"; then
+    if _pacman_run_in_root "${MERGED:-}" "pacman -Q '$pkg' >/dev/null 2>&1"; then
       debug "Pre-flight: $pkg already installed — preserving current version"
       ((++already_installed)) || true
     else
       filtered_packages+=("$pkg")
     fi
   done
-
-  if ((already_installed > 0)); then
-    log "Pre-flight: $already_installed package(s) already installed — preserved"
-  fi
-
   _pff_packages=("${filtered_packages[@]}")
 
   if ((${#_pff_packages[@]} == 0)); then
-    log "Additive package resolution:"
-    log "  requested:          $requested_count"
-    log "  already installed:  $already_installed (preserved)"
-    log "  conflict-skipped:   0"
-    log "  installable:        0"
+    log "Pre-flight: $already_installed package(s) already installed — preserved"
+    _pff_result_already_installed=$already_installed
+    _pff_result_conflict_skipped=0
+    _pff_result_installable=0
     return 0
   fi
 
-  # ── Layer 2: Iterative conflict-removal loop ────────────────────────────
+  log "Pre-flight: additive mode — checking ${#_pff_packages[@]} package(s)"
+  debug "Pre-flight: additive mode package list: ${_pff_packages[*]}"
+
+  # Resolve pacman config for direct pacman calls
+  local config_args
+  config_args="$(_pacman_resolve_config)"
+
+  # Get frozen installed args for consistent --ignore
+  local freeze_args
+  freeze_args="$(_pacman_frozen_installed_args "auto")"
+
+  # Layer 2: Individual preflight for each package
+  local -a passing_packages=()
   local conflict_skipped=0
-  local remaining_count=${#_pff_packages[@]}
 
-  log "Pre-flight: additive mode — checking $remaining_count package(s)"
-  local max_iter=$remaining_count
-  local iter
-
-  for ((iter = 0; iter < max_iter; iter++)); do
+  for pkg in "${_pff_packages[@]}"; do
     local rc=0
-    local preflight_output=""
-    preflight_output=$(pacman_preflight_check --install -- "${_pff_packages[@]}") || rc=$?
-    if [[ -n "$preflight_output" ]]; then
-      # Parse overwrite args and provider targets from output
-      # Overwrite args are pairs: --overwrite <path>
-      # Provider targets are bare package names
-      local -a _all_output=()
-      read -ra _all_output <<<"$preflight_output"
-      local _idx=0
-      while ((_idx < ${#_all_output[@]})); do
-        if [[ "${_all_output[$_idx]}" == "--overwrite" ]]; then
-          _pff_extra_args+=("${_all_output[$_idx]}" "${_all_output[$_idx + 1]}")
-          ((_idx += 2))
-        else
-          _pff_provider_targets+=("${_all_output[$_idx]}")
-          ((++_idx))
-        fi
-      done
-    fi
+    local dry_stderr="$WORKDIR/preflight-individual-${pkg}-stderr.txt"
+
+    _pacman_run_in_root "${MERGED:-}" \
+      "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 '$pkg'" \
+      >/dev/null 2>"$dry_stderr" || rc=$?
 
     if ((rc == 0)); then
-      # Clean — proceed
+      passing_packages+=("$pkg")
+      debug "Pre-flight: $pkg — individual check passed"
+    else
+      warn "Pre-flight: $pkg — individual check failed, skipping"
+      ((++conflict_skipped)) || true
+      if [[ "${DEBUG:-0}" == 1 ]]; then
+        debug "Pre-flight: individual check stderr for $pkg:"
+        while IFS= read -r line; do debug "  $line"; done <"$dry_stderr"
+      fi
+    fi
+  done
+
+  if ((${#passing_packages[@]} == 0)); then
+    _pff_packages=()
+    _pff_result_already_installed=$already_installed
+    _pff_result_conflict_skipped=$conflict_skipped
+    _pff_result_installable=0
+    log "Pre-flight summary: $already_installed preserved, $conflict_skipped skipped, 0 installable"
+    return 0
+  fi
+
+  # Layer 3: Bulk preflight with all individually-passing packages
+  local bulk_rc=0
+  local bulk_stderr="$WORKDIR/preflight-bulk-stderr.txt"
+
+  _pacman_run_in_root "${MERGED:-}" \
+    "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 ${passing_packages[*]}" \
+    >/dev/null 2>"$bulk_stderr" || bulk_rc=$?
+
+  if ((bulk_rc == 0)); then
+    _pff_packages=("${passing_packages[@]}")
+    _pff_result_already_installed=$already_installed
+    _pff_result_conflict_skipped=$conflict_skipped
+    _pff_result_installable=${#passing_packages[@]}
+    log "Pre-flight summary: $already_installed preserved, $conflict_skipped skipped, ${#passing_packages[@]} installable"
+    return 0
+  fi
+
+  # Layer 4: Bulk failed — iterative removal on the smaller passing set
+  warn "Pre-flight: bulk check failed with ${#passing_packages[@]} packages, attempting iterative removal"
+  if [[ "${DEBUG:-0}" == 1 ]]; then
+    debug "Pre-flight: bulk check stderr:"
+    while IFS= read -r line; do debug "  $line"; done <"$bulk_stderr"
+  fi
+
+  # Use pacman_preflight_check on the passing set
+  local -a final_packages=("${passing_packages[@]}")
+  local removed_count=0
+  local max_iterations=${#final_packages[@]}
+
+  for ((i=0; i<max_iterations; i++)); do
+    if ((${#final_packages[@]} == 0)); then
       break
     fi
 
-    # Check for dep-breakages or file conflicts
-    local dep_file="$WORKDIR/preflight-dep-breakages.txt"
-    local fc_file="$WORKDIR/preflight-file-conflicts.txt"
-    local blocker_file=""
-    local blocker_type=""
+    local pf_rc=0
+    pacman_preflight_check --install -- "${final_packages[@]}" || pf_rc=$?
 
-    if [[ -s "$dep_file" ]]; then
-      blocker_file="$dep_file"
-      blocker_type="dep-breakage"
-    elif [[ -s "$fc_file" ]]; then
-      blocker_file="$fc_file"
-      blocker_type="file-conflict"
-    else
-      # Neither dep-breakages nor file-conflicts — unexpected failure
-      if ((interactive)); then
-        echo "" >&2
-        echo "Pre-flight failed with unknown error." >&2
-        echo "Check the build log for details." >&2
-      fi
-      warn "Pre-flight: unknown preflight failure — cannot proceed"
-      return 1
+    if ((pf_rc == 0)); then
+      break
     fi
 
-    # Find the root HW package that causes the blocker
-    local root_pkg=""
-    local blocker_name=""
-    local dependent_names=""
+    # Read the dep-breakage file to find the blocker
+    local blocker_file="$WORKDIR/preflight-dep-breakages.txt"
+    if [[ -s "$blocker_file" ]]; then
+      local blocker_name=""
+      read -r blocker_name _ <"$blocker_file"
+      blocker_name="${blocker_name%%|*}"
 
-    if [[ "$blocker_type" == "dep-breakage" ]]; then
-      # Dep-breakage: blocker is the breaking package
-      while IFS='|' read -r breaker dependents; do
-        [[ -n "$breaker" ]] || continue
-        blocker_name="$breaker"
-        dependent_names="$dependents"
-
-        for pkg in "${_pff_packages[@]}"; do
-          if _pff_pactree_depends "$pkg" "$breaker"; then
-            root_pkg="$pkg"
-            break 2
-          fi
-        done
-      done <"$blocker_file"
-    else
-      # File-conflict: blocker is the new package
-      while IFS='|' read -r new_pkg old_pkg file_path; do
-        [[ -n "$new_pkg" ]] || continue
-        blocker_name="$new_pkg"
-        dependent_names="$old_pkg"
-
-        for pkg in "${_pff_packages[@]}"; do
-          if _pff_pactree_depends "$pkg" "$new_pkg"; then
-            root_pkg="$pkg"
-            break 2
-          fi
-        done
-      done <"$blocker_file"
-    fi
-
-    if [[ -z "$root_pkg" ]]; then
-      # Can't trace back to a requested package
-      if ((interactive)); then
-        echo "" >&2
-        if [[ "$blocker_type" == "dep-breakage" ]]; then
-          echo "Dependency breakage detected but cannot be traced to a requested package:" >&2
-          echo "  $blocker_name breaks: $dependent_names" >&2
+      # Find and remove the first package that depends on the blocker
+      local found=0
+      local -a new_final=()
+      for pkg in "${final_packages[@]}"; do
+        if ((found == 0)) && _pacman_run_in_root "${MERGED:-}" "pacman -S --needed $freeze_args --print --print-format '%n' --noconfirm '$pkg' 2>/dev/null" | grep -q "^${blocker_name}$"; then
+          warn "Pre-flight: removing $pkg (requires $blocker_name upgrade)"
+          ((++removed_count)) || true
+          ((++conflict_skipped)) || true
+          found=1
         else
-          echo "File conflict detected but cannot be traced to a requested package:" >&2
-          echo "  $blocker_name conflicts with: $dependent_names" >&2
+          new_final+=("$pkg")
         fi
-      fi
-      warn "Pre-flight: cannot trace $blocker_name to a requested HW package"
-      return 1
-    fi
-
-    # Remove the root package
-    if ((interactive)); then
-      echo "" >&2
-      if [[ "$blocker_type" == "dep-breakage" ]]; then
-        echo "Installing $root_pkg would require upgrading $blocker_name," >&2
-        echo "which is incompatible with packages in the current SteamOS image." >&2
-        echo "" >&2
-        echo "Affected dependents: $dependent_names" >&2
-      else
-        echo "Installing $root_pkg would install $blocker_name," >&2
-        echo "which conflicts with files owned by $dependent_names." >&2
-      fi
-      echo "" >&2
-      local choice=""
-      read -rp "Skip $root_pkg? [y/n]: " choice </dev/tty || true
-      if [[ "$choice" != "y" && "$choice" != "Y" ]]; then
-        warn "Pre-flight: user declined to skip $root_pkg"
-        return 1
-      fi
+      done
+      final_packages=("${new_final[@]}")
     else
-      if [[ "$blocker_type" == "dep-breakage" ]]; then
-        warn "Pre-flight: auto-skipping $root_pkg (requires $blocker_name upgrade)"
+      # No dep-breakage file, try file-conflict
+      local conflict_file="$WORKDIR/preflight-file-conflicts.txt"
+      if [[ -s "$conflict_file" ]]; then
+        local conflict_pkg=""
+        read -r conflict_pkg _ <"$conflict_file"
+        conflict_pkg="${conflict_pkg%%|*}"
+
+        local -a new_final=()
+        for pkg in "${final_packages[@]}"; do
+          if [[ "$pkg" == "$conflict_pkg" ]]; then
+            warn "Pre-flight: removing $pkg (file conflict)"
+            ((++removed_count)) || true
+            ((++conflict_skipped)) || true
+          else
+            new_final+=("$pkg")
+          fi
+        done
+        final_packages=("${new_final[@]}")
       else
-        warn "Pre-flight: auto-skipping $root_pkg (conflicts with $dependent_names)"
+        warn "Pre-flight: unknown failure, removing last package"
+        final_packages=("${final_packages[@]::${#final_packages[@]}-1}")
+        ((++removed_count)) || true
+        ((++conflict_skipped)) || true
       fi
     fi
-
-    # Remove from array
-    local -a new_packages=()
-    for pkg in "${_pff_packages[@]}"; do
-      [[ "$pkg" == "$root_pkg" ]] || new_packages+=("$pkg")
-    done
-    _pff_packages=("${new_packages[@]}")
-    ((++conflict_skipped)) || true
-
-    log "Pre-flight: skipped $root_pkg, ${#_pff_packages[@]} package(s) remaining"
   done
 
-  # Summary logging
-  local installable_count=${#_pff_packages[@]}
-  log "Additive package resolution:"
-  log "  requested:          $requested_count"
-  log "  already installed:  $already_installed (preserved)"
-  log "  conflict-skipped:   $conflict_skipped"
-  log "  installable:        $installable_count"
-
-  if ((installable_count == 0)); then
-    warn "No packages can be safely added without upgrading existing SteamOS packages."
-    warn "Leaving package state unchanged."
-  fi
-
+  _pff_packages=("${final_packages[@]}")
+  _pff_result_already_installed=$already_installed
+  _pff_result_conflict_skipped=$conflict_skipped
+  _pff_result_installable=${#final_packages[@]}
+  log "Pre-flight summary: $already_installed preserved, $conflict_skipped skipped, ${#final_packages[@]} installable"
   return 0
-}
-
-# ---------------------------------------------------------------------------
-# Helper: check if a package transitively depends on another via pactree.
-#
-# Args: $1 = package to check, $2 = dependency to look for
-# Uses: MERGED (for chroot context)
-# Returns: 0 if $1 depends on $2, 1 otherwise
-# ---------------------------------------------------------------------------
-_pff_pactree_depends() {
-  local pkg="$1"
-  local dep="$2"
-
-  # Explicitly handle self-dependency
-  [[ "$pkg" == "$dep" ]] && return 0
-
-  local -a _pactree_config=()
-  if [[ -n "${PACCONF:-}" ]]; then
-    _pactree_config=(--config "$PACCONF")
-  fi
-
-  # Run pactree in the chroot if available, otherwise on host
-  if [[ -n "${MERGED:-}" && -d "$MERGED" ]]; then
-    chroot "$MERGED" pactree "${_pactree_config[@]}" -slu "$pkg" 2>/dev/null | grep -Fxq -- "$dep"
-  else
-    pactree "${_pactree_config[@]}" -slu "$pkg" 2>/dev/null | grep -Fxq -- "$dep"
-  fi
 }
 
 # ---------------------------------------------------------------------------

@@ -103,25 +103,6 @@ repo_is_arch_allowed() {
   return 1
 }
 
-# Check if a package is in the target image.
-# Args: $1 = root path, $2 = package name
-# Returns 0 if installed, 1 if not.
-repo_is_in_target() {
-  local root="${1:?}"
-  local pkg="${2:?}"
-
-  local dbpath=""
-  if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
-    dbpath="$root/usr/lib/holo/pacmandb"
-  elif [[ -d "$root/var/lib/pacman" ]]; then
-    dbpath="$root/var/lib/pacman"
-  else
-    return 1
-  fi
-
-  pacman -Q --dbpath "$dbpath" "$pkg" >/dev/null 2>&1
-}
-
 # Generate a pacman config with proper repository priority.
 # Args: $1 = target root, $2 = output path, $3 = include arch repos (0/1)
 repo_generate_config() {

@@ -18,19 +18,6 @@ _BUILD_STEAMOS_PROFILE_LOADED=1
 # SteamOS profile
 # ---------------------------------------------------------------------------
 
-# Detect if a root is SteamOS.
-# Args: $1 = root path
-# Returns 0 if SteamOS, 1 if not.
-steamos_is_steamos() {
-  local root="${1:?}"
-
-  [[ -f "$root/etc/os-release" ]] || return 1
-
-  local id
-  id="$(sed -n 's/^ID=//p' "$root/etc/os-release" | tr -d '"')"
-  [[ "$id" == "steamos" || "$id" == "holo" ]]
-}
-
 # Get SteamOS version from a root.
 # Args: $1 = root path
 # Prints: version string

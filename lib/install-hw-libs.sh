@@ -218,42 +218,6 @@ _run_in_root() {
   fi
 }
 
-# Copy the persistent official-Arch pacman config into the build chroot and
-# prepare its isolated DBPath.  The sync databases stay separate from Valve's,
-# while DBPath/local points at the image's real installed-package database so
-# dependency and --needed checks see the actual SteamOS package state.
-_setup_arch_hw_pacman_conf() {
-  local conf_path
-  local sig_level="Required DatabaseOptional"
-  local tmp_conf
-
-  [[ "${SKIP_SIG:-0}" -eq 1 ]] && sig_level="Never"
-
-  if _is_install_chroot; then
-    conf_path="$MERGED/tmp/pacman-hw-arch.conf"
-  else
-    conf_path="/tmp/pacman-hw-arch.conf"
-  fi
-  tmp_conf="${conf_path}.tmp"
-
-  # Generate the normal SteamOS-aware config: correct DBPath, Architecture,
-  # CacheDir, DisableSandbox — but with the requested SigLevel.
-  setup_pacman_conf "$conf_path" "$sig_level"
-
-  # Keep [options], discard Valve repo definitions.
-  awk '
-    /^\[/ && $0 != "[options]" { exit }
-    { print }
-  ' "$conf_path" >"$tmp_conf"
-
-  append_arch_repos "$tmp_conf"
-
-  mv "$tmp_conf" "$conf_path"
-
-  ARCH_HW_PACCONF="/tmp/pacman-hw-arch.conf"
-  log "Arch pacman config: $ARCH_HW_PACCONF"
-}
-
 # Install selected packages from a normal (Valve) manifest.  Valve packages do
 # not need the upstream-Arch compatibility preflight, so they can be installed
 # directly after one database refresh.
@@ -762,12 +726,17 @@ _install_pacman_hw_batch() {
     yes_flag="--yes"
   fi
 
+  local freeze_flag=""
+  if [[ "${effective_mode:-additive}" == "additive" ]]; then
+    freeze_flag="--freeze-installed"
+  fi
+
   log "Installing pacman hardware packages"
   # Include provider targets and extra args from preflight
   # shellcheck disable=SC2086,SC2206 # quoted_targets is intentionally word-split (each target is individually shell-quoted)
   local -a all_targets=($quoted_targets "${preflight_provider_targets[@]}")
   # shellcheck disable=SC2086 # yes_flag and quoted_targets are intentionally word-split
-  if ! pacman_install --config "$pacconf" $yes_flag "${preflight_extra_args[@]}" -- "${all_targets[@]}"; then
+  if ! pacman_install --config "$pacconf" $yes_flag $freeze_flag "${preflight_extra_args[@]}" -- "${all_targets[@]}"; then
     local _mode_hint=""
     if [[ "${BASE_OS_MODE:-additive}" == "additive" ]]; then
       _mode_hint=" (dependency conflicts may be caused by additive mode — consider BASE_OS_MODE=upgrade)"

@@ -33,18 +33,6 @@ debug_cmd() {
   "$@"
 }
 
-# Verbose log — prints when VERBOSE=1 or DEBUG=1 (debug implies verbose).
-verbose_log() {
-  [[ "${VERBOSE:-0}" == 1 || "${DEBUG:-0}" == 1 ]] || return 0
-  log "$@"
-}
-
-# Append a raw line to the persistent log file.  No prefix, no color.
-# Defaults to /dev/null when RAW_LOG is unset.
-raw_log() {
-  printf '%s\n' "$*" >>"${RAW_LOG:-/dev/null}"
-}
-
 : "${LOG_TAG:=nvidia-usb}"
 : "${LOGGER_TAG:=steamos-build}"
 : "${LOG_COLOR:=1}"
@@ -204,32 +192,6 @@ ensure_steamos_build_dirs() {
 
   mkdir -p "$root/logs" "$root/recovery"
   chmod 777 "$root/recovery"
-}
-
-# ---------------------------------------------------------------------------
-# Script Directory Resolution
-# ---------------------------------------------------------------------------
-# Resolve the steamos-build script directory.
-# Uses /home/.steamos-build (writable, latest scripts).
-#
-# Args: $1 = (optional) explicit path to check first
-# Output: path to the script directory
-# Returns: 0 if found, 1 if neither exists
-
-resolve_nvidia_dir() {
-  local explicit="${1:-}"
-
-  if [[ -n "$explicit" && -d "$explicit/lib" ]]; then
-    echo "$explicit"
-    return 0
-  fi
-
-  if [[ -d "/home/.steamos-build/build_cache/lib" ]]; then
-    echo "/home/.steamos-build/build_cache"
-    return 0
-  fi
-
-  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -627,6 +589,34 @@ strict_detach_loop() {
   return 1
 }
 
+# _persist_debug_logs
+#   When DEBUG=1, copy all .log and .txt diagnostic files from WORKDIR to
+#   /tmp/steamos-build-logs-<timestamp>-<pid>/ before cleanup removes the
+#   workspace.  Preserves the directory structure (e.g. packages/build.log
+#   → /tmp/steamos-build-logs-.../packages/build.log).
+#   No-op when DEBUG!=1 or WORKDIR is unset/missing.
+_persist_debug_logs() {
+  [[ "${DEBUG:-0}" == 1 ]] || return 0
+  [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]] || return 0
+
+  local dest="/tmp/steamos-build-logs-$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "$dest" || return 0
+
+  local count=0
+  local log_file
+  while IFS= read -r -d '' log_file; do
+    local rel="${log_file#"$WORKDIR"/}"
+    local sub_dir
+    sub_dir="$(dirname "$rel")"
+    [[ "$sub_dir" != "." ]] && mkdir -p "$dest/$sub_dir"
+    cp -- "$log_file" "$dest/$rel" 2>/dev/null && ((++count))
+  done < <(find "$WORKDIR" -maxdepth 3 \( -name '*.log' -o -name '*.txt' \) -type f -print0 2>/dev/null)
+
+  if ((count > 0)); then
+    log "cleanup: persisted $count diagnostic file(s) to $dest"
+  fi
+}
+
 # Tear down everything mounted/created on OUR loop device + the overlay, and
 # drop the udisks guard rule. Idempotent — safe to run twice (EXIT trap).
 cleanup() {
@@ -740,6 +730,11 @@ cleanup() {
     warn "cleanup: a reboot may be required to release this loop device"
     rc=1
   fi
+
+  # ------------------------------------------------------------
+  # Persist debug logs before removing workspace.
+  # ------------------------------------------------------------
+  _persist_debug_logs
 
   # ------------------------------------------------------------
   # Remove build workspace (only if cleanup succeeded).

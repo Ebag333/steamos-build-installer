@@ -82,11 +82,6 @@ _resolve_root() {
 # Context Helpers
 # ---------------------------------------------------------------------------
 
-# Check if running in a chroot environment (build or rebuild)
-is_chroot() {
-  [[ "${OPT_MODE:-}" == "chroot" ]]
-}
-
 # Check if running on a live system
 is_live() {
   [[ "${OPT_MODE:-}" == "live" ]]

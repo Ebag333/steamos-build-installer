@@ -13,6 +13,8 @@ STEAMOS_BUILD="$PROJECT_DIR/steamos-build.sh"
 
 mkdir -p "$OUTPUT_DIR"
 
+echo "Starting test run..."
+
 # ── Clean up stale build state ────────────────────────────────────────────
 # /dev/shm/steamos-build may contain root-owned mounts/loop devices from
 # previous (possibly killed) builds.  Mirrors the cleanup order from

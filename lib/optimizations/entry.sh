@@ -80,36 +80,6 @@ _opt_item_to_module() {
   fi
 }
 
-# Get default state for an item
-_opt_item_default() {
-  local item="$1"
-
-  if [[ -n "${_OPT_ITEM_DEFAULT["$item"]:-}" ]]; then
-    echo "${_OPT_ITEM_DEFAULT["$item"]}"
-  else
-    echo "FALSE"
-  fi
-}
-
-# Get description for an item
-_opt_item_description() {
-  local item="$1"
-
-  if [[ -n "${_OPT_ITEM_DESCRIPTION["$item"]:-}" ]]; then
-    echo "${_OPT_ITEM_DESCRIPTION["$item"]}"
-  else
-    echo ""
-  fi
-}
-
-# List all registered customization items
-_opt_list_items() {
-  local item
-  for item in "${!_OPT_ITEM_TO_MODULE[@]}"; do
-    echo "$item"
-  done
-}
-
 # ---------------------------------------------------------------------------
 # Main Entry Points
 # ---------------------------------------------------------------------------

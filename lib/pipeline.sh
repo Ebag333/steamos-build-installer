@@ -172,23 +172,3 @@ _pipeline_report_failure() {
 #   # Setup logic here
 #   return 0
 # }
-
-# ---------------------------------------------------------------------------
-# Workflow Registration Helpers
-# ---------------------------------------------------------------------------
-
-# Register a repatch workflow pipeline.
-register_repatch_pipeline() {
-  define_pipeline \
-    "mount" \
-    "discover" \
-    "install" \
-    "configure" \
-    "reconcile"
-
-  register_phase "mount" "phase_repatch_mount" "Mount target rootfs"
-  register_phase "discover" "phase_repatch_discover" "Discover kernel and packages"
-  register_phase "install" "phase_repatch_install" "Install drivers and packages"
-  register_phase "configure" "phase_repatch_configure" "Configure system and GRUB"
-  register_phase "reconcile" "phase_repatch_reconcile" "Reconcile and verify"
-}
