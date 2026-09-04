@@ -838,6 +838,25 @@ _install_build_recipes() {
         if _run_in_root "cd /tmp/build/sources && ./${_script_name} ${_install_args}"; then
           log "    ✓ $name built and installed via direct recipe"
           built=1
+
+          # Post-install hook — runs outside the chroot (host-side)
+          local _post_install=""
+          _post_install="$(sed -n 's/^POST_INSTALL=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
+          if [[ -n "$_post_install" ]]; then
+            local _post_script_name
+            _post_script_name="$(basename "$_post_install")"
+            if [[ -f "$MERGED/tmp/build/sources/$_post_script_name" ]]; then
+              log "  Running post-install: $_post_script_name"
+              if MERGED="$MERGED" SCRIPT_DIR="$SCRIPT_DIR" EFIMNT="${EFIMNT:-}" /bin/bash "$MERGED/tmp/build/sources/$_post_script_name"; then
+                log "    ✓ Post-install completed for $name"
+              else
+                warn "    Post-install failed for $name"
+                HW_FAILED_PKGS+=("$name (post-install)")
+              fi
+            else
+              warn "    Post-install script not found: $_post_script_name"
+            fi
+          fi
         else
           warn "    Direct recipe install failed for $name"
         fi
@@ -952,7 +971,6 @@ install_hw_libs() {
   HW_FAILED_PKGS=()
   HW_FAILED_SOURCES=()
   HW_NVIDIA_REQUESTED=0
-  HW_AMD_REQUESTED=0
 
   # Collect packages by source for batch installation
   local -a _pacman_pkgs=() _pacman_targets=() _pacman_descs=() _pacman_recipes=()
@@ -1016,7 +1034,6 @@ install_hw_libs() {
         _pacman_descs+=("$desc")
         _pacman_recipes+=("$recipe")
         [[ "$pkg" == "nvidia-open-dkms" ]] && HW_NVIDIA_REQUESTED=1
-        [[ "$pkg" == "vulkan-radeon" ]] && HW_AMD_REQUESTED=1
         ;;
       build-recipe)
         [[ -n "${_seen_br_pkg[$pkg]:-}" ]] && continue
@@ -1162,11 +1179,13 @@ install_hw_libs() {
       fi
 
       # ── Verify: depmod + modinfo ────────────────────────────────────────
+      # Use NVIDIA_MODULES from common_modules.sh (sourced before this file).
+      local _nv_mod_list="${NVIDIA_MODULES[*]}"
       _run_in_root "
         depmod '$KVER'
 
         missing=()
-        for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+        for mod in $_nv_mod_list; do
           if ! modinfo -k '$KVER' \"\$mod\" >/dev/null 2>&1; then
             missing+=(\"\$mod\")
           fi
@@ -1178,7 +1197,7 @@ install_hw_libs() {
         fi
 
         echo 'NVIDIA module set validated for $KVER'
-        for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+        for mod in $_nv_mod_list; do
           printf '  %-16s -> ' \"\$mod\"
           modinfo -k '$KVER' -F filename \"\$mod\" 2>/dev/null || echo 'MISSING'
         done
@@ -1203,10 +1222,10 @@ install_hw_libs() {
   fi
 
   # AMD verification: check that mesa and vulkan-radeon are installed if AMD was requested.
-  if ((HW_AMD_REQUESTED)); then
+  if [[ -n "${HW_SUPPORT_ITEMS:-}" ]] && [[ " $HW_SUPPORT_ITEMS " == *" mesa "* || " $HW_SUPPORT_ITEMS " == *" vulkan-radeon "* ]]; then
     if _is_install_chroot; then
-      log "AMD verification: checking mesa and vulkan-radeon packages"
-      local _amd_pkgs=("mesa" "vulkan-radeon")
+      log "AMD verification: checking Mesa and RADV Vulkan packages"
+      local _amd_pkgs=("mesa" "lib32-mesa" "vulkan-radeon" "lib32-vulkan-radeon")
       local _amd_missing=0
       for _pkg in "${_amd_pkgs[@]}"; do
         local _amd_ver
@@ -1222,7 +1241,7 @@ install_hw_libs() {
       if ((_amd_missing)); then
         warn "AMD verification: $_amd_missing package(s) missing"
       else
-        log "AMD packages validated: mesa and vulkan-radeon installed"
+        log "AMD packages validated: Mesa and RADV Vulkan packages installed"
       fi
     fi
   else
@@ -1278,8 +1297,6 @@ verify_hw_libs() {
     # Determine packages based on which GPU vendor is selected
     if nvidia_is_selected; then
       packages="dkms nvidia-open-dkms nvidia-utils lib32-nvidia-utils"
-    elif amd_is_selected; then
-      packages="mesa vulkan-radeon"
     else
       packages=""
     fi

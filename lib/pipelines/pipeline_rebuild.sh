@@ -406,23 +406,6 @@ phase_rebuild_install() {
   install_hw_libs
   patch_record "NVIDIA driver + hardware packages" "ok"
 
-  # Add Thunderbolt support files
-  local thunderbolt_dir=""
-  if [[ -d "/home/.steamos-build/bundles/thunderbolt" ]]; then
-    thunderbolt_dir="/home/.steamos-build/bundles/thunderbolt"
-  fi
-  if [[ -n "$thunderbolt_dir" ]]; then
-    log "Adding thunderbolt support"
-    if declare -F _install_thunderbolt_files >/dev/null 2>&1; then
-      _install_thunderbolt_files "$thunderbolt_dir" "$MERGED"
-      _install_thunderbolt_files "$thunderbolt_dir" "$NEWROOT"
-      patch_record "Thunderbolt support" "ok"
-    else
-      warn "_install_thunderbolt_files not defined; skipping bundle install"
-      patch_record "Thunderbolt support" "fail" "_install_thunderbolt_files not implemented"
-    fi
-  fi
-
   # Copy payload
   step "Copying reconciled payload into $PARTSET rootfs"
   copy_driver_payload "$NEWROOT" "$WORK/before.txt" "$WORK"

@@ -20,7 +20,7 @@ fi
 _FL_CLEANUP_MOUNTS=()
 _FL_CLEANUP_DIRS=()
 _FL_CLEANUP_CMDS=()
-FL_IMG_LOOP=""
+: "${FL_IMG_LOOP:=}"
 
 flashless_register_mount() { _FL_CLEANUP_MOUNTS+=("$1"); }
 flashless_register_dir() { _FL_CLEANUP_DIRS+=("$1"); }

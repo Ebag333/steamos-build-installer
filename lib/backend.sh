@@ -21,37 +21,37 @@ PROJECT_DIR="$SCRIPT_DIR"
 # ---------------------------------------------------------------------------
 # Defaults shared by CLI + GUI.
 # ---------------------------------------------------------------------------
-ACTION=""
-IMG=""
-TARGET_DEV=""
-CONFIG_FILE=""
+: "${ACTION:=}"
+: "${IMG:=}"
+: "${TARGET_DEV:=}"
+: "${CONFIG_FILE:=}"
 
 UPDATE_MODE="selfheal" # selfheal | hold | stock
 # shellcheck disable=SC2034  # consumed by lib/finalize.sh and lib/installer.sh
 ADD_INSTALLER=1
-HW_SUPPORT_ITEMS=""    # space-separated items: linux-firmware libfprint fprintd bolt dkms
+: "${HW_SUPPORT_ITEMS:=}"    # space-separated items: linux-firmware libfprint fprintd bolt dkms
 DEFAULT_SESSION="game" # desktop | game
-INITRAMFS_MODULES=""   # space-separated module list; empty = stock
-GAMING_ITEMS=""        # space-separated: (all items now handled by optimization system)
+: "${INITRAMFS_MODULES:=}"   # space-separated module list; empty = stock
+: "${GAMING_ITEMS:=}"        # space-separated: (all items now handled by optimization system)
 # shellcheck disable=SC2034  # consumed by lib/common_drivers.sh, lib/finalize.sh, and lib/flashless.sh
 TARGET_VARIANT="steamdeck" # steamdeck | steamdeck-oobe
 UPDATE_BRANCH="stable"     # stable | beta | preview | rc | bc | pc | main
 PACMAN_REPO="valve"        # valve | main
 BASE_OS_MODE="additive"    # additive | upgrade
-ROOTFS_SIZE=""
-OUTPUT_DIR="" # empty = same directory as source image
-WORKDIR=""
+: "${ROOTFS_SIZE:=}"
+: "${OUTPUT_DIR:=}" # empty = same directory as source image
+: "${WORKDIR:=}"
 WORKDIR_LOCATION="auto" # auto | ram | disk
-_WORKDIR_EXPLICIT=""
+: "${_WORKDIR_EXPLICIT:=}"
 
 FLASH_CONFIRMED=0
 ALLOW_SYSTEM_DISK=0
 
 # Build-time globals expected by sourced libraries.
-OUT=""
-OUT_FINAL=""
-IMG_BASE=""
-LOOPDEV=""
+: "${OUT:=}"
+: "${OUT_FINAL:=}"
+: "${IMG_BASE:=}"
+: "${LOOPDEV:=}"
 # shellcheck disable=SC2034
 UDEV_RULE=/run/udev/rules.d/89-steamos-build-installer.rules
 UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"

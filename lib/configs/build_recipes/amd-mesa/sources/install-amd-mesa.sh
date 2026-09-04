@@ -1,19 +1,19 @@
 #!/bin/bash
 #
-# install-intel-gpu.sh — Install Intel GPU packages inside the chroot.
+# install-amd-mesa.sh — Install AMD Mesa/RADV packages inside the chroot.
 # Runs as INSTALL_CMD via the build-recipe framework.
 #
 set -euo pipefail
 
 # ── 1. Define packages ──────────────────────────────────────────────────
 PACKAGES=(
-  intel-gmmlib
-  intel-media-driver
-  vulkan-intel
-  lib32-vulkan-intel
+  mesa
+  lib32-mesa
+  vulkan-radeon
+  lib32-vulkan-radeon
 )
 
-echo "=== Intel GPU package install ==="
+echo "=== AMD Mesa package install ==="
 
 # ── 2. Separate already-installed from missing ───────────────────────────
 INSTALL_LIST=()
@@ -36,11 +36,11 @@ if [[ ${#INSTALL_LIST[@]} -gt 0 ]]; then
   echo "  Installing: ${INSTALL_LIST[*]}"
   # DB sync is handled by the pipeline before this script runs.
   if ! pacman -S --noconfirm "${INSTALL_LIST[@]}"; then
-    echo "ERROR: Failed to install Intel GPU packages" >&2
+    echo "ERROR: Failed to install AMD Mesa packages" >&2
     exit 1
   fi
 else
-  echo "  All Intel GPU packages already present"
+  echo "  All AMD Mesa packages already present"
 fi
 
 # ── 4. Verify installation ──────────────────────────────────────────────
@@ -57,8 +57,8 @@ for pkg in "${PACKAGES[@]}"; do
 done
 
 if [[ "$ALL_OK" -eq 0 ]]; then
-  echo "ERROR: One or more Intel GPU packages failed verification" >&2
+  echo "ERROR: One or more AMD Mesa packages failed verification" >&2
   exit 1
 fi
 
-echo "=== Intel GPU packages installed successfully ==="
+echo "=== AMD Mesa packages installed successfully ==="

@@ -81,6 +81,7 @@ if [[ "$FIX_MODE" != true ]]; then
   run_check "no-post-incr" "$LINT_DIR/no-post-incr.sh" "${root_args[@]}"
   run_check "strict-mode" "$LINT_DIR/strict-mode.sh" "${root_args[@]}"
   run_check "dead-code" "$LINT_DIR/dead-code.sh" "${root_args[@]}"
+  run_check "clobber-init" "$LINT_DIR/clobber-init.sh" "${root_args[@]}"
 fi
 
 if [[ $failed -gt 0 ]]; then

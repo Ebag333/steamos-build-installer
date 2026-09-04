@@ -12,7 +12,7 @@
 REAL=/usr/bin/steamos-atomupd-client.orig
 
 # Resolve script directory
-_NVIDIA_DIR=""
+: "${_NVIDIA_DIR:=}"
 if [[ -d "/home/.steamos-build/build_cache/lib" ]]; then
   _NVIDIA_DIR="/home/.steamos-build/build_cache"
 fi

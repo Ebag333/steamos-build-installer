@@ -9,10 +9,12 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-# Globals set by overlay_mount() / overlay_mount_with_image()
-UPPER=""
-OVLWORK=""
-MERGED=""
+# Globals set by overlay_mount() / overlay_mount_with_image().
+# Use := to only set if unset, so a caller that pre-populates these (e.g.
+# setup_clear_stale_state) is not clobbered when the library is sourced.
+: "${UPPER:=}"
+: "${OVLWORK:=}"
+: "${MERGED:=}"
 
 # Create and mount an overlay chroot.
 # Args: $1 = lowerdir (base rootfs)

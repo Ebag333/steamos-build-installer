@@ -49,9 +49,9 @@ declare -A _USB_VENDOR_FW=(
 
 # GPU vendor ID → driver packages (Nouveau intentionally excluded).
 declare -A _GPU_VENDOR_PKGS=(
-  [10de]="nvidia-open-dkms nvidia-utils lib32-nvidia-utils libva-nvidia-driver" # NVIDIA
-  [8086]="intel-gmmlib intel-media-driver vulkan-intel lib32-vulkan-intel"      # Intel
-  [1002]="mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon"                    # AMD
+  [10de]="nvidia-open-dkms" # NVIDIA (build-recipe)
+  [8086]="intel-gpu"  # Intel
+  [1002]="amd-mesa"   # AMD
 )
 
 # ---------------------------------------------------------------------------

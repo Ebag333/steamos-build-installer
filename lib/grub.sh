@@ -177,8 +177,29 @@ _add_params_to_grub_steamos() {
       in_block = 0
     }
     /^GRUB_CMDLINE_LINUX=/ {
-      in_block = 1
-      print
+      line = $0
+      sub(/^GRUB_CMDLINE_LINUX="/, "", line)
+      # Single-line: remainder does NOT end with \ (closing quote is here).
+      if (line !~ /\\[[:space:]]*$/) {
+        sub(/[[:space:]]*"$/, "", line)   # strip closing quote
+        if (line != "") {
+          print "GRUB_CMDLINE_LINUX=\"" line " \\"
+        } else {
+          print "GRUB_CMDLINE_LINUX=\"${GRUB_CMDLINE_LINUX} \\"
+        }
+        for (i = 1; i <= n; i++) {
+          if (i < n) {
+            print "  " np[i] " \\"
+          } else {
+            print "  " np[i] "\""
+          }
+        }
+        in_block = 0
+      } else {
+        # Multiline: continuation lines follow — original behavior
+        in_block = 1
+        print
+      }
       next
     }
     in_block && !/\\[[:space:]]*$/ {
@@ -319,6 +340,37 @@ _remove_quiet_from_grub_default() {
       "$grub_default"
     log "  Removed quiet from /etc/default/grub"
   fi
+}
+
+# Idempotently add parameters to EFI grub.cfg kernel lines.
+# Reuses _param_on_kernel_line for whole-token matching.
+# Args: $1 = grub.cfg path, $2... = parameters to add
+_add_params_to_efi_grub_cfg() {
+  local grub_cfg="$1"
+  shift
+  local params_to_add=("$@")
+
+  if [[ ! -f "$grub_cfg" ]]; then
+    echo "EFI grub.cfg not found: $grub_cfg" >&2
+    return 1
+  fi
+
+  local param
+  for param in "${params_to_add[@]}"; do
+    if ! _param_on_kernel_line "$grub_cfg" "$param"; then
+      echo "  Adding $param to EFI grub.cfg"
+      awk -v param="$param" '
+        /steamenv_boot[[:space:]]+linux[[:space:]]+\/boot\/vmlinuz/ {
+          n = split($0, tokens, " ")
+          found = 0
+          for (i = 1; i <= n; i++) { if (tokens[i] == param) { found = 1; break } }
+          if (!found) print $0 " " param; else print
+          next
+        }
+        { print }
+      ' "$grub_cfg" >"$grub_cfg.tmp" && mv "$grub_cfg.tmp" "$grub_cfg"
+    fi
+  done
 }
 
 # ── Phase 2: EFI grub.cfg ────────────────────────────────────────────────────

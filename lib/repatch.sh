@@ -41,7 +41,7 @@ CURRENT_STEP="startup"
 FAILURE_REPORTED=0
 
 # May not exist yet if failure happens very early.
-NEWROOT=""
+: "${NEWROOT:=}"
 
 failure_journal_context() {
   printf "partset='%s' kver='%s'\n" \

@@ -42,28 +42,6 @@ nvidia_is_selected() {
   return 1
 }
 
-# Check if AMD GPU packages were selected for this build.
-# Returns 0 if AMD is selected, 1 if not.
-# Checks HW_AMD_REQUESTED (set by install_hw_libs) or falls back to
-# checking if vulkan-radeon is installed in the image.
-amd_is_selected() {
-  # Fast path: flag set by install_hw_libs
-  if [[ "${HW_AMD_REQUESTED:-0}" -eq 1 ]]; then
-    return 0
-  fi
-  # Check HW_SUPPORT_ITEMS for AMD packages (used by validator)
-  if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then
-    if [[ " $HW_SUPPORT_ITEMS " == *" mesa "* || " $HW_SUPPORT_ITEMS " == *" vulkan-radeon "* ]]; then
-      return 0
-    fi
-  fi
-  # Fallback: check if vulkan-radeon is in the image
-  if [[ -n "${MNT:-}" ]] && pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" vulkan-radeon &>/dev/null; then
-    return 0
-  fi
-  return 1
-}
-
 # Discover kernel package in a rootfs's pacman local db.
 # Sets KPKG_DIR, KPKG_FULL, KPKG_NAME, KPKG_VERREL globals.
 # Args: $1 = root path
