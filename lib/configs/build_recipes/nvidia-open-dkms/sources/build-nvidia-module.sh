@@ -306,4 +306,29 @@ for mod in nvidia nvidia-modeset nvidia-drm nvidia-uvm; do
 done
 
 echo "  Bundle created at $BUNDLE_DIR"
+
+# ── 9. Install modprobe configuration ──────────────────────────────────
+# Blacklist nouveau and enable nvidia-drm KMS so the open kernel modules
+# work correctly on the next boot.
+_NVIDIA_CONF="/etc/modprobe.d/99-nvidia-patch.conf"
+if [[ ! -s "$_NVIDIA_CONF" ]]; then
+  echo "Installing nvidia modprobe config"
+  mkdir -p /etc/modprobe.d
+  cat >"$_NVIDIA_CONF" <<'MODPROBE_EOF'
+# Added by steamos-build-installer
+blacklist nouveau
+options nouveau modeset=0
+
+# Explicit although enabled by default on current NVIDIA drivers
+options nvidia_drm modeset=1 fbdev=1
+MODPROBE_EOF
+fi
+
+if [[ -s "$_NVIDIA_CONF" ]]; then
+  echo "  OK modprobe config installed at $_NVIDIA_CONF"
+else
+  echo "ERROR: failed to install modprobe config at $_NVIDIA_CONF" >&2
+  exit 1
+fi
+
 echo "=== NVIDIA DKMS module build complete ==="
