@@ -23,18 +23,17 @@ declare -A _PCI_VENDOR_FW=(
   [10de]="linux-firmware-nvidia"   # NVIDIA
   [10ec]="linux-firmware-realtek"  # Realtek
   [168c]="linux-firmware-atheros"  # Qualcomm Atheros
-  [17cb]="linux-firmware-atheros"  # Qualcomm (Atheros parent)
+  [17cb]="linux-firmware-qcom"     # Qualcomm (Atheros parent + SoC)
   [14e4]="linux-firmware-broadcom" # Broadcom
   [14a4]="linux-firmware-broadcom" # Broadcom (Cypress)
   [14c3]="linux-firmware-mediatek" # MediaTek
   [1814]="linux-firmware-mediatek" # Ralink (now MediaTek)
-  [1102]="linux-firmware-cirrus"   # Cirrus Logic
-  [1106]="linux-firmware-cirrus"   # Cirrus Logic (alt)
+  [1013]="linux-firmware-cirrus"   # Cirrus Logic
   [11ab]="linux-firmware-marvell"  # Marvell
   [15b3]="linux-firmware-mellanox" # Mellanox
   [19ee]="linux-firmware-nfp"      # Netronome
   [1077]="linux-firmware-qlogic"   # QLogic
-  [17cb]="linux-firmware-qcom"     # Qualcomm SoC
+  # [17cb] already mapped above (Qualcomm)
 )
 
 # Map USB vendor IDs to firmware package names.
@@ -124,8 +123,8 @@ _detect_gpu_packages() {
 
     # Only VGA/3D controllers (class 0300/0302).
     class_code=$(cat "/sys/bus/pci/devices/0000:${dev}/class" 2>/dev/null || echo "0x000000")
-    case "${class_code:0:6}" in
-      0x0300 | 0x0302) ;;
+    case "${class_code:0:8}" in
+      0x030000 | 0x030200) ;;
       *) continue ;;
     esac
 
@@ -153,9 +152,7 @@ declare -A _MODULE_FW_PKG=(
   [igc]="linux-firmware-intel"
   [amdgpu]="linux-firmware-amdgpu"
   [radeon]="linux-firmware-radeon"
-  [nvidia]="linux-firmware-nvidia"
-  [nvidia_drm]="linux-firmware-nvidia"
-  [nvidia_modeset]="linux-firmware-nvidia"
+  # nvidia/nvidia_drm/nvidia_modeset: proprietary driver bundles its own firmware
   [r8169]="linux-firmware-realtek"
   [r8152]="linux-firmware-realtek"
   [rtw88]="linux-firmware-realtek"
@@ -194,7 +191,7 @@ _detect_driver_packages() {
 
     # For unknown modules, check if they need firmware.
     local firmware_list
-    firmware_list=$(modinfo -F firmware "$mod" 2>/dev/null | head -5)
+    firmware_list=$(modinfo -F firmware "$mod" 2>/dev/null | head -20)
     [[ -z "$firmware_list" ]] && continue
 
     # Try to find the package for the first firmware file.
@@ -203,7 +200,7 @@ _detect_driver_packages() {
       [[ -z "$fw" ]] && continue
       local fw_path="usr/lib/firmware/$fw"
       local fw_pkg
-      fw_pkg=$(pacman -F "$fw_path" 2>/dev/null | awk '{print $1}' | head -1)
+      fw_pkg=$(pacman -F "$fw_path" 2>/dev/null | awk '{print $1}' | head -1 | sed 's|.*/||')
       if [[ -n "$fw_pkg" && "$fw_pkg" != "No" ]]; then
         driver_pkgs["$fw_pkg"]=1
         break

@@ -49,8 +49,12 @@ system_upgrade_prepare() {
 
   rm -f "$MNT/etc/resolv.conf"
   host_resolv="$(readlink -f /etc/resolv.conf)"
-  install -m 0644 "$host_resolv" "$MNT/etc/resolv.conf"
-  log "Injected host DNS config for chroot"
+  if [[ -f "$host_resolv" ]]; then
+    install -m 0644 "$host_resolv" "$MNT/etc/resolv.conf"
+    log "Injected host DNS config for chroot"
+  else
+    warn "Host /etc/resolv.conf not found — chroot DNS may not work"
+  fi
 
   # Verify DNS works in chroot
   if ! chroot "$MNT" getent hosts steamdeck-packages.steamos.cloud &>/dev/null; then
@@ -108,15 +112,22 @@ system_upgrade() {
   # Snapshot package state before upgrade
   local before_file="$WORKDIR/pkgs-before-sysupgrade.txt"
   pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" 2>/dev/null | sort >"$before_file" || true
+  if [[ ! -s "$before_file" ]]; then
+    warn "Could not snapshot pre-upgrade package list — summary will be inaccurate"
+  fi
 
   # Pre-flight: dry-run to detect and resolve known conflicts
-  if ! pacman_upgrade_preflight "System upgrade" --root "$MNT"; then
-    return 0
+  if [[ "${PREFLIGHT:-1}" -eq 1 ]]; then
+    if ! pacman_upgrade_preflight "System upgrade" --root "$MNT"; then
+      return 1
+    fi
+  else
+    warn "Pre-flight: skipped (PREFLIGHT=0) — proceeding without conflict checks"
   fi
 
   # Run pacman -Syu directly on $MNT using the image's own config
   local upgrade_log="$WORKDIR/system-upgrade.log"
-  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
+  local _raw_log="${PACMAN_RAW_LOG:-/tmp/steamos-pacman-raw.log}"
   local _pacman_rc
 
   set -o pipefail
@@ -138,6 +149,9 @@ system_upgrade() {
   # Snapshot package state after upgrade
   local after_file="$WORKDIR/pkgs-after-sysupgrade.txt"
   pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" 2>/dev/null | sort >"$after_file" || true
+  if [[ ! -s "$after_file" ]]; then
+    warn "Could not snapshot post-upgrade package list — summary will be inaccurate"
+  fi
 
   # Log upgrade summary
   # Compare by name:version to find actual changes
@@ -167,7 +181,7 @@ system_upgrade() {
   # Report .pacnew files created during upgrade
   local _pacnew_count=0
   local _pacnew_list="$WORKDIR/pacnew-files.txt"
-  find "$MNT" -name '*.pacnew' -type f >"$_pacnew_list" 2>/dev/null || true
+  find "$MNT/etc" "$MNT/usr" "$MNT/boot" -name '*.pacnew' -type f >"$_pacnew_list" 2>/dev/null || true
   while IFS= read -r pacnew; do
     [[ -n "$pacnew" ]] || continue
     # Skip mirrorlist.pacnew — too large and not useful
@@ -212,7 +226,10 @@ system_upgrade_cleanup() {
   fi
 
   # Remove backup if we created one (user's repo selection persists)
-  rm -f "$MNT/etc/pacman.conf.pacsave"
+  if [[ -f "$MNT/etc/pacman.conf.pacsave" ]]; then
+    log "Removing pacman.conf.pacsave (user's repo selection persists)"
+    rm -f "$MNT/etc/pacman.conf.pacsave"
+  fi
 
   # Kill gpg-agent before touching mount topology
   if [[ -d "$MNT/etc/pacman.d/gnupg" ]]; then

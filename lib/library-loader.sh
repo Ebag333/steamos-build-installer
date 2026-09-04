@@ -22,7 +22,10 @@ load_workflow_libs() {
   local workflow="${1:?load_workflow_libs: missing workflow type}"
   local base_dir="${2:?load_workflow_libs: missing base directory}"
 
-  # Common libraries (shared by all workflows)
+  # Common libraries (shared by all workflows).
+  # Order matters: later libs may depend on functions/variables defined by
+  # earlier ones (e.g. overlay needs common helpers, common_drivers needs
+  # common_modules and overlay globals).
   local -a common_libs=(
     pipeline
     workflow-common
@@ -87,7 +90,7 @@ load_workflow_libs() {
       )
       ;;
     *)
-      warn "Unknown workflow type: $workflow"
+      printf '[loader] WARNING: Unknown workflow type: %s\n' "$workflow" >&2
       return 1
       ;;
   esac
@@ -115,7 +118,7 @@ _load_lib() {
   local lib_path="$base_dir/$lib_name.sh"
 
   if [[ ! -r "$lib_path" ]]; then
-    warn "Missing library: $lib_path"
+    printf '[loader] WARNING: Missing library: %s (base_dir=%s)\n' "$lib_path" "$base_dir" >&2
     return 1
   fi
 

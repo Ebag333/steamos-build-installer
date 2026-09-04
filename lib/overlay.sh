@@ -131,7 +131,8 @@ setup_overlay_chroot() {
   local cache_key
 
   if [[ -n "${FINGERPRINT_FILE:-}" && -f "$FINGERPRINT_FILE" ]]; then
-    IFS="" read -r source_fp <"$FINGERPRINT_FILE" || source_fp="unknown"
+    IFS="" read -r source_fp <"$FINGERPRINT_FILE" || true
+    [[ -n "$source_fp" ]] || source_fp="unknown"
   elif [[ -n "${_src_fp:-}" ]]; then
     source_fp="$_src_fp"
   fi
@@ -186,7 +187,8 @@ overlay_check_cache() {
   marker="$cache_root/.steamos-build-overlay-cache-key"
 
   if [[ -f "$marker" ]]; then
-    IFS="" read -r current_key <"$marker" || current_key=""
+    IFS="" read -r current_key <"$marker" || true
+    [[ -n "$current_key" ]] || current_key=""
   fi
 
   # Always start with a fresh upper layer.  The upper acts as a transaction
@@ -248,13 +250,13 @@ overlay_mount_with_image() {
       warn "Attempting to detach stale loops before proceeding"
       while IFS="" read -r _stale; do
         [[ -n "$_stale" ]] || continue
-        findmnt -rn -o TARGET,SOURCE 2>/dev/null \
-          | awk -v l="$_stale" '$2 ~ "^"l {print $1}' \
-          | tac | while read -r _m; do
+        while IFS="" read -r _m; do
           [[ -n "$_m" ]] || continue
           umount -R "$_m" \
             || die "Could not cleanly unmount stale overlay workspace: $_m"
-        done
+        done < <(findmnt -rn -o TARGET,SOURCE 2>/dev/null \
+          | awk -v l="$_stale" '$2 == l || index($2, l) == 1 {print $1}' \
+          | tac)
         losetup -d "$_stale" 2>/dev/null || true
       done <<<"$_existing_loops"
       udevadm settle --timeout=5 2>/dev/null || true
@@ -265,8 +267,10 @@ overlay_mount_with_image() {
     fi
   else
     log "Creating overlay workspace image ($img_size)"
-    truncate -s "$img_size" "$OVL_IMG"
-    mkfs.ext4 -q -F "$OVL_IMG"
+    truncate -s "$img_size" "$OVL_IMG" \
+      || die "Could not create overlay workspace image ($img_size)"
+    mkfs.ext4 -q -F "$OVL_IMG" \
+      || die "Could not format overlay workspace image"
   fi
 
   # Allocate the loop device with --nooverlap to prevent creating a second
@@ -295,7 +299,7 @@ overlay_mount_with_image() {
 }
 
 # Run a command inside the overlay chroot ($MERGED).
-in_chroot() { chroot "$MERGED" /bin/bash -c "$*"; }
+in_chroot() { chroot "$MERGED" /bin/bash -c "$1"; }
 
 # Create a custom pacman config for the overlay chroot.
 # Sets PACCONF and PACOPTS globals.  Call after overlay_mount().
@@ -751,6 +755,13 @@ _cleanup_stale_build_roots() {
 
     warn "Cleaning stale build root: $stale_dir"
 
+    # Kill processes still using the stale build root
+    local merged="$stale_dir/merged"
+    if [[ -d "$merged" ]]; then
+      fuser -k "$merged" 2>/dev/null || true
+      sleep 1
+    fi
+
     # Unmount anything backed by these loops
     while IFS="" read -r loop; do
       [[ -n "$loop" ]] || continue
@@ -758,24 +769,43 @@ _cleanup_stale_build_roots() {
       local m
       while IFS="" read -r m; do
         [[ -n "$m" ]] || continue
-        warn "  Unmounting stale build root mount: $m"
-        umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null || true
+        if mountpoint -q "$m" 2>/dev/null; then
+          warn "  Unmounting stale build root mount: $m"
+          if strict_unmount "$m" "stale build root mount"; then
+            untrack_mount "$m" 2>/dev/null || true
+          else
+            warn "  Falling back to lazy unmount for $m"
+            sync 2>/dev/null || true
+            umount -Rl "$m" 2>/dev/null || true
+            untrack_mount "$m" 2>/dev/null || true
+          fi
+        fi
       done < <(mounts_for_loop "$loop")
 
       # Also try unmounting known paths inside the build root
-      local merged="$stale_dir/merged"
       for m in "$merged/dev/pts" "$merged/dev/shm" "$merged/dev" "$merged/sys" "$merged/proc" "$merged/tmp" "$merged"; do
         [[ -e "$m" ]] || continue
         if mountpoint -q "$m" 2>/dev/null; then
           warn "  Unmounting stale build root path: $m"
-          umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null || true
+          if strict_unmount "$m" "stale build root mount"; then
+            untrack_mount "$m" 2>/dev/null || true
+          else
+            warn "  Falling back to lazy unmount for $m"
+            sync 2>/dev/null || true
+            umount -Rl "$m" 2>/dev/null || true
+            untrack_mount "$m" 2>/dev/null || true
+          fi
         fi
       done
 
       local ovl_mnt="$stale_dir/overlay-mnt"
       if [[ -e "$ovl_mnt" ]] && mountpoint -q "$ovl_mnt" 2>/dev/null; then
         warn "  Unmounting stale build root workspace: $ovl_mnt"
-        umount "$ovl_mnt" 2>/dev/null || umount -l "$ovl_mnt" 2>/dev/null || true
+        if ! umount -R "$ovl_mnt" 2>/dev/null; then
+          warn "  Falling back to lazy unmount for $ovl_mnt"
+          sync 2>/dev/null || true
+          umount -Rl "$ovl_mnt" 2>/dev/null || true
+        fi
       fi
 
       # Wait for ext4 release and detach
@@ -1106,10 +1136,49 @@ overlay_cleanup() {
           done
         fi
       else
-        warn "overlay_cleanup: losetup -d failed for $m, trying force detach"
-        if ! losetup -D 2>/dev/null; then
-          warn "overlay_cleanup: force detach also failed for $m"
-          warn "overlay_cleanup: a reboot is required to release this resource"
+        warn "overlay_cleanup: losetup -d failed for $m, attempting targeted cleanup"
+        # Do NOT use losetup -D — it force-detaches ALL loop devices on the
+        # system, including ones owned by unrelated processes.  Instead, find
+        # only loop devices backed by files in WORKDIR or matching the
+        # overlay-work.img pattern and detach those specifically.
+        local _targeted_rc=0
+        local _dev _backing _clean
+        local _build_loops
+        _build_loops="$(losetup -J 2>/dev/null)" || true
+        if [[ -n "$_build_loops" ]]; then
+          while IFS=$'\t' read -r _dev _backing; do
+            [[ -n "$_dev" ]] || continue
+            # Only detach loops backed by files in WORKDIR or overlay-work.img
+            _clean="${_backing%\ (deleted)}"
+            if [[ -n "${WORKDIR:-}" && "$_clean" == "$WORKDIR"* ]]; then
+              log "overlay_cleanup: detaching WORKDIR-owned loop $_dev (backing: $_clean)"
+              if ! losetup -d "$_dev" 2>/dev/null; then
+                warn "overlay_cleanup: could not detach $_dev"
+                _targeted_rc=1
+              fi
+            elif [[ "$_clean" == */overlay-work.img ]]; then
+              log "overlay_cleanup: detaching overlay-work.img loop $_dev (backing: $_clean)"
+              if ! losetup -d "$_dev" 2>/dev/null; then
+                warn "overlay_cleanup: could not detach $_dev"
+                _targeted_rc=1
+              fi
+            fi
+          done < <(python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(0)
+for dev in data.get("loopdevices", []):
+    backing = dev.get("back-file") or ""
+    name = dev.get("name") or ""
+    if name and backing:
+        print(name + "\t" + backing)
+' <<<"$_build_loops")
+        fi
+        if [[ "$_targeted_rc" -ne 0 ]]; then
+          warn "overlay_cleanup: some targeted detach attempts failed for $m"
+          warn "overlay_cleanup: a reboot may be required to release this resource"
           rc=1
         fi
       fi

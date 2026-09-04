@@ -62,7 +62,11 @@ while IFS="" read -r line; do
   parse_lspci_line "$line"
 
   # Get device class
-  class_code=$(cat "/sys/bus/pci/devices/0000:${dev}/class" 2>/dev/null || echo "0x000000")
+    local sysfs_dev="$dev"
+    if [[ "$dev" =~ ^[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]+$ ]]; then
+      sysfs_dev="0000:${dev}"
+    fi
+    class_code=$(cat "/sys/bus/pci/devices/${sysfs_dev}/class" 2>/dev/null || echo "0x000000")
   case "${class_code:0:6}" in
     0x0108) class="NVMe" ;;
     0x0106) class="SATA" ;;
@@ -100,7 +104,7 @@ while IFS="" read -r line; do
     fi
 
     if [[ -n "$modules" ]]; then
-      status="${YELLOW}✗ unclaimed (module: ${modules%% *})${NC}"
+      status="${YELLOW}✗ unclaimed (module: ${modules%%$'\n'*})${NC}"
     fi
 
     printf "%-12s %-8s %-11s %-45s %-18s %b\n" "$dev" "$class" "${vendor_device:--}" "${desc:0:45}" "-" "$status"
@@ -130,9 +134,9 @@ fi
 echo ""
 echo -e "${CYAN}=== Loaded critical drivers ===${NC}"
 for mod in $CRITICAL; do
-  if lsmod 2>/dev/null | grep -q "^${mod} "; then
+    if (set +o pipefail; lsmod 2>/dev/null | grep -q "^${mod} "); then
     echo -e "  ${GREEN}✓${NC} $mod"
-  elif modinfo -F filename "$mod" 2>/dev/null | grep -q '(builtin)'; then
+    elif (set +o pipefail; modinfo -F filename "$mod" 2>/dev/null | grep -q '(builtin)'); then
     echo -e "  ${GREEN}✓${NC} $mod (built-in)"
   else
     echo -e "  ${YELLOW}○${NC} $mod (not loaded)"
@@ -164,7 +168,7 @@ if [[ $unclaimed -gt 0 ]]; then
       modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
       modules=$(modprobe -R "$modalias" 2>/dev/null | head -5 || true)
       if [[ -n "$modules" ]]; then
-        echo "  $dev [$vendor_device]: $desc"
+        printf '  %s [%s]: %s\n' "$dev" "$vendor_device" "$desc"
         echo "    Modules: $modules"
       fi
     fi

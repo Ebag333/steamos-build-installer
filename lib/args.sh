@@ -22,8 +22,10 @@ fi
 #   1  — arg not recognized; caller should handle it
 #
 # Globals written: ACTION, IMG, TARGET_DEV, CONFIG_FILE, OUTPUT_DIR,
-#                  ALLOW_SYSTEM_DISK, _ARG_SHIFT
+#                  ALLOW_SYSTEM_DISK, VALIDATE_OUTPUT_FILE, DEBUG,
+#                  VERBOSE, _ARG_SHIFT
 parse_common_arg() {
+  _ARG_SHIFT=0
   case "$1" in
     --action)
       # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
@@ -78,6 +80,19 @@ parse_common_arg() {
       VERBOSE=1
       _ARG_SHIFT=1
       return 0
+      ;;
+    --*=*)
+      local key="${1%%=*}"
+      local val="${1#*=}"
+      case "$key" in
+        --action)       ACTION="$val";          _ARG_SHIFT=1; return 0 ;;
+        --image)        IMG="$val";             _ARG_SHIFT=1; return 0 ;;
+        --device)       TARGET_DEV="$val";      _ARG_SHIFT=1; return 0 ;;
+        --config)       CONFIG_FILE="$val";     _ARG_SHIFT=1; return 0 ;;
+        --output-dir)   OUTPUT_DIR="$val";      _ARG_SHIFT=1; return 0 ;;
+        --output)       VALIDATE_OUTPUT_FILE="$val"; _ARG_SHIFT=1; return 0 ;;
+        *)              return 1 ;;
+      esac
       ;;
     *)
       return 1

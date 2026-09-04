@@ -44,7 +44,7 @@ FAILURE_REPORTED=0
 NEWROOT=""
 
 failure_journal_context() {
-  printf "partset='%s' kver='%s'" \
+  printf "partset='%s' kver='%s'\n" \
     "${PARTSET:-unknown}" \
     "${KVER:-unknown}"
 }
@@ -198,7 +198,15 @@ declare -a PATCH_RESULTS=()
 #   STATUS is "ok" or "fail".
 # shellcheck disable=SC2317  # called from sourced pipeline_rebuild.sh
 patch_record() {
-  local name="$1" status="$2" detail="${3:-}"
+  local name="${1:-}" status="${2:-}" detail="${3:-}"
+  [[ -n "$name" && -n "$status" ]] || {
+    warn "patch_record: missing required arguments (name='$name' status='$status')"
+    return 1
+  }
+  [[ "$status" == "ok" || "$status" == "fail" ]] || {
+    warn "patch_record: invalid status '$status' for '$name' (expected 'ok' or 'fail')"
+    return 1
+  }
   PATCH_RESULTS+=("$name|$status|$detail")
   if [[ "$status" == "fail" ]]; then
     warn "Optional patch failed: $name — $detail"

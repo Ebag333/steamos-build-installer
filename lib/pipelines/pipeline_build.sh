@@ -57,6 +57,7 @@ register_build_pipeline() {
 
 # Phase: Validate build inputs
 phase_build_validate() {
+  stage_header "preparation"
   # Log condensed build configuration
   if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
     log "Build config: $CONFIG_FILE"
@@ -299,6 +300,7 @@ phase_build_sysupgrade() {
 
 # Phase: Create build overlay (on top of updated $MNT)
 phase_build_overlay() {
+  stage_header "build & install"
   # Create overlay filesystem for build environment
   # This overlay sits on top of the already-updated $MNT
   setup_overlay_chroot
@@ -520,6 +522,7 @@ phase_build_build() {
 
 # Phase: Configure system and GRUB
 phase_build_configure() {
+  stage_header "configure"
   # Apply all customizations dynamically from config
   step "Applying customizations"
   local all_items
@@ -532,6 +535,10 @@ phase_build_configure() {
   # Configure update channel
   configure_update_channel
   _diag_os_release "after configure_update_channel"
+
+  # Reconcile initramfs
+  step "Restoring module autoloading in initramfs"
+  reconcile_initramfs "$MNT" "$KVER" "${INITRAMFS_MODULES:-}"
 
   # Configure GRUB
   patch_persistent_defaults
@@ -575,6 +582,7 @@ phase_build_configure() {
 
 # Phase: Finalize and publish image
 phase_build_finalize() {
+  stage_header "finalize"
   # Restore empty machine-id before publishing — don't bake build-time ID into image
   if [[ "${_MACHINE_ID_WAS_EMPTY:-0}" -eq 1 ]]; then
     log "Restoring empty machine-id (build-time ID was temporary)"
@@ -582,6 +590,7 @@ phase_build_finalize() {
   fi
 
   _diag_os_release "before finalize"
+  cleanup_disk_space "$MNT" "image-finalize"
   progress_emit finalize
   finalize
 

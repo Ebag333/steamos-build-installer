@@ -16,11 +16,49 @@ mkdir -p "$OUTPUT_DIR"
 echo "Starting test run..."
 
 # ── Clean up stale build state ────────────────────────────────────────────
-# /dev/shm/steamos-build may contain root-owned mounts/loop devices from
+# $1 = workdir path — may contain root-owned mounts/loop devices from
 # previous (possibly killed) builds.  Mirrors the cleanup order from
 # lib/overlay.sh overlay_cleanup() and lib/common.sh cleanup().
 cleanup_stale_state() {
-  local workdir="/dev/shm/steamos-build"
+  local workdir="${1:-}"
+
+  # Require a non-empty workdir argument.
+  if [[ -z "$workdir" ]]; then
+    echo "ERROR: cleanup_stale_state() requires a workdir path argument" >&2
+    return 1
+  fi
+
+  # Helper: unmount a path, logging warnings on failure but not aborting.
+  # Uses regular unmount only (no lazy unmount fallback) so failures
+  # propagate for detection while maintaining idempotency.
+  _safe_umount() {
+    local path="$1"
+    if sudo umount "$path" 2>/dev/null; then
+      return 0
+    fi
+    # If the path was never mounted, that's fine (idempotent).
+    if ! mountpoint -q "$path" 2>/dev/null; then
+      return 0
+    fi
+    # Unmount failed on something that looks mounted — warn loudly.
+    echo "  WARNING: failed to unmount $path — stale state may persist" >&2
+    return 1
+  }
+
+  # Guard against accidentally operating on critical system paths.
+  local resolved
+  resolved="$(realpath "$workdir" 2>/dev/null || true)"
+  case "$resolved" in
+    / | /dev | /dev/shm | /dev/shm/ | /home | /home/ | /root | /root/ | \
+    /tmp | /tmp/ | /var | /var/ | /usr | /usr/ | /etc | /etc/ | /proc | /proc/ | \
+    /sys | /sys/ | /boot | /boot/ | /mnt | /mnt/ | /media | /media/ | \
+    /opt | /opt/ | /run | /run/ | /snap | /snap/ | /srv | /srv/)
+      echo "ERROR: cleanup_stale_state() refuses to operate on critical path: $resolved" >&2
+      return 1
+      ;;
+  esac
+
+  # Idempotent: nothing to do if the directory doesn't exist.
   [[ -d "$workdir" ]] || return 0
 
   echo "Cleaning up stale build state: $workdir"
@@ -40,7 +78,7 @@ cleanup_stale_state() {
       [[ -n "$m" ]] || continue
       if mountpoint -q "$m" 2>/dev/null; then
         echo "  Unmounting tracked: $m"
-        sudo umount "$m" 2>/dev/null || sudo umount -l "$m" 2>/dev/null || true
+        _safe_umount "$m" || true
       fi
     done
   fi
@@ -58,7 +96,7 @@ cleanup_stale_state() {
       "$merged/tmp"; do
       if mountpoint -q "$m" 2>/dev/null; then
         echo "  Unmounting chroot child: $m"
-        sudo umount "$m" 2>/dev/null || sudo umount -l "$m" 2>/dev/null || true
+        _safe_umount "$m" || true
       fi
     done
   fi
@@ -66,7 +104,7 @@ cleanup_stale_state() {
   # 4. Unmount MERGED (overlay)
   if mountpoint -q "$merged" 2>/dev/null; then
     echo "  Unmounting overlay: $merged"
-    sudo umount "$merged" 2>/dev/null || sudo umount -l "$merged" 2>/dev/null || true
+    _safe_umount "$merged" || true
   fi
 
   # 5. Sync before unmounting overlay workspace
@@ -75,7 +113,7 @@ cleanup_stale_state() {
   # 6. Unmount overlay workspace (OVL_MNT)
   if mountpoint -q "$ovl_mnt" 2>/dev/null; then
     echo "  Unmounting overlay workspace: $ovl_mnt"
-    sudo umount "$ovl_mnt" 2>/dev/null || sudo umount -l "$ovl_mnt" 2>/dev/null || true
+    _safe_umount "$ovl_mnt" || true
   fi
 
   # 7. Unmount main image filesystems (efi, home, mnt)
@@ -83,7 +121,7 @@ cleanup_stale_state() {
   for m in "$workdir/home" "$workdir/efi" "$workdir/mnt"; do
     if mountpoint -q "$m" 2>/dev/null; then
       echo "  Unmounting: $m"
-      sudo umount "$m" 2>/dev/null || sudo umount -l "$m" 2>/dev/null || true
+      _safe_umount "$m" || true
     fi
   done
 
@@ -122,8 +160,8 @@ cleanup_stale_state() {
   echo "  ✓ Stale state cleaned"
 }
 
-# Clean up any stale state before starting
-cleanup_stale_state
+# Clean up any stale state before starting (RAM workdir is always known)
+cleanup_stale_state "/dev/shm/steamos-build"
 
 # Load defaults from config file if present
 if [[ -f "$SCRIPT_DIR/run-tests.conf" ]]; then
@@ -168,6 +206,38 @@ OUTPUT_SUFFIX="-nvidia-usbinstall.img"
 BUILD_OUTPUT_DIR="$PROJECT_DIR/tools/tests/build"
 mkdir -p "$BUILD_OUTPUT_DIR"
 
+# Determine workdir locations for cleanup.  steamos-build.sh uses either
+# /dev/shm/steamos-build (RAM) or BUILD_OUTPUT_DIR/.nvidia-usb-work (disk),
+# depending on available space.
+DEFAULT_WORKDIR_RAM="/dev/shm/steamos-build"
+DEFAULT_WORKDIR_DISK="${BUILD_OUTPUT_DIR}/.nvidia-usb-work"
+
+# ── Signal-based cleanup handler ──────────────────────────────────────────
+# Ensure stale state is cleaned up even if the script is killed by SIGINT,
+# SIGTERM, or any other trap-causing event.  The handler is idempotent —
+# safe to run multiple times (e.g. on EXIT after an earlier signal).
+_CLEANUP_DONE=0
+_on_exit() {
+  local sig="${1:-EXIT}"
+  if [[ "$_CLEANUP_DONE" -eq 1 ]]; then
+    return
+  fi
+  _CLEANUP_DONE=1
+  echo "Signal $sig received — cleaning up stale build state..."
+  cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+  cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
+  # If we arrived via a signal (not normal EXIT), re-raise so the parent
+  # process sees the correct exit code.
+  if [[ "$sig" != "EXIT" ]]; then
+    # Temporarily disable the trap to avoid infinite recursion on re-raise
+    trap - EXIT INT TERM
+    kill -s "$sig" "$$" 2>/dev/null || exit 130
+  fi
+}
+trap '_on_exit EXIT' EXIT
+trap '_on_exit INT'  INT
+trap '_on_exit TERM' TERM
+
 passed=0
 failed=0
 skipped=0
@@ -192,16 +262,21 @@ for conf in "$CONF_DIR"/*.conf; do
 
   # ── Build ──────────────────────────────────────────────────────────────
   echo "  Building... (log: $log_file)"
-  if ! sudo "$STEAMOS_BUILD" \
+  sudo "$STEAMOS_BUILD" \
     --action build \
     --image "$SOURCE_IMG" \
     --config "$conf" \
     --output-dir "$BUILD_OUTPUT_DIR" \
-    2>&1 | sudo tee "$log_file" >/dev/null; then
+    >"$log_file" 2>&1 &
+  build_pid=$!
+  build_rc=0
+  wait "$build_pid" || build_rc=$?
+  if [[ $build_rc -ne 0 ]]; then
     echo "  ✗ BUILD FAILED — see $log_file"
     ((++failed))
     # Clean up stale state left by the failed build before the next test
-    cleanup_stale_state
+    cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+    cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
     continue
   fi
 
@@ -209,7 +284,8 @@ for conf in "$CONF_DIR"/*.conf; do
   if [[ ! -f "$out_img" ]]; then
     echo "  ✗ BUILD FAILED — output image not produced (DKMS/driver build error?) — see $log_file"
     ((++failed))
-    cleanup_stale_state
+    cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+    cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
     continue
   fi
   echo "  ✓ Build complete"
@@ -244,7 +320,8 @@ for conf in "$CONF_DIR"/*.conf; do
 done
 
 # Clean up any stale state left by the last test
-cleanup_stale_state
+cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"

@@ -41,31 +41,58 @@ flashless_cleanup() {
   [[ -o errexit ]] && _had_e=1
   set +e
 
-  # Unmount in reverse registration order.
-  local i
-  for ((i = ${#_FL_CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
-    local m="${_FL_CLEANUP_MOUNTS[$i]}"
-    if mountpoint -q "$m" 2>/dev/null; then
-      umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
+  # ------------------------------------------------------------
+  # Namespace verification: refuse aggressive cleanup when we are
+  # running in the init (PID 1) mount namespace.  Flashless install
+  # runs WITHOUT namespace isolation (steamos-build.sh); if the
+  # build namespace is lost, unmount/rm operations would affect the
+  # host directly.  Safe operations (udev rule removal, registered
+  # cleanup commands) are still allowed.
+  # ------------------------------------------------------------
+  local _IN_INIT_NS=0
+  if [[ -e /proc/self/ns/mnt && -e /proc/1/ns/mnt ]]; then
+    if [[ "$(readlink /proc/self/ns/mnt)" == "$(readlink /proc/1/ns/mnt)" ]]; then
+      _IN_INIT_NS=1
+      warn "flashless_cleanup: detected init (PID 1) mount namespace — refusing aggressive cleanup"
+      warn "flashless_cleanup: mount namespace: $(readlink /proc/self/ns/mnt)"
+      warn "flashless_cleanup: safe operations (udev rules, registered cmds) will proceed"
+      warn "flashless_cleanup: unmount, loop detach, and directory removal are skipped"
+      warn "flashless_cleanup: if the build namespace was lost, a reboot may be needed"
     fi
-  done
+  fi
+
+  if ((_IN_INIT_NS)); then
+    warn "flashless_cleanup: skipping unmounts (in init namespace)"
+    warn "flashless_cleanup: skipping loop detach (in init namespace)"
+    warn "flashless_cleanup: skipping directory removal (in init namespace)"
+  else
+    # Unmount in reverse registration order.
+    local i
+    for ((i = ${#_FL_CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
+      local m="${_FL_CLEANUP_MOUNTS[$i]}"
+      if mountpoint -q "$m" 2>/dev/null; then
+        umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
+      fi
+    done
+
+    # Detach loop device last.
+    if [[ -n "$FL_IMG_LOOP" ]]; then
+      losetup -d "$FL_IMG_LOOP" 2>/dev/null || true
+      FL_IMG_LOOP=""
+      FL_ROOTFS_WAS_RO=0
+    fi
+
+    # Remove temporary directories in reverse order (children before parents).
+    for ((i = ${#_FL_CLEANUP_DIRS[@]} - 1; i >= 0; i--)); do
+      rmdir "${_FL_CLEANUP_DIRS[$i]}" 2>/dev/null || true
+    done
+  fi
 
   # Execute registered cleanup commands (e.g. udev rule removal).
+  # Safe in any namespace — these affect only resources we created.
   local cmd
   for cmd in "${_FL_CLEANUP_CMDS[@]}"; do
     eval "$cmd" 2>/dev/null || true
-  done
-
-  # Detach loop device last.
-  if [[ -n "$FL_IMG_LOOP" ]]; then
-    losetup -d "$FL_IMG_LOOP" 2>/dev/null || true
-    FL_IMG_LOOP=""
-    FL_ROOTFS_WAS_RO=0
-  fi
-
-  # Remove temporary directories in reverse order (children before parents).
-  for ((i = ${#_FL_CLEANUP_DIRS[@]} - 1; i >= 0; i--)); do
-    rmdir "${_FL_CLEANUP_DIRS[$i]}" 2>/dev/null || true
   done
 
   [[ "$_had_e" -eq 1 ]] && set -e
@@ -336,7 +363,11 @@ flashless_write_rootfs() {
     btrfs filesystem resize max "$resize_mnt" \
       || die "Target rootfs resize failed"
     sync -f "$resize_mnt" 2>/dev/null || sync
-    umount "$resize_mnt" 2>/dev/null || umount -l "$resize_mnt" 2>/dev/null
+    umount "$resize_mnt" 2>/dev/null || {
+      warn "WARNING: normal unmount failed after btrfs resize — falling back to lazy unmount"
+      warn "WARNING: data integrity may be compromised; verify rootfs after reboot"
+      umount -l "$resize_mnt" 2>/dev/null
+    }
     flashless_unregister_mount "$resize_mnt"
     rmdir "$resize_mnt" 2>/dev/null || true
   fi
@@ -469,11 +500,17 @@ flashless_restore_etc() {
   # Primarily the deck account, but carries over any non-system users.
   _flashless_migrate_passwords "$target_mnt"
 
+  cleanup_disk_space "$target_mnt" "repatch"
+
   # Persist project files to /home so scripts stay current
   ensure_project_persisted
 
   sync -f "$target_mnt" 2>/dev/null || sync
-  umount "$target_mnt" 2>/dev/null || umount -l "$target_mnt" 2>/dev/null
+  umount "$target_mnt" 2>/dev/null || {
+    warn "WARNING: normal unmount failed after /etc restore and password migration — falling back to lazy unmount"
+    warn "WARNING: data integrity may be compromised; verify rootfs after reboot"
+    umount -l "$target_mnt" 2>/dev/null
+  }
   flashless_unregister_mount "$target_mnt"
   rmdir "$target_mnt" 2>/dev/null || true
 
@@ -544,7 +581,11 @@ flashless_rebuild_boot() {
   reconcile_grub "$grub_root" "$FL_TARGET_EFI" "$FL_TARGET" \
     || die "reconcile_grub failed — kernel command line may be incomplete"
 
-  umount "$grub_root" 2>/dev/null || umount -l "$grub_root" 2>/dev/null
+  umount "$grub_root" 2>/dev/null || {
+    warn "WARNING: normal unmount failed after GRUB config writes — falling back to lazy unmount"
+    warn "WARNING: data integrity may be compromised; verify rootfs and GRUB config after reboot"
+    umount -l "$grub_root" 2>/dev/null
+  }
   flashless_unregister_mount "$grub_root"
   rmdir "$grub_root" 2>/dev/null || true
 
@@ -684,6 +725,7 @@ flashless_install() {
   trap 'flashless_cleanup' EXIT
 
   # Phase 1: detect + safety.
+  stage_header "preparing & validating"
   flashless_detect_slots
   flashless_safety_checks
 
@@ -692,6 +734,7 @@ flashless_install() {
   flashless_check_sizes
 
   # Phase 3: reset target partitions.
+  stage_header "deploying image to target"
   flashless_format_target
 
   # Phase 4: write rootfs (dd → flush → SHA256 verify → btrfstune → btrfs check → resize).
@@ -716,6 +759,7 @@ flashless_install() {
   flashless_verify_partsets
 
   # Phase 7: restore /etc state (manifest, os-release).
+  stage_header "configuring target system"
   flashless_restore_etc
 
   # Phase 8: rebuild boot environment via steamos-chroot.
@@ -725,6 +769,7 @@ flashless_install() {
   flashless_restore_rootfs_ro
 
   # Phase 10: final verification before activation.
+  stage_header "verification & activation"
   flashless_verify_final
 
   # Phase 11: activate target slot.

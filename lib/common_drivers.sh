@@ -42,6 +42,28 @@ nvidia_is_selected() {
   return 1
 }
 
+# Check if AMD GPU packages were selected for this build.
+# Returns 0 if AMD is selected, 1 if not.
+# Checks HW_AMD_REQUESTED (set by install_hw_libs) or falls back to
+# checking if vulkan-radeon is installed in the image.
+amd_is_selected() {
+  # Fast path: flag set by install_hw_libs
+  if [[ "${HW_AMD_REQUESTED:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  # Check HW_SUPPORT_ITEMS for AMD packages (used by validator)
+  if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then
+    if [[ " $HW_SUPPORT_ITEMS " == *" mesa "* || " $HW_SUPPORT_ITEMS " == *" vulkan-radeon "* ]]; then
+      return 0
+    fi
+  fi
+  # Fallback: check if vulkan-radeon is in the image
+  if [[ -n "${MNT:-}" ]] && pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" vulkan-radeon &>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
 # Discover kernel package in a rootfs's pacman local db.
 # Sets KPKG_DIR, KPKG_FULL, KPKG_NAME, KPKG_VERREL globals.
 # Args: $1 = root path
@@ -82,6 +104,9 @@ construct_hdr_url() {
   local jupiter_repo mirror
   jupiter_repo="$(awk -F'[][]' '/^\[jupiter-/{print $2; exit}' "$root/etc/pacman.conf")"
   mirror="$(awk '/^Server/{print $3; exit}' "$root/etc/pacman.d/mirrorlist")"
+
+  [[ -n "$jupiter_repo" ]] || die "construct_hdr_url: could not find jupiter repo in $root/etc/pacman.conf"
+  [[ -n "$mirror" ]]       || die "construct_hdr_url: could not find mirror in $root/etc/pacman.d/mirrorlist"
 
   HDR_URL="${mirror/\$repo/$jupiter_repo}"
   HDR_URL="${HDR_URL/\$arch/x86_64}/${KPKG_NAME}-headers-${KPKG_VERREL}-x86_64.pkg.tar.zst"
@@ -300,7 +325,11 @@ copy_driver_payload() {
     log "Payload packages: ${NEW_PKGS[*]}"
   fi
 
-  generate_payload_filelist "$filelist" "$workdir" "${NEW_PKGS[@]}"
+  if [[ ${#NEW_PKGS[@]} -gt 0 ]]; then
+    generate_payload_filelist "$filelist" "$workdir" "${NEW_PKGS[@]}"
+  else
+    : >"$filelist"
+  fi
   sed 's|^/||' "$filelist" >"$filelist_rel"
 
   log "Copying driver/hardware payload into target rootfs"
@@ -403,8 +432,10 @@ install_payload() {
     verify_built_modules "$MNT" "$KVER" die
   fi
 
-  log "Registering payload packages in the image's pacman db"
-  register_payload_pkgs "$MNT" "$UPPER" "${NEW_PKGS[@]}"
+  if [[ ${#NEW_PKGS[@]} -gt 0 ]]; then
+    log "Registering payload packages in the image's pacman db"
+    register_payload_pkgs "$MNT" "$UPPER" "${NEW_PKGS[@]}"
+  fi
 
   # Remove files and DB entries for packages that were replaced/removed in the
   # overlay transaction (e.g. linux-firmware-neptune-jupiter replaced by

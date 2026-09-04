@@ -72,7 +72,7 @@ nvidia_modules_valid() {
   fi
 
   # Validate each module via modinfo and print resolved paths
-  local _ok=0
+  local failed=0
   for mod in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
     if [[ "$root" == "/" ]]; then
       path="$(modinfo -k "$kver" -F filename "$mod" 2>/dev/null)" || true
@@ -83,11 +83,11 @@ nvidia_modules_valid() {
       log "  $mod -> $path"
     else
       log "  $mod -> MISSING"
-      _ok=1
+      failed=1
     fi
   done
 
-  return "$_ok"
+  return "$failed"
 }
 
 # Kernel modules explicitly built by this run.
@@ -164,7 +164,11 @@ _verify_module_files() {
 
     # Use the file directly rather than the module name, so this does not
     # depend on depmod having regenerated modules.dep yet.
-    vermagic="$(modinfo -F vermagic "$actual" 2>/dev/null || true)"
+    if [[ "$root" == "/" ]]; then
+      vermagic="$(modinfo -F vermagic "$actual" 2>/dev/null || true)"
+    else
+      vermagic="$(chroot "$root" modinfo -F vermagic "/${actual#"$root"}" 2>/dev/null || true)"
+    fi
     if [[ -z "$vermagic" ]]; then
       warn "Could not read module metadata: $actual"
       failed=1
@@ -182,7 +186,7 @@ _verify_module_files() {
     log "  ✓ ${module##*/}"
   done
 
-  if ((failed)); then
+  if [[ "$failed" -ne 0 ]]; then
     if [[ "$on_fail" == "die" ]]; then
       die "One or more kernel modules failed verification for $kver"
     fi
@@ -198,6 +202,14 @@ verify_built_modules() {
   local root="${1:?verify_built_modules: missing root}"
   local kver="${2:?verify_built_modules: missing kver}"
   local on_fail="${3:-warn}"
+
+  # Minimal kver format sanity check — reject empty or clearly invalid values
+  # before attempting per-module verification (which would otherwise produce
+  # confusing "not found" errors for every module).
+  if [[ ! "$kver" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    warn "verify_built_modules: invalid kernel version format: $kver"
+    return 1
+  fi
 
   ((${#BUILT_MODULE_FILES[@]} > 0)) || return 0
 

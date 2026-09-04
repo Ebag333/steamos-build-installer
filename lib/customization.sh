@@ -40,7 +40,7 @@ get_all_customization_items() {
   fi
 
   local module item default desc
-  while IFS='|' read -r module item default desc; do
+  while IFS='|' read -r module item default desc || [[ -n "$module" ]]; do
     [[ "$module" =~ ^#.*$ || -z "$module" ]] && continue
 
     # "always" items are unconditionally included
@@ -75,9 +75,9 @@ get_build_items() {
     return 1
   fi
 
-  local type name version default desc recipe
-  # shellcheck disable=SC2034 # desc skipped positionally so recipe lands in the correct variable
-  while IFS='|' read -r type name version default desc recipe; do
+  local type group name version default desc recipe
+  # shellcheck disable=SC2034 # group used only for positional alignment
+  while IFS='|' read -r type group name version default desc recipe || [[ -n "$type" ]]; do
     [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
     [[ -n "$type_filter" && "$type" != "$type_filter" ]] && continue
 
@@ -97,12 +97,13 @@ get_build_recipe() {
   local conf="$CUSTOMIZATION_DIR/configs/hw-packages.conf"
 
   if [[ ! -r "$conf" ]]; then
+    warn "Build config not found: $conf"
     return 1
   fi
 
-  local type name version default desc recipe
-  # shellcheck disable=SC2034 # desc skipped positionally so recipe lands in the correct variable
-  while IFS='|' read -r type name version default desc recipe; do
+  local type group name version default desc recipe
+  # shellcheck disable=SC2034 # group used only for positional alignment
+  while IFS='|' read -r type group name version default desc recipe || [[ -n "$type" ]]; do
     [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
     if [[ "$name" == "$item_name" ]]; then
       echo "$recipe"
@@ -129,9 +130,9 @@ get_build_item_version() {
     return 0
   fi
 
-  local type name version default desc recipe
-  # shellcheck disable=SC2034 # desc skipped positionally so recipe lands in the correct variable
-  while IFS='|' read -r type name version default desc recipe; do
+  local type group name version default desc recipe
+  # shellcheck disable=SC2034 # group used only for positional alignment
+  while IFS='|' read -r type group name version default desc recipe || [[ -n "$type" ]]; do
     [[ "$type" =~ ^#.*$ || -z "$type" ]] && continue
     if [[ "$name" == "$item_name" ]]; then
       echo "$version"
@@ -160,12 +161,14 @@ apply_customizations() {
   local root="${3:-}"
   local failed=0
 
+  set -f  # disable globbing for item name iteration
   for item in $items; do
     if ! apply_optimization_for_item "$item" "$mode" "$root"; then
       warn "Customization failed: $item"
       failed=1
     fi
   done
+  set +f  # re-enable globbing
 
   return $failed
 }

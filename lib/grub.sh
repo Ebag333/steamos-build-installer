@@ -489,6 +489,7 @@ reconcile_grub() {
   log "Mounting $label EFI: $efi_dev -> $(readlink -f "$efi_dev" 2>/dev/null || echo '<unresolved>')"
   mount "$efi_dev" "$EFIMNT" \
     || die "Could not mount EFI for $label"
+  track_mount "$EFIMNT"
 
   log "Target EFI mount: $(findmnt -rn -o SOURCE,FSTYPE,OPTIONS,TARGET "$EFIMNT" 2>/dev/null || echo '<unknown>')"
 
@@ -510,7 +511,13 @@ reconcile_grub() {
   _reconcile_grub_cleanup() {
     set +e
     umount_chroot_fs "$root" 2>/dev/null
-    umount "$EFIMNT" 2>/dev/null || umount -l "$EFIMNT" 2>/dev/null
+    if mountpoint -q "$EFIMNT" 2>/dev/null; then
+      log "ERR trap: attempting recursive unmount of $EFIMNT"
+      if ! umount -R "$EFIMNT" 2>/dev/null; then
+        log "ERR trap: recursive unmount failed, falling back to lazy unmount"
+        umount -Rl "$EFIMNT" 2>/dev/null || true
+      fi
+    fi
   }
   trap _reconcile_grub_cleanup ERR
 
@@ -534,7 +541,13 @@ reconcile_grub() {
   sync -f "$EFIMNT" 2>/dev/null || sync
 
   umount_chroot_fs "$root" strict
-  umount "$EFIMNT"
+  if mountpoint -q "$EFIMNT" 2>/dev/null; then
+    if ! umount -R "$EFIMNT" 2>/dev/null; then
+      warn "EFI unmount failed, falling back to lazy unmount"
+      umount -Rl "$EFIMNT" 2>/dev/null || true
+    fi
+  fi
+  untrack_mount "$EFIMNT"
 }
 
 # ── Compatibility wrappers ────────────────────────────────────────────────────

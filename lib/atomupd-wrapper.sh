@@ -247,6 +247,7 @@ install_self_into_target() {
   sync -f "$mnt/usr/bin/steamos-atomupd-client" 2>/dev/null || sync
   umount "$mnt" 2>/dev/null || {
     alog "ERROR: could not cleanly unmount $slot after wrapper propagation"
+    alog "WARNING: falling back to lazy unmount; data integrity may be compromised"
     umount -l "$mnt" 2>/dev/null || true
     rmdir "$mnt" 2>/dev/null || true
     return 1

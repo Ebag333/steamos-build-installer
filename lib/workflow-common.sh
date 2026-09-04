@@ -24,7 +24,7 @@ configure_desktop_session() {
   local root="${1:?configure_desktop_session: missing root}"
   local session="${2:-desktop}"
 
-  apply_system_config "default-session" "$root" "$session"
+  apply_system_config "default-session" "$root" "$session" || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,8 @@ run_custom_script() {
       log "Custom script completed successfully"
       return 0
     else
-      warn "Custom script exited with non-zero status (non-fatal)"
+      local _rc=$?
+      warn "Custom script exited with non-zero status $_rc (non-fatal)"
       return 0 # Non-fatal
     fi
   else
@@ -87,7 +88,8 @@ ensure_flatpak_service() {
   if [[ ! -f "$service_file" ]]; then
     local src_service="$script_dir/lib/configs/steamos-build-flatpak-install.service"
     if [[ -f "$src_service" ]]; then
-      mkdir -p "$(dirname "$service_file")"
+      mkdir -p "$(dirname "$service_file")" \
+        || { warn "ensure_flatpak_service: failed to create directory"; return 1; }
       cp "$src_service" "$service_file"
       log "    Installed service file"
     else
@@ -164,7 +166,7 @@ install_flatpak_packages() {
     fi
   done
 
-  return $rc
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -333,60 +335,6 @@ init_pacman_keyring() {
 }
 
 # ---------------------------------------------------------------------------
-# Root Filesystem Expansion
-# ---------------------------------------------------------------------------
-# Expand rootfs-A and rootfs-B to fill their partitions.
-# Used by: post-install, live workflows.
-
-resize_rootfs() {
-  log "Expanding root filesystems to fill partitions"
-
-  # Find all rootfs partitions (rootfs-A and rootfs-B)
-  local part
-  for part in /dev/disk/by-partsets/*/rootfs; do
-    [[ -b "$part" ]] || continue
-
-    local label
-    label="$(lsblk -no PARTLABEL "$part" 2>/dev/null || basename "$(readlink -f "$part")")"
-    echo "  Processing $label ($part)..."
-
-    # If this is the active root, expand it directly
-    if findmnt -n -o SOURCE / 2>/dev/null | grep -q "$(readlink -f "$part")"; then
-      echo "    Active root — expanding online"
-      btrfs filesystem resize max / 2>/dev/null \
-        || warn "Failed to expand active root"
-    else
-      # Inactive root — mount temporarily, expand, unmount
-      local tmpmnt
-      tmpmnt="$(mktemp -d /tmp/resize-XXXXXX)"
-      if mount -o ro "$part" "$tmpmnt" 2>/dev/null; then
-        # Check if it's read-only btrfs (subvolid=5)
-        if [[ "$(btrfs property get "$tmpmnt" ro 2>/dev/null)" == "ro=true" ]]; then
-          echo "    Inactive root is read-only (subvolid=5), skipping"
-        else
-          # Remount rw and expand
-          mount -o remount,rw "$tmpmnt" 2>/dev/null || true
-          echo "    Expanding inactive root"
-          btrfs filesystem resize max "$tmpmnt" 2>/dev/null \
-            || warn "Failed to expand inactive root"
-        fi
-        umount "$tmpmnt" 2>/dev/null || true
-      fi
-      rmdir "$tmpmnt" 2>/dev/null || true
-    fi
-  done
-
-  # Also expand the active root if we haven't already
-  if ! findmnt -n -o SOURCE / 2>/dev/null | grep -q "rootfs"; then
-    # Active root isn't on a partset path, try direct resize
-    btrfs filesystem resize max / 2>/dev/null || true
-  fi
-
-  log "Root filesystem expansion complete"
-  df -h / 2>/dev/null || true
-}
-
-# ---------------------------------------------------------------------------
 # Nvidia Power Services
 # ---------------------------------------------------------------------------
 # Enables nvidia power management services.
@@ -461,64 +409,6 @@ EOF
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# SteamOS Read-Only Mode
-# ---------------------------------------------------------------------------
-# Disable/enable SteamOS read-only filesystem protection.
-# Used by: post-install, live pipeline, build workflows.
 
-disable_steamos_readonly() {
-  if command -v steamos-readonly >/dev/null 2>&1; then
-    log "Disabling SteamOS read-only mode"
-    steamos-readonly disable || true
-  fi
-}
 
-enable_steamos_readonly() {
-  if command -v steamos-readonly >/dev/null 2>&1; then
-    log "Re-enabling SteamOS read-only mode"
-    steamos-readonly enable || true
-  fi
-}
 
-# ---------------------------------------------------------------------------
-# Disk Cleanup
-# ---------------------------------------------------------------------------
-# Clean pacman cache, temp files, and journal logs.
-# Used by: post-install, live pipeline.
-
-cleanup_disk_space() {
-  local root="${1:-/}"
-
-  log "Cleaning up disk space"
-
-  if [[ "$root" == "/" ]]; then
-    pacman_clean_cache --host 2>/dev/null || warn "pacman cache cleanup failed"
-  else
-    pacman_clean_cache --chroot 2>/dev/null || warn "pacman cache cleanup failed"
-  fi
-
-  rm -rf /tmp/* 2>/dev/null || true
-  journalctl --vacuum-size=50M 2>/dev/null || warn "journal cleanup failed"
-
-  local freed
-  freed="$(df -m / | awk 'NR==2{print $4}')"
-  log "Cleanup complete — ${freed}MB free on /"
-}
-
-# ---------------------------------------------------------------------------
-# User Password
-# ---------------------------------------------------------------------------
-# Set user password (interactive).
-# Used by: post-install, live pipeline.
-
-set_user_password() {
-  if passwd -S deck 2>/dev/null | grep -q "P"; then
-    log "User 'deck' already has a password set"
-    return 0
-  fi
-  log "Setting user password"
-  echo ""
-  echo "Enter a new password for the 'deck' user:"
-  passwd deck
-}

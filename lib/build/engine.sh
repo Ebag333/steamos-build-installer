@@ -311,10 +311,10 @@ install_build_artifact() {
   log "Installing $(basename "$pkg") into $root"
 
   if [[ "$root" == "/" ]]; then
-    pacman -U --noconfirm --needed "$pkg" || die "Failed to install $pkg"
+    pacman_install_local --needed -- "$pkg" || die "Failed to install $pkg"
   else
     cp "$pkg" "$root/tmp/"
-    chroot "$root" pacman --config "${PACCONF:-/etc/pacman.conf}" -U --noconfirm "/tmp/$(basename "$pkg")" || {
+    _pacman_retry chroot "$root" pacman --config "${PACCONF:-/etc/pacman.conf}" -U --noconfirm "/tmp/$(basename "$pkg")" || {
       rm -f "$root/tmp/$(basename "$pkg")"
       die "Failed to install $pkg into chroot"
     }

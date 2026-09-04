@@ -31,8 +31,16 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 MODE="interactive" # interactive | install | check-only
-[[ "${1:-}" == "--install" ]] && MODE="install"
-[[ "${1:-}" == "--check-only" ]] && MODE="check-only"
+case "${1:-}" in
+  --install)    MODE="install" ;;
+  --check-only) MODE="check-only" ;;
+  "")           ;;  # no argument, keep default
+  *)
+    echo "Unknown option: $1" >&2
+    echo "Usage: $0 [--install | --check-only]" >&2
+    exit 1
+    ;;
+esac
 
 HAS_PERMS="no"
 if [[ $EUID -eq 0 ]]; then
@@ -92,7 +100,7 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
   echo "  - Docker with --privileged (partial support)"
   echo ""
   if [[ "$MODE" != "check-only" ]]; then
-    read -rp "Continue anyway? [y/N]: " wsl_continue
+    read -rp "Continue anyway? [y/N]: " wsl_continue || { echo "Aborted."; exit 1; }
     [[ "$wsl_continue" =~ ^[Yy] ]] || exit 1
   fi
 fi
@@ -100,7 +108,7 @@ fi
 REQUIRED_TOTAL=${#REQUIRED[@]}
 REQUIRED_PASSED=0
 
-for cmd in $(echo "${!REQUIRED[@]}" | tr ' ' '\n' | sort); do
+while IFS= read -r cmd; do
   pkg="${REQUIRED[$cmd]}"
   if command -v "$cmd" >/dev/null 2>&1; then
     ((++REQUIRED_PASSED))
@@ -108,12 +116,12 @@ for cmd in $(echo "${!REQUIRED[@]}" | tr ' ' '\n' | sort); do
     echo -e "  ${RED}✗${NC} $cmd ($pkg)"
     MISSING_REQUIRED+=("$pkg")
   fi
-done
+done < <(printf '%s\n' "${!REQUIRED[@]}" | sort)
 
 OPTIONAL_TOTAL=${#OPTIONAL[@]}
 OPTIONAL_PASSED=0
 
-for cmd in $(echo "${!OPTIONAL[@]}" | tr ' ' '\n' | sort); do
+while IFS= read -r cmd; do
   IFS=':' read -r pkg desc <<<"${OPTIONAL[$cmd]}"
   if command -v "$cmd" >/dev/null 2>&1; then
     ((++OPTIONAL_PASSED))
@@ -121,7 +129,7 @@ for cmd in $(echo "${!OPTIONAL[@]}" | tr ' ' '\n' | sort); do
     echo -e "  ${YELLOW}○${NC} $cmd ($desc)"
     MISSING_OPTIONAL+=("$pkg")
   fi
-done
+done < <(printf '%s\n' "${!OPTIONAL[@]}" | sort)
 
 echo ""
 
@@ -188,7 +196,7 @@ echo ""
 
 # ---- check-only mode: exit with error if required missing ----
 if [[ "$MODE" == "check-only" ]]; then
-  exit ${#REQUIRED_PKGS[@]}
+  exit 1
 fi
 
 # ---- install mode: skip prompt ----
@@ -207,7 +215,7 @@ echo "  1) Yes (all)       — install required + optional"
 echo "  2) Yes (required)  — install required only"
 echo "  3) No              — exit without installing"
 echo ""
-read -rp "Choice [1/2/3]: " choice
+read -rp "Choice [1/2/3]: " choice || { echo "Aborted."; exit 1; }
 
 case "$choice" in
   1)

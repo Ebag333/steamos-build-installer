@@ -242,7 +242,7 @@ flash_preflight() {
     if [[ -n "$ws_dev" ]]; then
       local ws_disk
       ws_disk="$(lsblk -no PKNAME "$ws_dev" 2>/dev/null | head -1)" || true
-      if [[ "/dev/$ws_disk" == "$target" ]]; then
+      if [[ -n "$ws_disk" && "/dev/$ws_disk" == "$target" ]]; then
         target_system_ok=0
       fi
     fi
@@ -317,7 +317,9 @@ flash_preflight() {
     mount_count="$(findmnt -rn -S "$target" 2>/dev/null | wc -l)"
     for child in "$target"*; do
       [[ -b "$child" ]] || continue
-      mount_count=$((mount_count + $(findmnt -rn -S "$child" 2>/dev/null | wc -l)))
+      local _c
+      _c="$(findmnt -rn -S "$child" 2>/dev/null | wc -l)" || _c=0
+      mount_count=$((mount_count + _c))
     done
     echo "  Mounted:     $mount_count partition(s) — will auto-unmount"
   fi
@@ -500,6 +502,7 @@ flash_write() {
 
   # Write the image.  pv is preferred for progress, but dd can report
   # progress itself if pv is unavailable.
+  stage_header "flash write"
   echo ""
 
   # Compute source checksum BEFORE writing so we verify against the exact
@@ -529,7 +532,7 @@ flash_write() {
 
     while IFS="" read -r pct; do
       [[ "$pct" =~ ^[0-9]+$ ]] || continue
-      ((pct == last_pct)) && continue
+      [[ "$pct" -eq "$last_pct" ]] && continue
       last_pct=$pct
       printf '%s\n' "@@PROGRESS:$pct@@"
     done <"$flash_fifo"
@@ -540,17 +543,24 @@ flash_write() {
     }
     rm -f "$flash_fifo"
   else
+    local dd_exit=0
     dd if="$img" of="$target" bs="$bs" status=progress conv=fsync oflag=sync 2>&1 \
-      | while IFS="" read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+bytes ]]; then
-          local written="${BASH_REMATCH[1]}"
-          local pct=$((written * 100 / img_bytes))
-          ((pct == last_pct)) && continue
-          ((pct > 100)) && pct=100
-          last_pct=$pct
-          printf '%s\n' "@@PROGRESS:$pct@@"
-        fi
-      done
+      > >(while IFS="" read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+bytes ]]; then
+              local written="${BASH_REMATCH[1]}"
+              local pct=$((written * 100 / img_bytes))
+              [[ "$pct" -eq "$last_pct" ]] && continue
+              [[ "$pct" -gt 100 ]] && pct=100
+              last_pct=$pct
+              printf '%s\n' "@@PROGRESS:$pct@@"
+            else
+              # Let dd error/status lines through to stderr
+              printf '%s\n' "$line" >&2
+            fi
+          done) || dd_exit=$?
+    if [[ "$dd_exit" -ne 0 ]]; then
+      die "Flash write failed (dd exited with code $dd_exit)"
+    fi
   fi
 
   echo "Syncing image data..."
@@ -562,6 +572,9 @@ flash_write() {
 
   # Verify the raw write BEFORE any post-write modifications.
   flash_verify_raw "$img" "$target" "$img_bytes" "$img_hash" || return 1
+
+  echo ""
+  stage_header "flash finalize"
 
   # Raw disk images carry their backup GPT at the end of the IMAGE.  When that
   # image is written to a larger USB stick, the copied backup GPT remains at

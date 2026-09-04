@@ -12,14 +12,17 @@ if [[ $EUID -eq 0 ]]; then
 else
   LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-build/logs"
 fi
-mkdir -p "$LOGDIR" /home/.steamos-build/recovery
-chmod 777 /home/.steamos-build/recovery 2>/dev/null || true
+mkdir -p "$LOGDIR"
+if [[ $EUID -eq 0 ]]; then
+  mkdir -p /home/.steamos-build/recovery
+  chmod 755 /home/.steamos-build/recovery 2>/dev/null || true
+fi
 
 LOG="$LOGDIR/update-$(date +%Y%m%d-%H%M%S)-$$.log"
-ln -sfn "$(basename "$LOG")" "$LOGDIR/update-latest.log"
+ln -sfn "$LOG" "$LOGDIR/update-latest.log"
 
 ulog() {
-  echo "[steamos-build-update] $*" | tee -a "$LOG" >&2
+  printf '[steamos-build-update] %s\n' "$*" | tee -a "$LOG" >&2
   logger -t steamos-build-update -- "$*" 2>/dev/null || true
 }
 

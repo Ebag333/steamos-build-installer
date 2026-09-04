@@ -387,7 +387,6 @@ _install_arch_hw_manifest() {
   fi
 
   txn_id="$$-$RANDOM"
-  local arch_pkgdir_chroot arch_pkgdir_host
   local needs_umount=0
 
   if _is_install_chroot; then
@@ -527,8 +526,7 @@ _install_arch_hw_manifest_batch() {
   local -n _ab_pkgs="$2"
   local -n _ab_targets="$3"
   local -n _ab_descs="$4"
-  local pkg quoted_targets
-  local txn_id arch_pkgdir_host arch_pkgdir_chroot
+  local pkg quoted_targets txn_id arch_pkgdir_host arch_pkgdir_chroot
   local has_linux_firmware=0
   local -a targets=("${_ab_targets[@]}")
   local -a pkgs=("${_ab_pkgs[@]}")
@@ -553,7 +551,6 @@ _install_arch_hw_manifest_batch() {
   fi
 
   txn_id="$$-$RANDOM"
-  local arch_pkgdir_chroot arch_pkgdir_host
   local needs_umount=0
 
   if _is_install_chroot; then
@@ -686,9 +683,13 @@ _install_pacman_hw_batch() {
   local -a preflight_extra_args=()
   local -a preflight_provider_targets=()
 
-  if ! pacman_preflight_with_fallback targets effective_mode preflight_extra_args preflight_provider_targets "$interactive"; then
-    warn "Pre-flight: user cancelled or unresolvable conflicts"
-    return 1
+  if [[ "${PREFLIGHT:-1}" -eq 1 ]]; then
+    if ! pacman_preflight_with_fallback targets effective_mode preflight_extra_args preflight_provider_targets "$interactive"; then
+      warn "Pre-flight: user cancelled or unresolvable conflicts"
+      return 1
+    fi
+  else
+    warn "Pre-flight: skipped (PREFLIGHT=0) — installing all ${#targets[@]} package(s) without conflict checks"
   fi
 
   if ((${#targets[@]} == 0)); then
@@ -951,6 +952,7 @@ install_hw_libs() {
   HW_FAILED_PKGS=()
   HW_FAILED_SOURCES=()
   HW_NVIDIA_REQUESTED=0
+  HW_AMD_REQUESTED=0
 
   # Collect packages by source for batch installation
   local -a _pacman_pkgs=() _pacman_targets=() _pacman_descs=() _pacman_recipes=()
@@ -1014,6 +1016,7 @@ install_hw_libs() {
         _pacman_descs+=("$desc")
         _pacman_recipes+=("$recipe")
         [[ "$pkg" == "nvidia-open-dkms" ]] && HW_NVIDIA_REQUESTED=1
+        [[ "$pkg" == "vulkan-radeon" ]] && HW_AMD_REQUESTED=1
         ;;
       build-recipe)
         [[ -n "${_seen_br_pkg[$pkg]:-}" ]] && continue
@@ -1021,6 +1024,7 @@ install_hw_libs() {
         _br_names+=("$pkg")
         _br_recipes+=("$recipe")
         _br_versions+=("$version")
+        [[ "$pkg" == "nvidia-open-dkms" ]] && HW_NVIDIA_REQUESTED=1
         ;;
       flatpak)
         [[ -n "${_seen_fp_pkg[$pkg]:-}" ]] && continue
@@ -1198,6 +1202,33 @@ install_hw_libs() {
     log "NVIDIA not requested — skipping nvidia driver verification"
   fi
 
+  # AMD verification: check that mesa and vulkan-radeon are installed if AMD was requested.
+  if ((HW_AMD_REQUESTED)); then
+    if _is_install_chroot; then
+      log "AMD verification: checking mesa and vulkan-radeon packages"
+      local _amd_pkgs=("mesa" "vulkan-radeon")
+      local _amd_missing=0
+      for _pkg in "${_amd_pkgs[@]}"; do
+        local _amd_ver
+        _amd_ver="$(_run_in_root "pacman -Q '$_pkg' 2>/dev/null" | awk '{print $2}' || true)"
+        if [[ -n "$_amd_ver" ]]; then
+          log "    ✓ $_pkg $_amd_ver installed"
+        else
+          warn "    $_pkg was selected but is not registered as installed"
+          HW_FAILED_PKGS+=("$_pkg")
+          ((_amd_missing++))
+        fi
+      done
+      if ((_amd_missing)); then
+        warn "AMD verification: $_amd_missing package(s) missing"
+      else
+        log "AMD packages validated: mesa and vulkan-radeon installed"
+      fi
+    fi
+  else
+    log "AMD not requested — skipping AMD driver verification"
+  fi
+
   log "Driver and hardware support installation complete"
 }
 
@@ -1244,8 +1275,14 @@ verify_hw_libs() {
 
   # If no packages specified, determine what should be installed
   if [[ -z "$packages" ]]; then
-    # Required packages are always expected
-    packages="dkms nvidia-open-dkms nvidia-utils lib32-nvidia-utils"
+    # Determine packages based on which GPU vendor is selected
+    if nvidia_is_selected; then
+      packages="dkms nvidia-open-dkms nvidia-utils lib32-nvidia-utils"
+    elif amd_is_selected; then
+      packages="mesa vulkan-radeon"
+    else
+      packages=""
+    fi
 
     # Add optional packages if HW_SUPPORT_ITEMS is set
     if [[ -n "${HW_SUPPORT_ITEMS:-}" ]]; then

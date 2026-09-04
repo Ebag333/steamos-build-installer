@@ -385,6 +385,23 @@ finalize() {
       rm -f "$WORKDIR"/overlay-work.img
     fi
     rm -f "$WORKDIR"/.steamos-build-overlay-cache-key
+
+    # Safe removal helper: skip directories that are still mountpoints.
+    # If cleanup() partially failed, a directory may still be a live mount;
+    # rm -rf on a mounted directory traverses into it and can destroy host
+    # filesystem entries (e.g. /dev/snd audio devices through an overlay).
+    _safe_rmdir() {
+      local dir="$1"
+      if [[ ! -e "$dir" ]]; then
+        return 0
+      fi
+      if mountpoint -q "$dir" 2>/dev/null; then
+        warn "$dir is still mounted — skipping removal"
+        return 0
+      fi
+      rm -rf "$dir"
+    }
+
     if mountpoint -q "$WORKDIR/overlay-mnt" 2>/dev/null; then
       warn "overlay-mnt is still mounted — attempting unmount"
       if umount "$WORKDIR/overlay-mnt" 2>/dev/null; then
@@ -396,12 +413,12 @@ finalize() {
     else
       rm -rf "$WORKDIR"/overlay-mnt
     fi
-    rm -rf "$WORKDIR"/merged
-    rm -rf "$WORKDIR"/upper
-    rm -rf "$WORKDIR"/ovlwork
-    rm -rf "${WORKDIR:?}"/mnt
-    rm -rf "$WORKDIR"/efi
-    rm -rf "${WORKDIR:?}"/home
+    _safe_rmdir "$WORKDIR/merged"
+    _safe_rmdir "$WORKDIR/upper"
+    _safe_rmdir "$WORKDIR/ovlwork"
+    _safe_rmdir "${WORKDIR:?}/mnt"
+    _safe_rmdir "$WORKDIR/efi"
+    _safe_rmdir "${WORKDIR:?}/home"
     rm -f "$WORKDIR"/*.building
     rm -f "$WORKDIR"/*.building.src-fingerprint
     rm -f "$WORKDIR"/pkgs-before.txt

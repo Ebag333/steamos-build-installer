@@ -89,7 +89,7 @@ EOF
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [[ "${args[$i]}" == "--config" ]]; then
-    ((i + 1 < ${#args[@]})) || {
+    [[ $((i + 1)) -lt ${#args[@]} ]] || {
       echo "--config requires a value" >&2
       exit 2
     }
@@ -187,7 +187,9 @@ flash_discover_images() {
   ((${#found[@]})) || return 0
 
   # TSV: path, location, human size, modified epoch, modified display
-  printf '%s\n' "${found[@]}" | sort -u | while IFS="" read -r f; do
+  local _sorted
+  _sorted="$(printf '%s\n' "${found[@]}" | sort -u)"
+  while IFS="" read -r f; do
     local where
     case "$f" in
       /dev/shm/*) where="RAM build" ;;
@@ -201,7 +203,7 @@ flash_discover_images() {
       "$(du -h "$f" | cut -f1)" \
       "$(stat -c '%Y' "$f")" \
       "$(date -r "$f" '+%Y-%m-%d %H:%M:%S')"
-  done | sort -t$'\t' -k4,4nr
+  done <<< "$_sorted" | sort -t$'\t' -k4,4nr
 }
 
 flash_validate_image() {
@@ -389,7 +391,7 @@ backend_build() {
   # shellcheck disable=SC2034
   LOOPDEV=""
   local _trap_rc
-  _cleanup_done=0
+  local _cleanup_done=0
   trap '_trap_rc=$?; trap - EXIT; set +e; [[ "${_cleanup_done:-0}" -eq 0 ]] && cleanup; exit "$_trap_rc"' EXIT
 
   : "${UPSTREAM_DRIVER_REF:=master}"
@@ -470,6 +472,8 @@ EOF
 }
 
 validate_cleanup() {
+  local _had_e=0
+  [[ -o errexit ]] && _had_e=1
   set +e
   # Unmount var before rootfs-A (reverse order)
   if [[ -n "$VALIDATE_MNT" ]] && mountpoint -q "$VALIDATE_MNT/var" 2>/dev/null; then
@@ -485,7 +489,7 @@ validate_cleanup() {
   # Remove udev guard and reload
   rm -f "$VALIDATE_UDEV_RULE" 2>/dev/null
   udevadm control --reload-rules 2>/dev/null
-  set -e
+  [[ "$_had_e" -eq 1 ]] && set -e
 }
 
 backend_validate() {
@@ -573,7 +577,7 @@ backend_validate() {
     fi
   fi
 
-  return $rc
+  return "$rc"
 }
 
 backend_live() {

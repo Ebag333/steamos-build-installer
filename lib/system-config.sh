@@ -38,7 +38,7 @@ apply_system_config() {
 verify_system_config() {
   local item="${1:?verify_system_config: missing item name}"
   local root="${2:?verify_system_config: missing root}"
-  local expected="${3:-}"
+  local expected="${3:?verify_system_config: missing expected value}"
 
   case "$item" in
     variant) _verify_variant "$root" "$expected" ;;
@@ -59,7 +59,7 @@ read_system_config() {
     variant) _read_variant "$root" ;;
     update-branch) _read_update_branch "$root" ;;
     default-session) _read_default_session "$root" ;;
-    *) echo "" ;;
+    *) warn "Unknown system config: $item"; echo "" ;;
   esac
 }
 
@@ -73,6 +73,11 @@ read_system_config() {
 _apply_update_branch() {
   local root="${1:?_apply_update_branch: missing root}"
   local branch="${2:?_apply_update_branch: missing branch}"
+
+  if [[ ! "$branch" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    warn "_apply_update_branch: invalid branch name '$branch'"
+    return 1
+  fi
 
   # ── 1) manifest.json (both lib paths) ────────────────────────────────────
   local manifest_path
@@ -92,7 +97,7 @@ _apply_update_branch() {
     if grep -q "^STEAMOS_DEFAULT_UPDATE_BRANCH=" "$os_release"; then
       sed -i "s/^STEAMOS_DEFAULT_UPDATE_BRANCH=.*/STEAMOS_DEFAULT_UPDATE_BRANCH=$branch/" "$os_release"
     else
-      echo "STEAMOS_DEFAULT_UPDATE_BRANCH=$branch" >>"$os_release"
+      printf '\nSTEAMOS_DEFAULT_UPDATE_BRANCH=%s\n' "$branch" >>"$os_release"
     fi
     log "  Set STEAMOS_DEFAULT_UPDATE_BRANCH=$branch in /etc/os-release"
   else
@@ -111,6 +116,11 @@ _apply_update_branch() {
 _apply_variant() {
   local root="${1:?_apply_variant: missing root}"
   local variant="${2:?_apply_variant: missing variant}"
+
+  if [[ ! "$variant" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    warn "_apply_variant: invalid variant name '$variant'"
+    return 1
+  fi
 
   # ── 1) manifest.json ─────────────────────────────────────────────────────
   # Both /usr/lib/ and /usr/lib64/ copies exist as regular files;
@@ -132,7 +142,7 @@ _apply_variant() {
     if grep -q "^VARIANT_ID=" "$os_release"; then
       sed -i "s/^VARIANT_ID=.*/VARIANT_ID=$variant/" "$os_release"
     else
-      echo "VARIANT_ID=$variant" >>"$os_release"
+      printf '\nVARIANT_ID=%s\n' "$variant" >>"$os_release"
     fi
     log "  Set VARIANT_ID=$variant in /etc/os-release"
   else

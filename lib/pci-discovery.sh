@@ -44,7 +44,8 @@ get_bound_driver() {
   local devdir="$1"
   local driver_link="$devdir/driver"
   if [[ -L "$driver_link" ]]; then
-    basename "$(readlink "$driver_link")" 2>/dev/null || echo "-"
+    local _target
+    _target="$(readlink "$driver_link" 2>/dev/null)" && basename "$_target" || echo "-"
   else
     echo "-"
   fi
@@ -65,14 +66,15 @@ get_bound_module() {
   local devdir="$1"
   local mod_link="$devdir/driver/module"
   if [[ -L "$mod_link" ]]; then
-    basename "$(readlink -f "$mod_link")" 2>/dev/null || echo ""
+    local _target
+    _target="$(readlink -f "$mod_link" 2>/dev/null)" && basename "$_target" || echo ""
   fi
 }
 
 # Enumerate PCI devices and their matching kernel modules.
 # Args: $1 = kernel version (KVER)
 # Output: tab-separated lines with header:
-#   PCI  CLASS  CLASS_TYPE  DEVICE  BOUND_DRIVER  MODULE  MODULE_DESCRIPTION
+#   PCI  CLASS  CATEGORY  DEVICE  BOUND_DRIVER  MODULE  MODULE_DESCRIPTION
 pci_discover_modules() {
   local kver="${1:?pci_discover_modules: missing kernel version}"
 

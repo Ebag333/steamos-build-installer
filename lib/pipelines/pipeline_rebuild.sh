@@ -57,12 +57,18 @@ repatch_cleanup() {
 
   # Unmount EFI if mounted
   if mountpoint -q "$NEWROOT/efi" 2>/dev/null; then
-    umount -R "$NEWROOT/efi" 2>/dev/null || umount -Rl "$NEWROOT/efi" 2>/dev/null
+    if ! umount -R "$NEWROOT/efi" 2>/dev/null; then
+      warn "repatch_cleanup: regular unmount of $NEWROOT/efi failed, falling back to lazy"
+      umount -Rl "$NEWROOT/efi" 2>/dev/null || true
+    fi
   fi
 
   # Unmount workspace
   if [[ -n "${WORK:-}" ]] && mountpoint -q "$WORK" 2>/dev/null; then
-    umount "$WORK" 2>/dev/null || umount -l "$WORK" 2>/dev/null
+    if ! umount "$WORK" 2>/dev/null; then
+      warn "repatch_cleanup: regular unmount of $WORK failed, falling back to lazy"
+      umount -l "$WORK" 2>/dev/null || true
+    fi
   fi
 
   # Detach workspace loop device
@@ -73,7 +79,10 @@ repatch_cleanup() {
 
   # Unmount target rootfs
   if [[ -n "${NEWROOT:-}" ]] && mountpoint -q "$NEWROOT" 2>/dev/null; then
-    umount -R "$NEWROOT" 2>/dev/null || umount -Rl "$NEWROOT" 2>/dev/null
+    if ! umount -R "$NEWROOT" 2>/dev/null; then
+      warn "repatch_cleanup: regular unmount of $NEWROOT failed, falling back to lazy"
+      umount -Rl "$NEWROOT" 2>/dev/null || true
+    fi
   fi
 
   # Clean up temporary directories
@@ -104,6 +113,7 @@ register_rebuild_cleanup() {
 
 # Phase: Mount target rootfs
 phase_rebuild_mount() {
+  stage_header "prepare target"
   # Run boot diagnostics
   if declare -F diagnose_boot_layout >/dev/null 2>&1; then
     diagnose_boot_layout "$PARTSET"
@@ -253,6 +263,7 @@ phase_rebuild_discover() {
 
 # Phase: System upgrade (pacman -Syu directly on target)
 phase_rebuild_sysupgrade() {
+  stage_header "system upgrade"
   # Generate machine-id if invalid — systemd-tmpfiles needs it to expand %m
   # EUCLEAN ("Structure needs cleaning") means invalid format, not just empty
   # This is temporary for build-time; restored during finalization
@@ -308,6 +319,7 @@ phase_rebuild_sysupgrade() {
 
 # Phase: Create overlay chroot
 phase_rebuild_overlay() {
+  stage_header "install drivers"
   # Prepare temporary ext4 overlay workspace
   log "Preparing temporary ext4 overlay workspace"
 
@@ -424,6 +436,7 @@ phase_rebuild_install() {
 
 # Phase: Configure system and GRUB
 phase_rebuild_configure() {
+  stage_header "finalize & verify"
   # Reconcile initramfs
   step "Restoring module autoloading in initramfs"
   reconcile_initramfs "$NEWROOT" "$KVER" "${INITRAMFS_MODULES:-}"
@@ -476,6 +489,9 @@ phase_rebuild_reconcile() {
 
   # Run custom script
   run_custom_script "$NEWROOT"
+
+  # Free disk space before GRUB reconciliation
+  cleanup_disk_space "$NEWROOT" "repatch"
 
   # Run final diagnostics
   if declare -F diagnose_boot_state >/dev/null 2>&1; then

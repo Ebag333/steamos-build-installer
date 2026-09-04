@@ -83,6 +83,7 @@ _validate_skip() {
 # ---------------------------------------------------------------------------
 
 phase_validate_discover() {
+  stage_header "discovery"
   local root="${VALIDATE_ROOT:-/}"
 
   log "Validation target: $root"
@@ -122,6 +123,7 @@ phase_validate_discover() {
 # ---------------------------------------------------------------------------
 
 phase_validate_run() {
+  stage_header "validation"
   local root="${OPT_ROOT:-/}"
 
   log "Running validation checks"
@@ -994,6 +996,7 @@ _validate_is_selected() {
 # ---------------------------------------------------------------------------
 
 phase_validate_report() {
+  stage_header "report"
   # If a config was loaded, cross-reference results against config selections.
   # Items not selected in the config are overridden to SKIP.
   if [[ "$_VALIDATE_HAS_CONFIG" -eq 1 ]]; then

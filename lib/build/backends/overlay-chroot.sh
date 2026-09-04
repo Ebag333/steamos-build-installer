@@ -230,6 +230,10 @@ _build_overlay_force_destroy_root() {
   local build_dir="${1:?}"
 
   [[ -d "$build_dir" ]] || return 0
+  [[ -d "$build_dir/merged" ]] || {
+    warn "_build_overlay_force_destroy_root: $build_dir does not look like a build root (no merged/)"
+    return 1
+  }
 
   warn "  Force destroying build root: $build_dir" >&2
 
@@ -254,7 +258,9 @@ _build_overlay_force_destroy_root() {
     "$merged"; do
     [[ -e "$m" ]] || continue
     if mountpoint -q "$m" 2>/dev/null; then
-      umount -l "$m" 2>/dev/null || true
+        warn "  Force unmounting (lazy): $m"
+        umount -l "$m" 2>/dev/null || true
+        untrack_mount "$m" 2>/dev/null || true
     fi
   done
 
@@ -266,11 +272,22 @@ _build_overlay_force_destroy_root() {
   # Detach loop devices
   local loops=""
   if [[ -f "$ovl_img" ]]; then
+    sync 2>/dev/null || true
     loops="$(losetup -j "$ovl_img" 2>/dev/null | cut -d: -f1)"
     while IFS="" read -r loop; do
       [[ -n "$loop" ]] || continue
       losetup -d "$loop" 2>/dev/null || true
     done <<<"$loops"
+  fi
+
+  # Verify loops are actually gone
+  if [[ -f "$ovl_img" ]]; then
+    local remaining_loops
+    remaining_loops="$(losetup -j "$ovl_img" 2>/dev/null | cut -d: -f1)"
+    if [[ -n "$remaining_loops" ]]; then
+      warn "  Force destroy: loop devices still attached to $ovl_img:"
+      printf '    %s\n' "$remaining_loops" >&2
+    fi
   fi
 
   # Force remove build directory
@@ -293,16 +310,18 @@ _build_overlay_sync_root() {
   cp "$pacman_conf" "$root/etc/pacman.conf"
 
   # Pre-flight: resolve known package conflicts before syncing
-  if ! pacman_upgrade_preflight "Build root sync" --root "$root"; then
-    return 0
+  if [[ "${PREFLIGHT:-1}" -eq 1 ]]; then
+    if ! pacman_upgrade_preflight "Build root sync" --root "$root"; then
+      return 0
+    fi
+  else
+    warn "Pre-flight: skipped (PREFLIGHT=0) — proceeding without conflict checks"
   fi
 
   # Refresh package database (Valve repos are required, Arch repos are optional)
   # Phase 4 already performed pacman -Syu; only refresh databases here.
   local sync_output
-  sync_output="$(chroot "$root" pacman -Sy --noconfirm --ask=4 \
-    > >(_pacman_filter_stdout) \
-    2> >(tee -a "${PACMAN_RAW_LOG:-/dev/null}" | _pacman_filter_stderr >&2))" || true
+  sync_output="$(pacman_sync_db --config "$pacman_conf" --root "$root")" || true
 
   # Check if at least the Valve repos synced
   if echo "$sync_output" | grep -q "core-3.8\|holo-3.8\|jupiter-3.8"; then
@@ -317,7 +336,7 @@ _build_overlay_sync_root() {
     sed -i '/^\[extra\]/,/^\[/ { /^\[extra\]/d; /^Server.*geo.mirror.pkgbuild.com/d; }' "$root/etc/pacman.conf"
     sed -i '/^\[multilib\]/,/^\[/ { /^\[multilib\]/d; /^Server.*geo.mirror.pkgbuild.com/d; }' "$root/etc/pacman.conf"
 
-    sync_output="$(chroot "$root" pacman -Sy 2>&1)" || true
+    sync_output="$(_pacman_retry chroot "$root" pacman -Sy 2>&1)" || true
     mv "$conf_backup" "$root/etc/pacman.conf"
 
     if echo "$sync_output" | grep -q "core-3.8\|holo-3.8\|jupiter-3.8"; then

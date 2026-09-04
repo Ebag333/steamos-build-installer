@@ -29,6 +29,7 @@ register_live_pipeline() {
 }
 
 phase_live_validate() {
+  stage_header "preparation"
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     warn "Live configuration requires root privileges"
     return 1
@@ -117,18 +118,18 @@ phase_live_validate() {
 
 phase_live_prepare() {
   if [[ -z "${config_root:-}" || "${config_root:-}" == "/" ]]; then
-    if command -v steamos-readonly >/dev/null 2>&1; then
-      log "Disabling SteamOS read-only mode"
-      steamos-readonly disable || true
-    fi
+    disable_steamos_readonly
   else
     ensure_rootfs_writable "$config_root"
   fi
+
+  set_user_password
 
   return 0
 }
 
 phase_live_sysupgrade() {
+  stage_header "system update"
   local root="${config_root:-/}"
 
   # Only run system upgrade if base OS mode is "upgrade" (matches build behavior)
@@ -145,7 +146,12 @@ phase_live_sysupgrade() {
   if [[ "$root" == "/" ]]; then
     # Running on the live system itself
     log "Running system upgrade on live system"
-    if pacman_upgrade_preflight "System upgrade" --host; then
+    if [[ "${PREFLIGHT:-1}" -eq 1 ]]; then
+      if pacman_upgrade_preflight "System upgrade" --host; then
+        pacman_upgrade_all || warn "System upgrade failed (non-fatal)"
+      fi
+    else
+      warn "Pre-flight: skipped (PREFLIGHT=0) — proceeding without conflict checks"
       pacman_upgrade_all || warn "System upgrade failed (non-fatal)"
     fi
   else
@@ -178,6 +184,7 @@ phase_live_sysupgrade() {
 }
 
 phase_live_install() {
+  stage_header "driver installation"
   local root="${config_root:-/}"
 
   install_hw_libs
@@ -218,17 +225,17 @@ phase_live_configure() {
 }
 
 phase_live_verify() {
+  stage_header "finalization"
   local root="${config_root:-/}"
+
+  cleanup_disk_space "${config_root:-/}" "live"
 
   if [[ "$root" != "/" ]]; then
     _regenerate_initramfs "$root"
   fi
 
   if [[ -z "${config_root:-}" || "${config_root:-}" == "/" ]]; then
-    if command -v steamos-readonly >/dev/null 2>&1; then
-      log "Re-enabling SteamOS read-only mode"
-      steamos-readonly enable || true
-    fi
+    enable_steamos_readonly
   fi
 
   return 0
