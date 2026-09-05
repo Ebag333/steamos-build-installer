@@ -35,6 +35,7 @@ register_build_pipeline() {
     "validate" \
     "setup" \
     "prepare" \
+    "preflight" \
     "sysupgrade" \
     "overlay" \
     "build" \
@@ -44,6 +45,7 @@ register_build_pipeline() {
   register_phase "validate" "phase_build_validate" "Validate build inputs"
   register_phase "setup" "phase_build_setup" "Set up build environment"
   register_phase "prepare" "phase_build_prepare" "Prepare rootfs and partitions"
+  register_phase "preflight" "phase_build_preflight" "Run preflight safety checks"
   register_phase "sysupgrade" "phase_build_sysupgrade" "Prepare package state"
   register_phase "overlay" "phase_build_overlay" "Create build overlay"
   register_phase "build" "phase_build_build" "Build and install drivers"
@@ -205,6 +207,29 @@ phase_build_prepare() {
   setup_mount_partitions
   setup_discover
   progress_emit mount
+
+  return 0
+}
+
+# Phase: Run preflight safety checks
+phase_build_preflight() {
+  stage_header "preflight"
+
+  # Compute source image hash for integrity verification (PF-64)
+  local expected_hash=""
+  if [[ -n "${IMG:-}" ]]; then
+    expected_hash="$(sha256sum "$IMG" 2>/dev/null | awk '{print $1}')" || expected_hash=""
+  fi
+
+  preflight_validate \
+    --scenario "build" \
+    --rootfs "$MNT" \
+    --efi "$EFIMNT" \
+    --esp "" \
+    --slot "A" \
+    --variant "${TARGET_VARIANT:-}" \
+    --image "${IMG:-}" \
+    --hash "$expected_hash"
 
   return 0
 }

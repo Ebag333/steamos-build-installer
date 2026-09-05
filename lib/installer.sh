@@ -72,14 +72,14 @@ if ! find_usb; then
   exit 0
 fi
 
-cleanup() {
+collect_boot_logs_cleanup() {
   [[ -n "${OUT:-}" && -d "$OUT" ]] && rm -rf "$OUT"
   if [[ -n "${USB_MOUNT:-}" ]]; then
     umount "$USB_MOUNT" 2>/dev/null || true
     rmdir "$USB_MOUNT" 2>/dev/null || true
   fi
 }
-trap cleanup EXIT
+trap collect_boot_logs_cleanup EXIT
 
 mkdir -p "$LOG_DIR"
 

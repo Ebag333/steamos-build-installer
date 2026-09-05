@@ -30,12 +30,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=test-harness.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/test-harness.sh"
 # shellcheck source=fixture-factory.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/fixture-factory.sh"
 # shellcheck source=topology.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/topology.sh"
 # shellcheck source=flashless-helpers.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/flashless-helpers.sh"
 
 # ---------------------------------------------------------------------------
@@ -72,6 +76,7 @@ test_f02_active_slot_isolation() {
 
   # Additional direct verification: A rootfs tree checksums
   local rootfs_tree_after
+  # shellcheck disable=SC2034
   rootfs_tree_after="$(find "$FLASHLESS_ROOTFS_DIR" -type f -exec md5sum {} + 2>/dev/null | sort -k2)"
   # The rootfs dir in the fixture is the target (B) rootfs, which SHOULD
   # be written to. We verify the A-slot EFI artifacts above via the snapshot.
@@ -105,6 +110,7 @@ test_f02_active_slot_isolation() {
   local grub_cfg_a="$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg"
   if [[ -f "$grub_cfg_a" ]]; then
     local a_uuid
+    # shellcheck disable=SC2034
     a_uuid="$(derive_uuid "$FLASHLESS_NAMESPACE" "rootfs-${FLASHLESS_CURRENT_SLOT}")"
     if grep -q "$FLASHLESS_TARGET_UUID" "$grub_cfg_a" 2>/dev/null; then
       # After apply, grub.cfg is regenerated with B UUID (this is expected
@@ -234,6 +240,7 @@ test_f09_formatting_fallback_constrained() {
   # Snapshot A-slot EFI state before formatting
   local grub_a_before=""
   if [[ -f "$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg" ]]; then
+    # shellcheck disable=SC2034
     grub_a_before="$(md5sum "$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg" | awk '{print $1}')"
   fi
 
@@ -270,8 +277,10 @@ test_f09_formatting_fallback_constrained() {
 
   # Verify A-slot EFI grub.cfg is NOT modified by the format operation.
   # The format should only affect efi-B (target), not efi-A (current).
+  # shellcheck disable=SC2034
   local grub_a_after=""
   if [[ -f "$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg" ]]; then
+    # shellcheck disable=SC2034
     grub_a_after="$(md5sum "$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg" | awk '{print $1}')"
   fi
 
@@ -602,21 +611,29 @@ test_f15_runtime_failure_preserves_rollback() {
   fi
 
   # Snapshot post-apply state of all critical B-slot artifacts
+  # shellcheck disable=SC2034
   local grub_after_apply=""
+  # shellcheck disable=SC2034
   local partset_self_after_apply=""
+  # shellcheck disable=SC2034
   local conf_b_after_apply=""
+  # shellcheck disable=SC2034
   local grubx64_after_apply=""
 
   if [[ -f "$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg" ]]; then
+    # shellcheck disable=SC2034
     grub_after_apply="$(md5sum "$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg" | awk '{print $1}')"
   fi
   if [[ -f "$FLASHLESS_EFI_DIR/SteamOS/partsets/self" ]]; then
+    # shellcheck disable=SC2034
     partset_self_after_apply="$(md5sum "$FLASHLESS_EFI_DIR/SteamOS/partsets/self" | awk '{print $1}')"
   fi
   if [[ -f "$FLASHLESS_ESP_DIR/SteamOS/conf/B.conf" ]]; then
+    # shellcheck disable=SC2034
     conf_b_after_apply="$(md5sum "$FLASHLESS_ESP_DIR/SteamOS/conf/B.conf" | awk '{print $1}')"
   fi
   if [[ -f "$FLASHLESS_EFI_DIR/EFI/steamos/grubx64.efi" ]]; then
+    # shellcheck disable=SC2034
     grubx64_after_apply="$(md5sum "$FLASHLESS_EFI_DIR/EFI/steamos/grubx64.efi" | awk '{print $1}')"
   fi
 

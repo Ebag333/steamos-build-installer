@@ -60,8 +60,7 @@ _pf_resolve_parent_disk() {
   [[ -b "$device" ]] \
     || die "_pf_resolve_parent_disk: not a block device: $device"
 
-  local dev base
-  base="$(basename "$device")"
+  local dev
   dev="$device"
 
   # Walk up the PKNAME ancestry until we reach a whole disk.
@@ -71,13 +70,13 @@ _pf_resolve_parent_disk() {
 
     if [[ -z "$pkname" ]]; then
       # dev is itself a whole disk (no parent).
-      echo "$(basename "$dev")"
+      basename "$dev"
       return 0
     fi
 
     if [[ "/dev/$pkname" == "$dev" ]]; then
       # Safety: parent resolves back to self — avoid infinite loop.
-      echo "$(basename "$dev")"
+      basename "$dev"
       return 0
     fi
 
@@ -495,6 +494,7 @@ preflight_build_partitions_same_image() {
 #   the PF_SNAPSHOT_* globals) on success.
 #   Sets: PF_SNAPSHOT_BOOTCONF_SLOT, PF_SNAPSHOT_RAUC_BOOTED,
 #         PF_SNAPSHOT_RAUC_SLOT, PF_SNAPSHOT_RAUC_IS_DEV.
+# shellcheck disable=SC2034 # PF_SNAPSHOT_* are set for downstream consumers
 preflight_flashless_slot_sources_agree() {
   local bootconf_slot rauc_booted rauc_slot rauc_is_dev=0
 
@@ -606,7 +606,7 @@ preflight_flashless_target_is_standby() {
   # When target devices are provided, cross-check them against /dev/disk/by-partsets.
   if [[ -d "/dev/disk/by-partsets/$PF_TARGET_SLOT" ]]; then
     local -A partset_devs declared_devs
-    local dev_name dev_path resolved
+    local dev_name resolved
 
     for dev_name in rootfs efi var; do
       resolved="$(readlink -f "/dev/disk/by-partsets/$PF_TARGET_SLOT/$dev_name" 2>/dev/null)" || resolved=""
@@ -1092,7 +1092,6 @@ _pf_verify_recovery_topology_descriptor() {
     descriptor["$key"]="$value"
   done
 
-  local missing=0
   local -a required_keys=(
     TARGET_SLOT ROOTFS_DEVICE ROOTFS_PARTUUID
     EFI_DEVICE EFI_PARTUUID
@@ -1664,6 +1663,7 @@ preflight_scenario_validate_build() {
 #         PF_SNAPSHOT_RAUC_BOOTED, PF_SNAPSHOT_RAUC_SLOT,
 #         PF_SNAPSHOT_RAUC_IS_DEV, PF_SNAPSHOT_RAUC_JSON,
 #         PF_SNAPSHOT_SELECTED_SLOT.
+# shellcheck disable=SC2034 # PF_SNAPSHOT_* are set for downstream consumers
 preflight_scenario_validate_flashless() {
   debug "preflight_scenario_validate_flashless: starting"
 
@@ -1883,6 +1883,7 @@ preflight_scenario_validate_recovery() {
 #
 #   Sets: PF_CURRENT_SLOT, PF_SNAPSHOT_BOOTCONF_SLOT,
 #         PF_SNAPSHOT_RAUC_BOOTED, PF_SNAPSHOT_RAUC_JSON.
+# shellcheck disable=SC2034 # PF_SNAPSHOT_* are set for downstream consumers
 preflight_scenario_validate_live() {
   debug "preflight_scenario_validate_live: starting"
 

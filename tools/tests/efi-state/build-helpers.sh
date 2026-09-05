@@ -31,18 +31,19 @@ fi
 # ---------------------------------------------------------------------------
 if ! declare -f test_harness_init >/dev/null 2>&1; then
   echo "ERROR: build-helpers.sh requires test-harness.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # Handles both sourced (return) and executed (exit) contexts
   return 1 2>/dev/null || exit 1
 fi
 
 if ! declare -f create_mock_boot_fixture >/dev/null 2>&1; then
   echo "ERROR: build-helpers.sh requires fixture-factory.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # Handles both sourced (return) and executed (exit) contexts
   return 1 2>/dev/null || exit 1
 fi
 
 # ---------------------------------------------------------------------------
 # Build scenario constants
 # ---------------------------------------------------------------------------
-BUILD_SLOT_COUNT=1
 BUILD_TARGET_SLOT="A"
 BUILD_SCENARIO="build"
 
@@ -394,7 +395,7 @@ simulate_grub_param_add_idempotent() {
     # Count occurrences on linux lines (whole-token match)
     local count=0 _line
     while IFS= read -r _line; do
-      [[ " ${_line%%#*} " == *" ${param} "* ]] && ((count++))
+      [[ " ${_line%%#*} " == *" ${param} "* ]] && ((++count))
     done < <(grep 'linux' "$grub_cfg" 2>/dev/null)
     if [[ "$count" -gt 1 ]]; then
       echo "ERROR: simulate_grub_param_add_idempotent: duplicate parameter '$param' found ($count occurrences)" >&2

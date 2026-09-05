@@ -15,6 +15,7 @@ register_live_pipeline() {
   define_pipeline \
     "validate" \
     "prepare" \
+    "preflight" \
     "sysupgrade" \
     "install" \
     "configure" \
@@ -22,6 +23,7 @@ register_live_pipeline() {
 
   register_phase "validate" "phase_live_validate" "Validate target system"
   register_phase "prepare" "phase_live_prepare" "Prepare system for changes"
+  register_phase "preflight" "phase_live_preflight" "Run preflight safety checks"
   register_phase "sysupgrade" "phase_live_sysupgrade" "System upgrade (pacman -Syu)"
   register_phase "install" "phase_live_install" "Install drivers and packages"
   register_phase "configure" "phase_live_configure" "Configure system"
@@ -124,6 +126,39 @@ phase_live_prepare() {
   fi
 
   set_user_password
+
+  return 0
+}
+
+# Phase: Run preflight safety checks
+phase_live_preflight() {
+  stage_header "preflight"
+
+  local root="${config_root:-/}"
+
+  # Discover current slot
+  local current_slot=""
+  if command -v steamos-bootconf &>/dev/null; then
+    current_slot="$(steamos-bootconf this-image 2>/dev/null)" || current_slot=""
+  fi
+
+  # Discover ESP mount point
+  local esp_mount=""
+  if [[ -n "$current_slot" && -e "/dev/disk/by-partsets/$current_slot/esp" ]]; then
+    local esp_dev
+    esp_dev="$(readlink -f "/dev/disk/by-partsets/$current_slot/esp" 2>/dev/null)" || esp_dev=""
+    if [[ -n "$esp_dev" ]]; then
+      esp_mount="$(findmnt -rnmo TARGET -S "$esp_dev" 2>/dev/null | head -1)" || esp_mount=""
+    fi
+  fi
+
+  preflight_validate \
+    --scenario "live" \
+    --rootfs "$root" \
+    --efi "/efi" \
+    --esp "$esp_mount" \
+    --slot "${current_slot:-}" \
+    --variant "${TARGET_VARIANT:-}"
 
   return 0
 }

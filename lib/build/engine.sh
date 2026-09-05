@@ -175,6 +175,7 @@ _build_extract_pkgname() {
       set +euo pipefail
       # Source only pkgname; define safe stubs for functions we don't need
       pkgname=()
+      # shellcheck disable=SC1091
       source "$dir/PKGBUILD" 2>/dev/null || true
       if [[ ${#pkgname[@]} -gt 0 ]]; then
         echo "${pkgname[0]}"
@@ -235,11 +236,11 @@ build_recipe() {
   local pkgbuild="$recipe_dir/PKGBUILD"
 
   # Extract pkgname from PKGBUILD (may differ from NAME in recipe.conf)
-  local pkgname=""
+  local pkgname_str=""
   if [[ -f "$pkgbuild" ]]; then
-    pkgname="$(_build_extract_pkgname "$recipe_dir")" || true
+    pkgname_str="$(_build_extract_pkgname "$recipe_dir")" || true
   fi
-  PKGNAME="${pkgname:-$name}"
+  PKGNAME="${pkgname_str:-$name}"
 
   # Check for direct install mode (INSTALL_CMD in recipe.conf)
   local install_cmd=""

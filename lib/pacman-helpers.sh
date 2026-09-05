@@ -237,8 +237,8 @@ pacman_upgrade_all() {
 
   log "Running full system upgrade"
   local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
-  # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   local _safe_extra
+  # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   _safe_extra="$(_shell_escape_args $extra)"
   set -o pipefail
   _pacman_retry _pacman_exec "$context" "pacman $config_args -Syu $noconfirm $ask $_safe_extra" \
@@ -1786,7 +1786,8 @@ pacman_preflight_with_fallback() {
       local -A _dep_dependents=()
       while IFS='|' read -r _breaker _dependents_str; do
         # Split space-separated dependents
-        local -a _deps_array=($_dependents_str)
+        local -a _deps_array
+        read -ra _deps_array <<<"$_dependents_str"
         for _dep in "${_deps_array[@]}"; do
           _dep_dependents["$_dep"]=1
         done

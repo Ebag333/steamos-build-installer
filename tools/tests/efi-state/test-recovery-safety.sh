@@ -34,12 +34,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=test-harness.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/test-harness.sh"
 # shellcheck source=fixture-factory.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/fixture-factory.sh"
 # shellcheck source=topology.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/topology.sh"
 # shellcheck source=recovery-helpers.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/recovery-helpers.sh"
 
 # ---------------------------------------------------------------------------
@@ -382,11 +386,13 @@ test_r07_persistent_defaults_reconciled() {
 
   # Capture rootfs state before apply (B rootfs files)
   local rootfs_grub_default_before=""
+  # shellcheck disable=SC2034
   local rootfs_grub_steamos_before=""
   if [[ -f "$RECOVERY_ROOTFS_DIR/etc/default/grub" ]]; then
     rootfs_grub_default_before="$(md5sum "$RECOVERY_ROOTFS_DIR/etc/default/grub" | awk '{print $1}')"
   fi
   if [[ -f "$RECOVERY_ROOTFS_DIR/etc/default/grub-steamos" ]]; then
+    # shellcheck disable=SC2034
     rootfs_grub_steamos_before="$(md5sum "$RECOVERY_ROOTFS_DIR/etc/default/grub-steamos" | awk '{print $1}')"
   fi
 
@@ -660,13 +666,21 @@ test_r10_runtime_failure_rolls_back() {
   fi
 
   # Snapshot post-apply state of all critical artifacts
+  # shellcheck disable=SC2034
   local grub_after_apply
+  # shellcheck disable=SC2034
   local partset_b_after_apply
+  # shellcheck disable=SC2034
   local conf_b_after_apply
+  # shellcheck disable=SC2034
   local grubx64_after_apply
+  # shellcheck disable=SC2034
   grub_after_apply="$(md5sum "$RECOVERY_EFI_DIR/EFI/steamos/grub.cfg" 2>/dev/null | awk '{print $1}')"
+  # shellcheck disable=SC2034
   partset_b_after_apply="$(md5sum "$RECOVERY_EFI_DIR/SteamOS/partsets/B" 2>/dev/null | awk '{print $1}')"
+  # shellcheck disable=SC2034
   conf_b_after_apply="$(md5sum "$RECOVERY_ESP_DIR/SteamOS/conf/B.conf" 2>/dev/null | awk '{print $1}')"
+  # shellcheck disable=SC2034
   grubx64_after_apply="$(md5sum "$RECOVERY_EFI_DIR/EFI/steamos/grubx64.efi" 2>/dev/null | awk '{print $1}')"
 
   # Inject a runtime failure and verify rollback
@@ -766,6 +780,7 @@ test_r11_non_target_isolation() {
   local grubx64_a_before
   local partset_a_before
   local conf_a_before
+  # shellcheck disable=SC2034
   local rootfs_before=""
 
   grub_a_before="$(md5sum "$RECOVERY_EFI_DIR/EFI/steamos/grub.cfg" 2>/dev/null | awk '{print $1}')"

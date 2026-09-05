@@ -2,7 +2,7 @@
 #
 # steamos-build-installer — lib/optimizations/common.sh
 # Shared utilities for optimization modules.
-# Provides mode detection and common helpers for applying optimizations
+# Provides common helpers for applying optimizations
 # across different contexts: chroot (build or rebuild) or live system.
 #
 # Sourced by optimization modules — do not run directly.
@@ -11,73 +11,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "lib/optimizations/common.sh is a library — source it from optimization modules, not run directly." >&2
   exit 1
 fi
-
-# ---------------------------------------------------------------------------
-# Mode Detection
-# ---------------------------------------------------------------------------
-# Detects the current operating context and sets OPT_MODE and OPT_ROOT.
-#
-# Modes:
-#   chroot - Mounted target rootfs (build-time image or self-heal rebuild)
-#   live   - Running system (post-install or direct execution)
-#
-# Override with environment variables:
-#   OPT_MODE - Force mode (chroot|live)
-#   OPT_ROOT - Force root path (defaults to auto-detected)
-
-detect_mode() {
-  # If already set by caller, respect it
-  if [[ -n "${OPT_MODE:-}" ]]; then
-    _resolve_root
-    return 0
-  fi
-
-  # Auto-detect based on environment indicators.
-  # Any mounted target rootfs (build or rebuild) is chroot.
-  if [[ "${IN_CHROOT:-0}" == "1" ]] \
-    || [[ -n "${MERGED:-}" && -d "$MERGED" ]] \
-    || [[ -n "${NEWROOT:-}" && -d "$NEWROOT" ]] \
-    || [[ -n "${PARTSET:-}" ]] \
-    || [[ "${REBUILD:-0}" == "1" ]] \
-    || [[ -f /.dockerenv ]] \
-    || grep -q 'overlay.*overlay' /proc/mounts 2>/dev/null; then
-    OPT_MODE="chroot"
-    _resolve_root
-    return 0
-  fi
-
-  # Default to live system
-  OPT_MODE="live"
-  _resolve_root
-  return 0
-}
-
-# Resolve the root filesystem path based on mode
-_resolve_root() {
-  # If already set by caller, respect it
-  if [[ -n "${OPT_ROOT:-}" ]]; then
-    return 0
-  fi
-
-  case "${OPT_MODE:-live}" in
-    chroot)
-      # Mounted target rootfs — try common paths in priority order
-      if [[ -n "${MERGED:-}" && -d "$MERGED" ]]; then
-        OPT_ROOT="$MERGED"
-      elif [[ -n "${NEWROOT:-}" && -d "$NEWROOT" ]]; then
-        OPT_ROOT="$NEWROOT"
-      elif [[ -n "${MNT:-}" && -d "$MNT" ]]; then
-        OPT_ROOT="$MNT"
-      else
-        warn "_resolve_root: OPT_MODE is chroot but no valid root path found (MERGED, NEWROOT, MNT all unset/missing)"
-        return 1
-      fi
-      ;;
-    live)
-      OPT_ROOT="/"
-      ;;
-  esac
-}
 
 # ---------------------------------------------------------------------------
 # Context Helpers
@@ -479,5 +412,3 @@ warn() { # lint-ignore: no-shadow
   fi
 }
 
-# Initialize mode detection on source
-detect_mode

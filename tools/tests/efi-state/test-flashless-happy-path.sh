@@ -36,14 +36,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=test-harness.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/test-harness.sh"
 # shellcheck source=fixture-factory.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/fixture-factory.sh"
 # shellcheck source=topology.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/topology.sh"
 # shellcheck source=validators.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/validators.sh"
 # shellcheck source=flashless-helpers.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/flashless-helpers.sh"
 
 # ---------------------------------------------------------------------------
@@ -417,7 +422,8 @@ test_f08_valid_target_efi_preserved() {
   flashless_scenario_setup || exit 1
 
   # Place sentinel files to track whether mkfs is run
-  local sentinel_content="SENTINEL-$(date +%s)-$$"
+  local sentinel_content
+  sentinel_content="SENTINEL-$(date +%s)-$$"
   local efi_dir="$FLASHLESS_EFI_DIR"
   local sentinel_default="$efi_dir/EFI/steamos/sentinel-default.grub"
   local sentinel_steamos="$efi_dir/EFI/steamos/sentinel-steamos.grub"
@@ -610,6 +616,7 @@ test_f12_on_disk_partsets_independently_verified() {
   local other_rootfs_partuuid other_efi_partuuid other_var_partuuid
   other_rootfs_partuuid="$(derive_partuuid "$FLASHLESS_NAMESPACE" "rootfs-${FLASHLESS_CURRENT_SLOT}")"
   other_efi_partuuid="$(derive_partuuid "$FLASHLESS_NAMESPACE" "efi-${FLASHLESS_CURRENT_SLOT}")"
+  # shellcheck disable=SC2034  # other_var_partuuid reserved for future var PARTUUID assertion
   other_var_partuuid="$(derive_partuuid "$FLASHLESS_NAMESPACE" "var-${FLASHLESS_CURRENT_SLOT}")"
 
   test_harness_assert_not_contains "$self_content" "$other_rootfs_partuuid" || {

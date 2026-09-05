@@ -152,6 +152,7 @@ done < <(find "$REPO_ROOT" -name '*.sh' -print0)
 
 # Check that library files in lib/ have the BASH_SOURCE guard pattern.
 # This prevents accidental direct execution of sourced libraries.
+# shellcheck disable=SC2016
 guard_pattern='if [[ "${BASH_SOURCE[0]}" == "${0}"'
 
 while IFS= read -r -d '' file; do

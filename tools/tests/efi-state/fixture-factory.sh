@@ -209,9 +209,8 @@ create_mock_efi() {
   populate_mock_grubx64_efi "$efi_dir/EFI/steamos/grubx64.efi" "$rootfs_uuid"
 
   # Generate partset files
-  local partuuid_a partuuid_b partuuid_esp
+  local partuuid_a partuuid_b
   partuuid_a="$(derive_partuuid "$ns" "efi-A")"
-  partuuid_esp="$(derive_partuuid "$ns" "esp")"
 
   # Slot A partset
   echo "rootfs $(derive_partuuid "$ns" "rootfs-A")" >"$efi_dir/SteamOS/partsets/A"

@@ -18,6 +18,7 @@ fi
 register_rebuild_pipeline() {
   define_pipeline \
     "mount" \
+    "preflight" \
     "discover" \
     "sysupgrade" \
     "overlay" \
@@ -26,6 +27,7 @@ register_rebuild_pipeline() {
     "reconcile"
 
   register_phase "mount" "phase_rebuild_mount" "Mount target rootfs"
+  register_phase "preflight" "phase_rebuild_preflight" "Run preflight safety checks"
   register_phase "discover" "phase_rebuild_discover" "Discover kernel and packages"
   register_phase "sysupgrade" "phase_rebuild_sysupgrade" "System upgrade (pacman -Syu)"
   register_phase "overlay" "phase_rebuild_overlay" "Create overlay chroot"
@@ -219,6 +221,48 @@ phase_rebuild_mount() {
   else
     log "Rootfs already fills partition"
   fi
+
+  return 0
+}
+
+# Phase: Run preflight safety checks
+phase_rebuild_preflight() {
+  stage_header "preflight"
+
+  # Translate PARTSET to slot label
+  local slot_label=""
+  local current_slot=""
+  if command -v steamos-bootconf &>/dev/null; then
+    current_slot="$(steamos-bootconf this-image 2>/dev/null)" || current_slot=""
+  fi
+  case "${PARTSET:-other}" in
+    other)
+      case "${current_slot:-}" in
+        A) slot_label="B" ;;
+        B) slot_label="A" ;;
+        *) slot_label="A" ;; # fallback
+      esac
+      ;;
+    self)
+      slot_label="${current_slot:-A}"
+      ;;
+    A | B)
+      slot_label="$PARTSET"
+      ;;
+    *)
+      slot_label="A" # fallback
+      ;;
+  esac
+
+  # Only rootfs is mounted at this point — EFI/ESP are NOT available.
+  # The mount gating in preflight.sh will skip EFI/ESP checks automatically.
+  preflight_validate \
+    --scenario "recovery" \
+    --rootfs "$NEWROOT" \
+    --efi "" \
+    --esp "" \
+    --slot "$slot_label" \
+    --variant "${TARGET_VARIANT:-}"
 
   return 0
 }

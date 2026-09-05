@@ -219,6 +219,7 @@ parse_topology_json() {
     fi
   done <<<"$content"
 
+  # shellcheck disable=SC2034  # TOPOLOGY_PARTITIONS is part of parse_topology_json API contract
   TOPOLOGY_PARTITIONS="${parts[*]}"
 
   # Export per-partition variables.

@@ -35,18 +35,19 @@ fi
 # ---------------------------------------------------------------------------
 if ! declare -f test_harness_init >/dev/null 2>&1; then
   echo "ERROR: flashless-helpers.sh requires test-harness.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # return works when sourced; exit is the fallback
   return 1 2>/dev/null || exit 1
 fi
 
 if ! declare -f create_mock_boot_fixture >/dev/null 2>&1; then
   echo "ERROR: flashless-helpers.sh requires fixture-factory.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # return works when sourced; exit is the fallback
   return 1 2>/dev/null || exit 1
 fi
 
 # ---------------------------------------------------------------------------
 # Flashless scenario constants
 # ---------------------------------------------------------------------------
-FLASHLESS_SLOT_COUNT=2
 FLASHLESS_CURRENT_SLOT="A"
 FLASHLESS_TARGET_SLOT="B"
 FLASHLESS_SCENARIO="flashless"
@@ -56,6 +57,7 @@ FLASHLESS_SCENARIO="flashless"
 # ============================================================================
 FLASHLESS_FIXTURE_DIR=""
 FLASHLESS_ROOTFS_DIR=""
+# shellcheck disable=SC2034  # Alias for FLASHLESS_ROOTFS_DIR; part of test API
 FLASHLESS_ROOTFS_B_DIR=""
 FLASHLESS_EFI_DIR=""
 FLASHLESS_ESP_DIR=""
@@ -206,6 +208,7 @@ flashless_scenario_teardown() {
 
   FLASHLESS_FIXTURE_DIR=""
   FLASHLESS_ROOTFS_DIR=""
+  # shellcheck disable=SC2034  # Alias for FLASHLESS_ROOTFS_DIR; part of test API
   FLASHLESS_ROOTFS_B_DIR=""
   FLASHLESS_EFI_DIR=""
   FLASHLESS_ESP_DIR=""
@@ -1133,7 +1136,6 @@ verify_target_grub_config() {
   fi
 
   # 2. Kernels exist in rootfs
-  local linux_line
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// /}" ]] && continue

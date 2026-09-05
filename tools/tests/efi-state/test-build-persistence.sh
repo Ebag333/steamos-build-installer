@@ -24,9 +24,17 @@
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck source=test-harness.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/test-harness.sh"
+# shellcheck source=fixture-factory.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/fixture-factory.sh"
+# shellcheck source=topology.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/topology.sh"
+# shellcheck source=build-helpers.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/build-helpers.sh"
 
 # ---------------------------------------------------------------------------
@@ -616,13 +624,6 @@ test_b09_chroot_mounts_cleaned() {
   # but we verify that after cleanup, these directories are either empty
   # or contain only the fixture's base content).
 
-  # Record initial content of each chroot mountpoint
-  local -A initial_contents
-  for mp in "${FUNCTION_CHROOT_MOUNTS[@]}"; do
-    local mp_path="$BUILD_ROOTFS_DIR/$mp"
-    initial_contents[$mp]="$(find "$mp_path" -mindepth 1 -maxdepth 1 2>/dev/null | sort)"
-  done
-
   # Simulate the function cleaning up its mounts
   # (In production, this would call umount_chroot_fs + cleanup_tracked_mounts)
   for mp in "${FUNCTION_CHROOT_MOUNTS[@]}"; do
@@ -690,13 +691,6 @@ test_b10_build_failure_cleanup() {
     test_harness_fail "setup failed"
     return
   }
-
-  # Record pre-failure state of EFI directory for rollback verification
-  local grub_cfg_before
-  grub_cfg_before="$(cat "$BUILD_EFI_DIR/EFI/steamos/grub.cfg" 2>/dev/null || true)"
-
-  local grub_steamos_before
-  grub_steamos_before="$(cat "$BUILD_ROOTFS_DIR/etc/default/grub-steamos" 2>/dev/null || true)"
 
   # Create function-owned temp mountpoints (simulating build starting)
   _create_function_temp_mountpoints "$BUILD_ROOTFS_DIR" >/dev/null
@@ -802,7 +796,7 @@ test_b10_build_failure_cleanup() {
 # Main: run all tests
 # ============================================================================
 
-main() {
+run_build_persistence_tests() {
   test_harness_init
   trap test_harness_cleanup EXIT
 
@@ -823,5 +817,5 @@ main() {
 
 # Run if executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  main "$@"
+  run_build_persistence_tests "$@"
 fi

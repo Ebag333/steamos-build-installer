@@ -33,17 +33,20 @@ fi
 # ---------------------------------------------------------------------------
 if ! declare -f test_harness_init >/dev/null 2>&1; then
   echo "ERROR: recovery-helpers.sh requires test-harness.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # intentional: return works in sourced context, exit works when executed
   return 1 2>/dev/null || exit 1
 fi
 
 if ! declare -f create_mock_boot_fixture >/dev/null 2>&1; then
   echo "ERROR: recovery-helpers.sh requires fixture-factory.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # intentional: return works in sourced context, exit works when executed
   return 1 2>/dev/null || exit 1
 fi
 
 # ---------------------------------------------------------------------------
 # Recovery scenario constants
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2034  # part of recovery scenario API contract (available for test use)
 RECOVERY_SLOT_COUNT=2
 RECOVERY_CURRENT_SLOT="A"
 RECOVERY_TARGET_SLOT="B"
@@ -177,6 +180,7 @@ recovery_scenario_teardown() {
 
   RECOVERY_FIXTURE_DIR=""
   RECOVERY_ROOTFS_DIR=""
+  # shellcheck disable=SC2034  # part of recovery scenario API contract; alias for RECOVERY_ROOTFS_DIR
   RECOVERY_ROOTFS_B_DIR=""
   RECOVERY_EFI_DIR=""
   RECOVERY_ESP_DIR=""
@@ -975,13 +979,9 @@ verify_repatch_idempotent() {
       continue
     fi
 
-    # Count non-comment, non-blank lines — should match expected count
-    local line_count
-    line_count="$(grep -v '^\s*#' "$ps_path" | grep -v '^\s*$' | wc -l)"
-
     # Check for duplicate PARTUUIDs within a single partset
     local dup_check
-    dup_check="$(grep -v '^\s*#' "$ps_path" | grep -v '^\s*$' | awk '{print $2}' | sort | uniq -d)"
+    dup_check="$(grep -v '^\s*#\|^\s*$' "$ps_path" | awk '{print $2}' | sort | uniq -d)"
     if [[ -n "$dup_check" ]]; then
       echo "ERROR: verify_repatch_idempotent: duplicate PARTUUID in partset $ps_file: $dup_check" >&2
       rc=1

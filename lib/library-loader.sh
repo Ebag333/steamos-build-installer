@@ -24,7 +24,8 @@ load_workflow_libs() {
 
   # Idempotency guard: skip if this workflow+base_dir combination was already loaded.
   # Use a sanitized sentinel variable name derived from the arguments.
-  local _sentinel_key="_LOADED_${workflow}_$(printf '%s' "$base_dir" | tr '/-' '__')"
+  local _sentinel_key
+  _sentinel_key="_LOADED_${workflow}_$(printf '%s' "$base_dir" | tr '/-' '__')"
   if [[ -n "${!_sentinel_key:-}" ]]; then
     return 0
   fi
@@ -47,6 +48,7 @@ load_workflow_libs() {
     pacman-helpers
     system-upgrade
     diagnostics/boot
+    preflights/preflight
   )
 
   # Workflow-specific libraries

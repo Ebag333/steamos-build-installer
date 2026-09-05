@@ -13,11 +13,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-_PF_CHROOT_MOUNT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=preflight_efi.sh
-source "${_PF_CHROOT_MOUNT_DIR}/preflight_efi.sh"
-unset _PF_CHROOT_MOUNT_DIR
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

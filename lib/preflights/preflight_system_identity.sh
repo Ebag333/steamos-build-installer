@@ -482,6 +482,7 @@ preflight_system_identity_partset_map() {
   }
 
   # --- Helper: get the device identity (major:minor) for a slot/partition ---
+  # shellcheck disable=SC2317 # helper called indirectly within this function scope
   _pf_si_slot_device_mm() {
     local slot="$1" partition="$2"
     local dev

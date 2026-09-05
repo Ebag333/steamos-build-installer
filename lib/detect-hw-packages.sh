@@ -11,6 +11,11 @@
 # Prints space-separated list of recommended package names to stdout.
 # No root required (read-only operations).
 
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "lib/detect-hw-packages.sh is a library — source it from the wrapper, not run directly." >&2
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Vendor → Package Mapping (Layer 1)
 # ---------------------------------------------------------------------------

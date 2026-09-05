@@ -16,8 +16,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-source "$(dirname "${BASH_SOURCE[0]}")/preflight_command_probe.sh"
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -472,13 +470,11 @@ preflight_generation_source_allowlist() {
   done
 
   # partsets/ directory — machine-specific partition layout
-  for candidate in \
-    "$source_efi/SteamOS/partsets"; do
-    if [[ -d "$candidate" ]]; then
-      debug "PF-25: non-portable path found in source EFI (will not be copied): $candidate"
-      found_non_portable=1
-    fi
-  done
+  local candidate="$source_efi/SteamOS/partsets"
+  if [[ -d "$candidate" ]]; then
+    debug "PF-25: non-portable path found in source EFI (will not be copied): $candidate"
+    found_non_portable=1
+  fi
 
   if [[ "$found_non_portable" -eq 0 ]]; then
     debug "PF-25: no known non-portable paths found in source EFI: $source_efi"

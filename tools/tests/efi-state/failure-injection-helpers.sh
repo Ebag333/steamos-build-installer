@@ -32,6 +32,7 @@ fi
 # ---------------------------------------------------------------------------
 if ! declare -f test_harness_init >/dev/null 2>&1; then
   echo "ERROR: failure-injection-helpers.sh requires test-harness.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # reachable when sourced (return) or executed directly (exit)
   return 1 2>/dev/null || exit 1
 fi
 
@@ -98,8 +99,7 @@ fi_send_signal_at_phase() {
     return 1
   fi
 
-  kill -"$signal" "$target_pid" 2>/dev/null
-  if [[ $? -ne 0 ]]; then
+  if ! kill -"$signal" "$target_pid" 2>/dev/null; then
     echo "ERROR: fi_send_signal_at_phase: failed to send $signal to PID $target_pid" >&2
     return 1
   fi
@@ -144,12 +144,13 @@ fi_run_with_signal_at_phase() {
   shift
 
   # Parse last three args: SIGNAL PHASE_NAME TIMEOUT_SECS
-  local timeout_secs="${!#}"
-  local phase_name="${(($#-1))}"
-  local signal="${(($#-2))}"
+  local timeout_secs="${*: -1}"
+  # shellcheck disable=SC2034  # phase_name reserved for future phase-aware logging
+  local phase_name="${*: -2:1}"
+  local signal="${*: -3:1}"
 
   # Remove last three positional args, remaining are FUNC args
-  local -a func_args=("${@:1:$(($#-3))}")
+  local -a func_args=("${@:1:$(($# - 3))}")
 
   # Create phase marker file
   _FI_SIGNAL_PHASE_FILE="$(mktemp "${TMPDIR:-/tmp}/fi-phase-XXXXXX")"
@@ -159,7 +160,7 @@ fi_run_with_signal_at_phase() {
   rm -f "$_FI_SIGNAL_PHASE_FILE"
 
   # Run function in background subshell
-  ( "$func" "${func_args[@]}" ) &
+  ("$func" "${func_args[@]}") &
   _FI_SIGNAL_PID=$!
 
   # Wait for phase marker and send signal
@@ -208,8 +209,7 @@ fi_inject_rename_failure() {
   _FI_RENAME_FAILURE_PERMS="$(stat -c '%a' "$target_dir")"
 
   # Remove write permission
-  chmod u-w "$target_dir"
-  if [[ $? -ne 0 ]]; then
+  if ! chmod u-w "$target_dir"; then
     echo "ERROR: fi_inject_rename_failure: chmod failed on $target_dir" >&2
     return 1
   fi
@@ -230,6 +230,7 @@ fi_inject_rename_failure() {
 # Arguments:
 #   TARGET_DIR - Directory to restore (default: last injected directory)
 # ===========================================================================
+# shellcheck disable=SC2120  # $1 is optional
 fi_cleanup_rename_failure() {
   local target_dir="${1:-${_FI_RENAME_FAILURE_DIR:-}}"
 
@@ -294,6 +295,7 @@ fi_inject_fsync_failure() {
 # Arguments:
 #   TARGET_FILE - File to clean up (default: detected from markers)
 # ===========================================================================
+# shellcheck disable=SC2120  # $1 is optional
 fi_cleanup_fsync_failure() {
   local target_file="${1:-}"
 
@@ -349,8 +351,7 @@ fi_inject_enospc() {
   # Use dd to fill with a predictable pattern (1K blocks)
   local fill_blocks=$((avail_kb - 1))
   if [[ "$fill_blocks" -gt 0 ]]; then
-    dd if=/dev/zero of="$_FI_ENOSPC_FILL_FILE" bs=1024 count="$fill_blocks" 2>/dev/null
-    if [[ $? -ne 0 ]]; then
+    if ! dd if=/dev/zero of="$_FI_ENOSPC_FILL_FILE" bs=1024 count="$fill_blocks" 2>/dev/null; then
       echo "WARNING: fi_inject_enospc: dd fill may not have completed fully" >&2
     fi
   fi
@@ -426,7 +427,7 @@ fi_inject_transaction_marker() {
   local marker_file="$efi_dir/.transaction-${marker_name}"
 
   # Write JSON-like transaction marker
-  cat > "$marker_file" <<MARKER_EOF
+  cat >"$marker_file" <<MARKER_EOF
 {
   "transaction_id": "${txn_id}",
   "operation": "${marker_name}",
@@ -459,6 +460,7 @@ MARKER_EOF
 # Arguments:
 #   EFI_DIR - EFI directory to clean (default: scan common locations)
 # ===========================================================================
+# shellcheck disable=SC2120  # $1 is optional
 fi_cleanup_transaction_markers() {
   local efi_dir="${1:-}"
 
@@ -578,13 +580,17 @@ fi_inject_rollback_failure() {
 
   while IFS= read -r bak_file; do
     [[ -z "$bak_file" ]] && continue
-    chmod u-w "$bak_file" 2>/dev/null && protected_files+=("$bak_file") || true
+    if chmod u-w "$bak_file" 2>/dev/null; then
+      protected_files+=("$bak_file")
+    fi
   done < <(find "$efi_dir" -maxdepth 5 -name "*.bak" -type f 2>/dev/null)
 
   # Also protect any .rollback-marker files
   while IFS= read -r rollback_file; do
     [[ -z "$rollback_file" ]] && continue
-    chmod u-w "$rollback_file" 2>/dev/null && protected_files+=("$rollback_file") || true
+    if chmod u-w "$rollback_file" 2>/dev/null; then
+      protected_files+=("$rollback_file")
+    fi
   done < <(find "$efi_dir" -maxdepth 5 -name "*rollback*" -type f 2>/dev/null)
 
   if [[ ${#protected_files[@]} -eq 0 ]]; then
@@ -607,6 +613,7 @@ fi_inject_rollback_failure() {
 # Arguments:
 #   EFI_DIR - EFI directory to clean up (optional)
 # ===========================================================================
+# shellcheck disable=SC2120  # $1 is optional
 fi_cleanup_rollback_failure() {
   local efi_dir="${1:-}"
 
@@ -657,6 +664,7 @@ fi_inject_partial_activation() {
 
   local grub_cfg="$efi_dir/EFI/steamos/grub.cfg"
   local partsets_dir="$efi_dir/SteamOS/partsets"
+  # shellcheck disable=SC2034  # grubx64 reserved for future EFI binary validation
   local grubx64="$efi_dir/EFI/steamos/grubx64.efi"
 
   case "$phase" in
@@ -664,7 +672,7 @@ fi_inject_partial_activation() {
       # Only update grub.cfg — mark other artifacts as not yet applied
       if [[ -f "$grub_cfg" ]]; then
         # Append a marker indicating partial activation
-        echo "# partial-activation: grub-only phase for slot $slot" >> "$grub_cfg"
+        echo "# partial-activation: grub-only phase for slot $slot" >>"$grub_cfg"
       fi
       ;;
     partset-only)
@@ -676,7 +684,7 @@ fi_inject_partial_activation() {
           ps_basename="$(basename "$ps_file")"
           # Only update slot-specific partsets, not self/all/shared
           if [[ "$ps_basename" == "$slot" ]]; then
-            echo "# partial-activation: partset for slot $slot" >> "$ps_file"
+            echo "# partial-activation: partset for slot $slot" >>"$ps_file"
           fi
         done
       fi
@@ -694,12 +702,12 @@ fi_inject_partial_activation() {
     before-efi)
       # Update grub, partsets, and bootconf — but NOT grubx64.efi
       if [[ -f "$grub_cfg" ]]; then
-        echo "# partial-activation: before-efi phase for slot $slot" >> "$grub_cfg"
+        echo "# partial-activation: before-efi phase for slot $slot" >>"$grub_cfg"
       fi
       if [[ -d "$partsets_dir" ]]; then
         for ps_file in "$partsets_dir"/*; do
           [[ -f "$ps_file" ]] || continue
-          echo "# partial-activation: partset update for slot $slot" >> "$ps_file"
+          echo "# partial-activation: partset update for slot $slot" >>"$ps_file"
         done
       fi
       if [[ -n "$esp_dir" && -d "$esp_dir" ]]; then
@@ -732,6 +740,7 @@ fi_inject_partial_activation() {
 #   EFI_DIR - EFI directory to clean (optional)
 #   ESP_DIR - ESP directory to clean (optional)
 # ===========================================================================
+# shellcheck disable=SC2120  # $1 is optional
 fi_cleanup_partial_activation() {
   local efi_dir="${1:-}"
   local esp_dir="${2:-}"
@@ -875,7 +884,7 @@ fi_snapshot_resources() {
   fi
 
   local snapshot_file="$_FI_SNAPSHOT_DIR/resources.snapshot"
-  > "$snapshot_file"
+  true >"$snapshot_file"
 
   local file_path
   for file_path in "${file_paths[@]}"; do
@@ -892,7 +901,7 @@ fi_snapshot_resources() {
     perms="$(stat -c '%a' "$file_path" 2>/dev/null)" || perms="000"
     checksum="$(md5sum "$file_path" 2>/dev/null | awk '{print $1}')" || checksum="none"
 
-    printf '%s|%s|%s|%s|%s\n' "$rel_path" "$owner" "$group" "$perms" "$checksum" >> "$snapshot_file"
+    printf '%s|%s|%s|%s|%s\n' "$rel_path" "$owner" "$group" "$perms" "$checksum" >>"$snapshot_file"
   done
 
   # Register cleanup
@@ -965,7 +974,7 @@ fi_verify_cleanup_ownership() {
 
     # Parse snapshot: rel_path|owner|group|perms|checksum
     local snap_owner snap_group snap_perms snap_checksum
-    IFS='|' read -r _ snap_owner snap_group snap_perms snap_checksum <<< "$snapshot_entry"
+    IFS='|' read -r _ snap_owner snap_group snap_perms snap_checksum <<<"$snapshot_entry"
 
     # Current state
     if [[ ! -f "$file_path" ]]; then
@@ -1091,7 +1100,7 @@ fi_verify_emergency_cleanup() {
     else
       # Has args — split on '|' and call with args
       local -a handler_args
-      IFS='|' read -ra handler_args <<< "$args_str"
+      IFS='|' read -ra handler_args <<<"$args_str"
       if declare -f "$func_name" >/dev/null 2>&1; then
         "$func_name" "${handler_args[@]}" 2>/dev/null || {
           echo "WARNING: fi_verify_emergency_cleanup: handler '$func_name' failed" >&2
@@ -1120,11 +1129,16 @@ fi_verify_emergency_cleanup() {
 #   0 - All cleanup completed
 # ===========================================================================
 fi_cleanup_all() {
+  # shellcheck disable=SC2119  # args are optional
   fi_cleanup_rename_failure 2>/dev/null || true
+  # shellcheck disable=SC2119  # args are optional
   fi_cleanup_fsync_failure 2>/dev/null || true
   fi_cleanup_enospc 2>/dev/null || true
+  # shellcheck disable=SC2119  # args are optional
   fi_cleanup_transaction_markers 2>/dev/null || true
+  # shellcheck disable=SC2119  # args are optional
   fi_cleanup_rollback_failure 2>/dev/null || true
+  # shellcheck disable=SC2119  # args are optional
   fi_cleanup_partial_activation 2>/dev/null || true
   fi_cleanup_snapshot 2>/dev/null || true
   fi_verify_emergency_cleanup 2>/dev/null || true

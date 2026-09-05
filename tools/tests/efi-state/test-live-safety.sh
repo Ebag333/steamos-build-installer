@@ -34,12 +34,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=test-harness.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/test-harness.sh"
 # shellcheck source=fixture-factory.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/fixture-factory.sh"
 # shellcheck source=topology.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/topology.sh"
 # shellcheck source=live-helpers.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/live-helpers.sh"
 
 # ---------------------------------------------------------------------------
@@ -57,12 +61,6 @@ trap test_harness_cleanup EXIT
 # ============================================================================
 test_l02_opposing_slot_isolation() {
   live_scenario_setup || exit 1
-
-  # Snapshot B-slot rootfs state (tree checksums)
-  local rootfs_tree_b_before=""
-  if [[ -d "$LIVE_ROOTFS_DIR" ]]; then
-    rootfs_tree_b_before="$(find "$LIVE_ROOTFS_DIR" -type f -exec md5sum {} + 2>/dev/null | sort -k2)"
-  fi
 
   # Apply live state to slot A (current = target)
   if ! simulate_live_apply; then
@@ -199,12 +197,6 @@ test_l09_existing_mounts_preserved() {
     test_harness_fail "L-09: ESP directory missing before apply"
     live_scenario_teardown
     exit 1
-  fi
-
-  # Snapshot device identity (grub.cfg checksum as proxy for device identity)
-  local efi_grub_before=""
-  if [[ -f "$efi_dir_before/EFI/steamos/grub.cfg" ]]; then
-    efi_grub_before="$(md5sum "$efi_dir_before/EFI/steamos/grub.cfg" | awk '{print $1}')"
   fi
 
   # Snapshot ownership (directory permissions)
@@ -477,10 +469,6 @@ test_l12_stale_fallback_rejected() {
     exit 1
   fi
 
-  # Snapshot pre-apply state for rollback verification
-  local grub_before
-  grub_before="$(md5sum "$grub_cfg" | awk '{print $1}')"
-
   # Create a failing update-grub shim
   local shim_dir="$LIVE_FIXTURE_DIR/shim-bin"
   if ! simulate_live_update_grub_failure "$shim_dir"; then
@@ -545,9 +533,7 @@ test_l13_atomic_replacement_protects() {
   local grub_cfg="$LIVE_EFI_DIR/EFI/steamos/grub.cfg"
   local grubx64="$LIVE_EFI_DIR/EFI/steamos/grubx64.efi"
   local grub_after_first
-  local grubx64_after_first
   grub_after_first="$(md5sum "$grub_cfg" | awk '{print $1}')"
-  grubx64_after_first="$(md5sum "$grubx64" | awk '{print $1}')"
 
   # Inject a failure: make grub.cfg read-only so patching fails on second apply
   chmod 444 "$grub_cfg"

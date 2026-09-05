@@ -36,17 +36,20 @@ fi
 # ---------------------------------------------------------------------------
 if ! declare -f generate_deterministic_uuid >/dev/null 2>&1; then
   echo "ERROR: loopback-fixtures.sh requires topology.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # return/exit fallback: works sourced (return) or executed directly (exit)
   return 1 2>/dev/null || exit 1
 fi
 
 if ! declare -f populate_mock_grub_cfg >/dev/null 2>&1; then
   echo "ERROR: loopback-fixtures.sh requires fixture-factory.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # return/exit fallback: works sourced (return) or executed directly (exit)
   return 1 2>/dev/null || exit 1
 fi
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2034  # reserved for future use; total size is computed dynamically
 LOOPBACK_IMAGE_SIZE_MB=128
 LOOPBACK_SECTOR_SIZE=512
 
@@ -360,6 +363,7 @@ create_loopback_image() {
 #   0 - Loop device attached successfully
 #   1 - Attachment failed
 # ============================================================================
+# shellcheck disable=SC2120  # attach_loopback_image takes an optional argument with a default
 attach_loopback_image() {
   local image_path="${1:-$LOOPBACK_IMAGE_PATH}"
 
@@ -860,8 +864,13 @@ PARTSET_SLOT_EOF
   done
 
   # Semantic partsets (self, other, all, shared)
-  create_mock_partset_semantics "$efi_dir" "$test_id" "$target_slot" \
-    "$([ "$topology_type" == "dual-slot" ] && echo 2 || echo 1)"
+  local slot_count
+  if [[ "$topology_type" == "dual-slot" ]]; then
+    slot_count=2
+  else
+    slot_count=1
+  fi
+  create_mock_partset_semantics "$efi_dir" "$test_id" "$target_slot" "$slot_count"
 
   return 0
 }
@@ -981,6 +990,7 @@ create_loopback_fixture() {
 
   # Set global state
   LOOPBACK_TEST_ID="$test_id"
+  # shellcheck disable=SC2034  # LOOPBACK_TOPOLOGY is part of the public API (read by consumers)
   LOOPBACK_TOPOLOGY="$topology_type"
 
   # 1. Create sparse GPT image
@@ -991,6 +1001,7 @@ create_loopback_fixture() {
   fi
 
   # 2. Attach loop device
+  # shellcheck disable=SC2119  # attach_loopback_image intentionally uses default (LOOPBACK_IMAGE_PATH)
   if ! attach_loopback_image; then
     echo "ERROR: create_loopback_fixture: loop device attachment failed" >&2
     _loopback_run_cleanup
@@ -1078,8 +1089,10 @@ destroy_loopback_fixture() {
   LOOPBACK_IMAGE_PATH=""
   LOOPBACK_LOOP_DEVICE=""
   LOOPBACK_TEST_ID=""
+  # shellcheck disable=SC2034  # LOOPBACK_TOPOLOGY is part of the public API (set in create_loopback_fixture)
   LOOPBACK_TOPOLOGY=""
   LOOPBACK_MOUNT_BASE=""
+  # shellcheck disable=SC2034  # LOOPBACK_IS_PRIVATE_NS is part of the public API (set in enter_private_mount_namespace)
   LOOPBACK_IS_PRIVATE_NS=0
 
   return 0
@@ -1120,6 +1133,7 @@ enter_private_mount_namespace() {
     return 1
   fi
 
+  # shellcheck disable=SC2034  # LOOPBACK_IS_PRIVATE_NS is part of the public API (read by consumers)
   LOOPBACK_IS_PRIVATE_NS=1
 
   # Replace current process with one in a new mount namespace

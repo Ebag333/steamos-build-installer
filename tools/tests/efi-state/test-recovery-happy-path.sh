@@ -28,12 +28,16 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck disable=SC1091
 # shellcheck source=test-harness.sh
 source "$SCRIPT_DIR/test-harness.sh"
+# shellcheck disable=SC1091
 # shellcheck source=fixture-factory.sh
 source "$SCRIPT_DIR/fixture-factory.sh"
+# shellcheck disable=SC1091
 # shellcheck source=topology.sh
 source "$SCRIPT_DIR/topology.sh"
+# shellcheck disable=SC1091
 # shellcheck source=recovery-helpers.sh
 source "$SCRIPT_DIR/recovery-helpers.sh"
 
@@ -264,7 +268,6 @@ test_r05_target_grub_config_regenerated() {
   # Required params: ro (and root=UUID=... which is built into the linux line).
   # We check that 'ro' appears exactly once per linux line (not zero, not duplicate).
   local has_duplicate=0
-  local missing_ro=0
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// /}" ]] && continue
@@ -275,7 +278,6 @@ test_r05_target_grub_config_regenerated() {
       ro_count="$(printf '%s' "$line" | grep -oE '\bro\b$' | wc -l)"
       if [[ "$ro_count" -eq 0 ]]; then
         echo "    WARNING: linux entry missing 'ro' param: $line" >&2
-        missing_ro=1
       elif [[ "$ro_count" -gt 1 ]]; then
         echo "    ASSERTION FAILED: duplicate 'ro' param in linux entry: $line" >&2
         has_duplicate=1
@@ -349,10 +351,9 @@ test_r06_target_partsets_regenerated() {
   }
 
   # --- Verify self does NOT reference A PARTUUIDs ---
-  local other_rootfs_partuuid other_efi_partuuid other_var_partuuid
+  local other_rootfs_partuuid other_efi_partuuid
   other_rootfs_partuuid="$(derive_partuuid "$RECOVERY_NAMESPACE" "rootfs-${RECOVERY_CURRENT_SLOT}")"
   other_efi_partuuid="$(derive_partuuid "$RECOVERY_NAMESPACE" "efi-${RECOVERY_CURRENT_SLOT}")"
-  other_var_partuuid="$(derive_partuuid "$RECOVERY_NAMESPACE" "var-${RECOVERY_CURRENT_SLOT}")"
 
   test_harness_assert_not_contains "$self_content" "$other_rootfs_partuuid" || {
     echo "    ASSERTION FAILED: self partset contains A rootfs PARTUUID (should only have B)" >&2
@@ -416,8 +417,8 @@ test_r06_target_partsets_regenerated() {
     while IFS= read -r line; do
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
       [[ -z "${line// /}" ]] && continue
-      local role uuid
-      read -r role uuid _extra <<<"$line"
+      local uuid
+      read -r _ uuid _extra <<<"$line"
       if [[ -n "$uuid" ]] && ! [[ "$uuid" =~ $uuid_pattern ]]; then
         echo "    ASSERTION FAILED: invalid PARTUUID format in $partset_file: '$uuid'" >&2
         format_ok=0

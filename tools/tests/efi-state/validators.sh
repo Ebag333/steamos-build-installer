@@ -29,6 +29,7 @@ fi
 # ---------------------------------------------------------------------------
 if ! declare -f test_harness_assert_file_exists >/dev/null 2>&1; then
   echo "ERROR: validators.sh requires test-harness.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # return/exit pattern for functions sourced in subshells
   return 1 2>/dev/null || exit 1
 fi
 
@@ -452,6 +453,7 @@ validate_boot_paths() {
 validate_partsets() {
   local efi_dir="${1:?validate_partsets: missing EFI_DIR}"
   local expected_partitions="${2:?validate_partsets: missing EXPECTED_PARTITIONS}"
+  # shellcheck disable=SC2034  # accepted for API parity; derived from EXPECTED_PARTITIONS when omitted
   local partition_count="${3:-}"
 
   local partsets_dir="$efi_dir/SteamOS/partsets"

@@ -35,19 +35,23 @@ fi
 # ---------------------------------------------------------------------------
 if ! declare -f test_harness_init >/dev/null 2>&1; then
   echo "ERROR: live-helpers.sh requires test-harness.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # return works when sourced; exit is the fallback
   return 1 2>/dev/null || exit 1
 fi
 
 if ! declare -f create_mock_boot_fixture >/dev/null 2>&1; then
   echo "ERROR: live-helpers.sh requires fixture-factory.sh (source it first)." >&2
+  # shellcheck disable=SC2317  # return works when sourced; exit is the fallback
   return 1 2>/dev/null || exit 1
 fi
 
 # ---------------------------------------------------------------------------
 # Live scenario constants
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2034  # part of live scenario API contract (available for test use)
 LIVE_SLOT_COUNT=2
 LIVE_CURRENT_SLOT="A"
+# shellcheck disable=SC2034  # part of live scenario API contract (available for test use)
 LIVE_TARGET_SLOT="A"
 LIVE_SCENARIO="live"
 
@@ -383,7 +387,6 @@ _live_run_update_grub() {
 
   local grub_cfg="$efi_dir/EFI/steamos/grub.cfg"
   local grub_defaults="$rootfs_dir/etc/default/grub"
-  local grub_steamos="$rootfs_dir/etc/default/grub-steamos"
 
   if [[ ! -f "$grub_defaults" ]]; then
     echo "ERROR: _live_run_update_grub: /etc/default/grub not found" >&2
@@ -395,12 +398,6 @@ _live_run_update_grub() {
   # and produces a new grub.cfg. We simulate this by re-generating grub.cfg
   # with the current rootfs UUID.
   local rootfs_uuid="$LIVE_TARGET_UUID"
-
-  # Check if steamos-specific parameters exist in grub-steamos
-  local steamos_params=""
-  if [[ -f "$grub_steamos" ]]; then
-    steamos_params="$(grep '^GRUB_CMDLINE_LINUX_DEFAULT=' "$grub_steamos" 2>/dev/null | cut -d= -f2- | tr -d '"')"
-  fi
 
   populate_mock_grub_cfg "$grub_cfg" "$rootfs_uuid"
 

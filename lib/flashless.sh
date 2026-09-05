@@ -154,39 +154,6 @@ flashless_detect_slots() {
   log "  var:    $FL_TARGET_VAR"
 }
 
-# ── Safety checks ─────────────────────────────────────────────────────────────
-
-flashless_safety_checks() {
-  local real_current
-  real_current="$(readlink -f "/dev/disk/by-partsets/$FL_CURRENT/rootfs" 2>/dev/null)" \
-    || die "Cannot resolve current rootfs device"
-
-  if [[ "$real_current" == "$FL_TARGET_ROOTFS" ]]; then
-    die "Current and target rootfs resolve to the same device — refusing to overwrite"
-  fi
-
-  # The currently booted slot must also be the next-boot slot.  If a pending
-  # transition exists, overwriting the target could strand the system.
-  local selected
-  selected="$(steamos-bootconf selected-image 2>/dev/null)" \
-    || die "Cannot determine selected boot slot"
-  if [[ "$selected" != "$FL_CURRENT" ]]; then
-    die "Current slot is $FL_CURRENT but selected-image is $selected — pending slot transition, refusing flashless install"
-  fi
-
-  local dev
-  for dev in "$FL_TARGET_ROOTFS" "$FL_TARGET_EFI" "$FL_TARGET_VAR"; do
-    [[ -b "$dev" ]] || continue
-    local mnt
-    mnt="$(findmnt -rn -S "$dev" -o TARGET 2>/dev/null | head -n1)" || true
-    if [[ -n "$mnt" ]]; then
-      die "Target partition $dev is mounted at $mnt — unmount before flashless install"
-    fi
-  done
-
-  log "Flashless safety checks passed"
-}
-
 # ── Image extraction ──────────────────────────────────────────────────────────
 
 # Loop-mount the built image and identify the source rootfs by GPT PARTLABEL.
@@ -765,7 +732,15 @@ flashless_install() {
   # Phase 1: detect + safety.
   stage_header "preparing & validating"
   flashless_detect_slots
-  flashless_safety_checks
+
+  # Preflight safety checks
+  preflight_validate \
+    --scenario "flashless" \
+    --rootfs "/" \
+    --efi "" \
+    --esp "" \
+    --slot "$FL_TARGET" \
+    --variant "${TARGET_VARIANT:-}"
 
   # Phase 2: attach built image, identify source rootfs, verify it's our build.
   flashless_extract_image "$img"

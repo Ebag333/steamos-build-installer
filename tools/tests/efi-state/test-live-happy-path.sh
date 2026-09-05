@@ -32,14 +32,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=test-harness.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/test-harness.sh"
 # shellcheck source=fixture-factory.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/fixture-factory.sh"
 # shellcheck source=topology.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/topology.sh"
 # shellcheck source=validators.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/validators.sh"
 # shellcheck source=live-helpers.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/live-helpers.sh"
 
 # ---------------------------------------------------------------------------

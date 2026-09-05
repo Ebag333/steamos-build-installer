@@ -33,10 +33,20 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source dependencies (order matters: harness first, then factories, helpers)
 # ---------------------------------------------------------------------------
 
+# shellcheck source=test-harness.sh
+# shellcheck disable=SC1091
 source "$_SCRIPT_DIR/test-harness.sh"
+# shellcheck source=fixture-factory.sh
+# shellcheck disable=SC1091
 source "$_SCRIPT_DIR/fixture-factory.sh"
+# shellcheck source=build-helpers.sh
+# shellcheck disable=SC1091
 source "$_SCRIPT_DIR/build-helpers.sh"
+# shellcheck source=validators.sh
+# shellcheck disable=SC1091
 source "$_SCRIPT_DIR/validators.sh"
+# shellcheck source=topology.sh
+# shellcheck disable=SC1091
 source "$_SCRIPT_DIR/topology.sh"
 
 # ---------------------------------------------------------------------------
@@ -341,8 +351,6 @@ test_b04_partsets_contain_target_identities() {
 
   # Verify "all" partset contains target PARTUUIDs (slot A + ESP for single-slot)
   if [[ -f "$partsets_dir/all" ]]; then
-    local all_content
-    all_content="$(cat "$partsets_dir/all")"
     local all_has_rootfs_a=0 all_has_esp=0
     while IFS= read -r line; do
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -482,7 +490,7 @@ test_b05_slot_a_bootconf_created() {
   if [[ -n "$title_value" ]]; then
     local has_slot_a=0
     case "$title_value" in
-      *"slot A"* | *"slot A"* | *"(A)"*) has_slot_a=1 ;;
+      *"slot A"* | *"(A)"*) has_slot_a=1 ;;
     esac
     if [[ "$has_slot_a" -ne 1 ]]; then
       echo "    ASSERTION FAILED: A.conf title does not reference slot A: '$title_value'" >&2
@@ -505,6 +513,7 @@ test_b05_slot_a_bootconf_created() {
 # Test runner — when sourced, this array is populated for the caller
 # ---------------------------------------------------------------------------
 
+# shellcheck disable=SC2034  # BUILD_ARTIFACT_TESTS is part of the public API (read by consumers)
 BUILD_ARTIFACT_TESTS=(
   test_b01_all_artifacts_pass_semantic_validation
   test_b02_efi_binary_generated_correctly

@@ -38,5 +38,6 @@ _pf_command_available() {
   done
 
   # Chroot fallback
+  # shellcheck disable=SC2016 # single quotes intentional: '$1' is expanded by sh inside chroot
   chroot "$rootfs" /bin/sh -c 'command -v "$1" >/dev/null 2>&1' sh "$cmd"
 }

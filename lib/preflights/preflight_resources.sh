@@ -23,7 +23,7 @@ fi
 # The lock fd remains held for the lifetime of the calling process so that
 # concurrent builds are rejected.  Callers should call
 # _pf_res_lock_cleanup explicitly or rely on process exit.
-PF_LOCK_FD=""
+: "${PF_LOCK_FD:=}"
 
 # ---------------------------------------------------------------------------
 # Internal helpers

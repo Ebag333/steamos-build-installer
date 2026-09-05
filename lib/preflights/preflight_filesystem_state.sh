@@ -421,9 +421,9 @@ _pf_fs_resolve_dm_data_device_major_minor() {
     first_dep="$(echo "$dm_deps" | grep -oP '\(\d+,\s*\d+\)' | head -n1)" || first_dep=""
 
     if [[ -n "$first_dep" ]]; then
-      # Convert "(major, minor)" to "major:minor".
-      local dep_mm
-      dep_mm="$(echo "$first_dep" | sed 's/(\([0-9]*\), \([0-9]*\))$/\1:\2/')" || dep_mm=""
+      # Convert "(major, minor)" to "major:minor" using parameter expansion.
+      local dep_mm="${first_dep//[() ]/}"
+      dep_mm="${dep_mm/,/:}"
       if [[ -n "$dep_mm" ]]; then
         echo "$dep_mm"
         return 0

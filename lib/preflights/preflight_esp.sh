@@ -20,13 +20,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-# Source preflight_efi.sh for _canonicalize_efi_device and _efi_dev_major_minor.
-# TODO: these should move to a shared device-identity library to reduce coupling.
-_PF_ESP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=preflight_efi.sh
-source "${_PF_ESP_DIR}/preflight_efi.sh"
-unset _PF_ESP_DIR
-
 # ---------------------------------------------------------------------------
 # Preflight checks — independently callable
 # ---------------------------------------------------------------------------
