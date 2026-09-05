@@ -16,6 +16,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+source "$(dirname "${BASH_SOURCE[0]}")/preflight_command_probe.sh"
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -67,41 +69,11 @@ _pf_gen_get_uuid_from_device() {
   echo "$uuid"
 }
 
-# TODO: This duplicates preflight_command_availability.sh. Keep one canonical
-# implementation to avoid drift between validators.
-
 # _pf_gen_command_available ROOTFS CMD
-#   Check whether CMD exists and is executable in the rootfs.
-#   First tries a direct path resolution inside $rootfs; if that fails,
-#   attempts a chroot probe.  Returns 0 if available, 1 otherwise.
-#   Does NOT die — callers decide severity.
+#   Thin wrapper — delegates to the shared _pf_command_available helper.
+#   Returns 0 if available, 1 otherwise.  Does NOT die — callers decide severity.
 _pf_gen_command_available() {
-  local rootfs="${1:?_pf_gen_command_available: missing rootfs path}"
-  local cmd="${2:?_pf_gen_command_available: missing command name}"
-
-  # Candidate paths to probe inside the rootfs.
-  local -a search_paths=(
-    "/usr/bin/$cmd"
-    "/bin/$cmd"
-    "/usr/sbin/$cmd"
-    "/sbin/$cmd"
-  )
-
-  local candidate
-  for candidate in "${search_paths[@]}"; do
-    if [[ -x "$rootfs$candidate" ]]; then
-      return 0
-    fi
-  done
-
-  # Chroot probe — ask the rootfs itself whether the command is available.
-  # Use /bin/sh -c to properly invoke command (a shell builtin) via chroot,
-  # which requires an explicit shell interpreter.
-  if chroot "$rootfs" /bin/sh -c 'command -v "$1" >/dev/null 2>&1' sh "$cmd"; then
-    return 0
-  fi
-
-  return 1
+  _pf_command_available "$@"
 }
 
 # _pf_gen_uuid_is_valid FORMAT
@@ -481,7 +453,7 @@ preflight_generation_source_allowlist() {
   # grub.cfg — machine-specific boot configuration
   local candidate
   for candidate in \
-    "$source_efi/EFI/steamos/grub.cfg" \
+    "$source_efi/EFI/SteamOS/grub.cfg" \
     "$source_efi/EFI/BOOT/grub.cfg"; do
     if [[ -f "$candidate" ]]; then
       debug "PF-25: non-portable path found in source EFI (will not be copied): $candidate"
@@ -492,7 +464,7 @@ preflight_generation_source_allowlist() {
   # grubx64.efi — machine-specific EFI binary
   for candidate in \
     "$source_efi/EFI/BOOT/grubx64.efi" \
-    "$source_efi/EFI/steamos/grubx64.efi"; do
+    "$source_efi/EFI/SteamOS/grubx64.efi"; do
     if [[ -f "$candidate" ]]; then
       debug "PF-25: non-portable path found in source EFI (will not be copied): $candidate"
       found_non_portable=1

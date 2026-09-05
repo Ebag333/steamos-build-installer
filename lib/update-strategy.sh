@@ -41,8 +41,8 @@ apply_update_strategy() {
         log "  hold: skip $bin (not found)"
         continue
       fi
-      if [[ -f "$MNT/usr/bin/$bin.orig" ]]; then
-        log "  hold: skip $bin (already stubbed)"
+      if grep -q 'OS updates are held on this system' "$MNT/usr/bin/$bin" 2>/dev/null; then
+        log "  hold: skip $bin (already a hold stub)"
         continue
       fi
       mv "$MNT/usr/bin/$bin" "$MNT/usr/bin/$bin.orig" \

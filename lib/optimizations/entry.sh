@@ -102,9 +102,26 @@ apply_optimization() {
   local mode="${3:-}"
   local root="${4:-}"
 
-  # Override mode/root if provided
-  [[ -n "$mode" ]] && export OPT_MODE="$mode"
-  [[ -n "$root" ]] && export OPT_ROOT="$root"
+  # Save previous values and override if provided
+  local _prev_mode="${OPT_MODE:-}" _prev_root="${OPT_ROOT:-}"
+  local _mode_overridden=0 _root_overridden=0
+
+  if [[ -n "$mode" ]]; then
+    export OPT_MODE="$mode"
+    _mode_overridden=1
+  fi
+  if [[ -n "$root" ]]; then
+    export OPT_ROOT="$root"
+    _root_overridden=1
+  fi
+
+  # Ensure restoration on any exit path
+  # shellcheck disable=SC2064
+  trap "
+    (( $_mode_overridden )) && export OPT_MODE=\"$_prev_mode\"
+    (( $_root_overridden )) && export OPT_ROOT=\"$_prev_root\"
+    trap - RETURN
+  " RETURN
 
   # Normalize module name to lowercase
   module="${module,,}"
@@ -182,8 +199,26 @@ verify_optimization() {
   local mode="${3:-}"
   local root="${4:-}"
 
-  [[ -n "$mode" ]] && export OPT_MODE="$mode"
-  [[ -n "$root" ]] && export OPT_ROOT="$root"
+  # Save previous values and override if provided
+  local _prev_mode="${OPT_MODE:-}" _prev_root="${OPT_ROOT:-}"
+  local _mode_overridden=0 _root_overridden=0
+
+  if [[ -n "$mode" ]]; then
+    export OPT_MODE="$mode"
+    _mode_overridden=1
+  fi
+  if [[ -n "$root" ]]; then
+    export OPT_ROOT="$root"
+    _root_overridden=1
+  fi
+
+  # Ensure restoration on any exit path
+  # shellcheck disable=SC2064
+  trap "
+    (( $_mode_overridden )) && export OPT_MODE=\"$_prev_mode\"
+    (( $_root_overridden )) && export OPT_ROOT=\"$_prev_root\"
+    trap - RETURN
+  " RETURN
 
   module="${module,,}"
 

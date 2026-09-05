@@ -87,35 +87,55 @@ ensure_flatpak_service() {
   # Service file
   if [[ ! -f "$service_file" ]]; then
     local src_service="$script_dir/lib/configs/steamos-build-flatpak-install.service"
-    if [[ -f "$src_service" ]]; then
-      mkdir -p "$(dirname "$service_file")" \
-        || {
-          warn "ensure_flatpak_service: failed to create directory"
-          return 1
-        }
-      cp "$src_service" "$service_file"
-      log "    Installed service file"
-    else
-      warn "    Service file not found at $src_service"
+    if [[ ! -f "$src_service" ]]; then
+      warn "ensure_flatpak_service: source service file not found at $src_service"
+      return 1
     fi
+    mkdir -p "$(dirname "$service_file")" \
+      || {
+        warn "ensure_flatpak_service: failed to create directory for service file"
+        return 1
+      }
+    cp "$src_service" "$service_file" \
+      || {
+        warn "ensure_flatpak_service: failed to copy service file"
+        return 1
+      }
+    log "    Installed service file"
   fi
 
   # Install script
   if [[ ! -f "$install_script" ]]; then
     local src_script="$script_dir/lib/configs/install-staged-flatpaks.sh"
-    if [[ -f "$src_script" ]]; then
-      mkdir -p "$(dirname "$install_script")"
-      install -m 755 "$src_script" "$install_script"
-      log "    Installed staging script"
-    else
-      warn "    Staging script not found at $src_script"
+    if [[ ! -f "$src_script" ]]; then
+      warn "ensure_flatpak_service: source staging script not found at $src_script"
+      return 1
     fi
+    mkdir -p "$(dirname "$install_script")" \
+      || {
+        warn "ensure_flatpak_service: failed to create directory for install script"
+        return 1
+      }
+    install -m 755 "$src_script" "$install_script" \
+      || {
+        warn "ensure_flatpak_service: failed to install staging script"
+        return 1
+      }
+    log "    Installed staging script"
   fi
 
   # Enable service
   if [[ ! -L "$wants_link" ]]; then
-    mkdir -p "$(dirname "$wants_link")"
-    ln -sf /etc/systemd/user/steamos-build-flatpak-install.service "$wants_link"
+    mkdir -p "$(dirname "$wants_link")" \
+      || {
+        warn "ensure_flatpak_service: failed to create wants directory"
+        return 1
+      }
+    ln -sf /etc/systemd/user/steamos-build-flatpak-install.service "$wants_link" \
+      || {
+        warn "ensure_flatpak_service: failed to create wants symlink"
+        return 1
+      }
     log "    Enabled service"
   fi
 

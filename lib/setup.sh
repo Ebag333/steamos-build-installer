@@ -21,6 +21,19 @@ setup_resolve_workdir() {
 
   # If the user forced a location via config, honour it.
   if [[ "${WORKDIR_LOCATION:-auto}" == "ram" ]]; then
+    # When RAM is forced, still validate the final destination has room for the
+    # completed image, since it will be mv'd there at the end of the build.
+    if [[ -n "${OUT_FINAL:-}" && "$OUT" != "$OUT_FINAL" ]]; then
+      local final_avail
+      final_avail="$(df -m --output=avail "$(dirname "$OUT_FINAL")" | tail -1 | tr -d ' ')"
+      # need_mb may not be computed yet; estimate conservatively from the
+      # decompressed image (~8 GB) + 15 GB headroom = ~23 GB.
+      local final_need="${need_mb:-23552}"
+      if ((final_avail < final_need)); then
+        die "Final destination $(dirname "$OUT_FINAL") only has ${final_avail} MB free, need ~${final_need} MB for the completed image."
+      fi
+      log "Final destination: ${final_avail} MB free on $(dirname "$OUT_FINAL"), need ~${final_need} MB — OK"
+    fi
     WORKDIR="/dev/shm/steamos-build"
     OUT="$WORKDIR/$(basename "$OUT")"
     mkdir -p "$WORKDIR" || die "Failed to create work directory: $WORKDIR"
@@ -113,10 +126,27 @@ if len(d) >= 596 and d[512:520] == b"EFI PART":
 
   # Auto: prefer RAM if it has enough headroom, otherwise disk.
   if ((ram_avail >= need_mb)); then
-    WORKDIR="/dev/shm/steamos-build"
-    OUT="$WORKDIR/$(basename "$OUT")"
-    mkdir -p "$WORKDIR" || die "Failed to create work directory: $WORKDIR"
-    log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free, need ~${need_mb})"
+    # RAM is sufficient for the build workspace, but we also need to verify
+    # the final destination filesystem has room for the completed image.
+    local final_ok=1
+    if [[ -n "${OUT_FINAL:-}" && "$OUT" != "$OUT_FINAL" ]]; then
+      local final_avail
+      final_avail="$(df -m --output=avail "$(dirname "$OUT_FINAL")" | tail -1 | tr -d ' ')"
+      if ((final_avail < need_mb)); then
+        log "RAM has enough workspace (${ram_avail} MB), but final destination $(dirname "$OUT_FINAL") only has ${final_avail} MB free (need ~${need_mb} MB) — falling back to disk"
+        final_ok=0
+      fi
+    fi
+    if ((final_ok)); then
+      WORKDIR="/dev/shm/steamos-build"
+      OUT="$WORKDIR/$(basename "$OUT")"
+      mkdir -p "$WORKDIR" || die "Failed to create work directory: $WORKDIR"
+      log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free, need ~${need_mb})"
+    elif ((disk_avail >= need_mb)); then
+      log "Build workspace: disk (${disk_avail} MB free, final destination needs ~${need_mb} MB)"
+    else
+      die "Not enough space: RAM=${ram_avail} MB, disk=${disk_avail} MB. Final destination needs ~${need_mb} MB."
+    fi
   elif ((disk_avail >= need_mb)); then
     log "Build workspace: disk (${disk_avail} MB free, RAM only ${ram_avail} MB)"
   else
@@ -177,16 +207,20 @@ setup_copy_image() {
       ;;
   esac
 
-  # Never use OUT_FINAL as the source for a new build.  OUT_FINAL is the
-  # successfully PATCHED image from the previous run, not a pristine
-  # decompression cache.  Reusing it would make builds cumulative and can carry
-  # stale OverlayFS/package/config state from one build into the next.
-  #
-  # Always create the disposable .building image directly from IMG.  This costs
-  # another decompression for compressed inputs, but guarantees every run starts
-  # from the clean repair image.  A dedicated pristine cache can be added later
-  # if decompression time becomes important.
-  if [[ -f "$OUT" || -f "$FINGERPRINT_FILE" ]]; then
+  # Resume support: if both $OUT and the fingerprint file exist and the
+  # stored fingerprint matches the current source, skip decompression.
+  # This allows interrupted builds to resume without re-decompressing.
+  if [[ -f "$OUT" && -f "$FINGERPRINT_FILE" ]]; then
+    local stored_fp
+    stored_fp="$(cat "$FINGERPRINT_FILE" 2>/dev/null || true)"
+    if [[ "$stored_fp" == "$_src_fp" ]]; then
+      log "Resuming from existing working copy (fingerprint matches)"
+      return 0
+    fi
+    log "Source changed (fingerprint mismatch) — removing stale working copy"
+    rm -f "$OUT" "$FINGERPRINT_FILE"
+  elif [[ -f "$OUT" || -f "$FINGERPRINT_FILE" ]]; then
+    # One exists without the other — incomplete state, remove both.
     log "Removing previous incomplete working copy"
     rm -f "$OUT" "$FINGERPRINT_FILE"
   fi

@@ -634,7 +634,7 @@ backend_reboot() {
   local -a options=()
   local slot_a="" slot_b=""
 
-  while IFS=$'\t' read -r dev label; do
+  while IFS=' ' read -r dev label; do
     case "$label" in
       rootfs-A) slot_a="$dev" ;;
       rootfs-B) slot_b="$dev" ;;

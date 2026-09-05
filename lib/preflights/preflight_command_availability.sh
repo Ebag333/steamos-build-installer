@@ -16,6 +16,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+source "$(dirname "${BASH_SOURCE[0]}")/preflight_command_probe.sh"
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -26,30 +28,7 @@ fi
 #   attempts a chroot probe.  Returns 0 if available, 1 otherwise.
 #   Does NOT die — callers decide severity.
 _pf_ca_command_available() {
-  local rootfs="${1:?_pf_ca_command_available: missing rootfs path}"
-  local cmd="${2:?_pf_ca_command_available: missing command name}"
-
-  # Candidate paths to probe inside the rootfs.
-  local -a search_paths=(
-    "/usr/bin/$cmd"
-    "/bin/$cmd"
-    "/usr/sbin/$cmd"
-    "/sbin/$cmd"
-  )
-
-  local candidate
-  for candidate in "${search_paths[@]}"; do
-    if [[ -x "$rootfs$candidate" ]]; then
-      return 0
-    fi
-  done
-
-  # Chroot probe — ask the rootfs itself whether the command is available.
-  if chroot "$rootfs" command -v "$cmd" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  return 1
+  _pf_command_available "$@"
 }
 
 # _pf_ca_grub_module_exists ROOTFS MODULE
@@ -152,6 +131,7 @@ preflight_command_availability_boot_payload() {
   fi
 
   local found_kernel=0
+  local found_pair=0
   local vmlinuz
   for vmlinuz in "$boot_dir"/vmlinuz-*; do
     [[ -f "$vmlinuz" ]] || continue
@@ -162,16 +142,21 @@ preflight_command_availability_boot_payload() {
     local initramfs="$boot_dir/initramfs-${ver}.img"
 
     if [[ ! -f "$initramfs" ]]; then
-      die "PF-52: no matching initramfs for $vmlinuz (expected $initramfs)"
+      debug "PF-52: no matching initramfs for $vmlinuz (expected $initramfs), skipping"
+      continue
     fi
 
     debug "PF-52: boot payload found: vmlinuz-$ver + initramfs-$ver.img"
-    # At least one valid pair is enough.
-    return 0
+    found_pair=1
+    break
   done
 
   if [[ "$found_kernel" -eq 0 ]]; then
     die "PF-52: no vmlinuz-* kernel found in $boot_dir"
+  fi
+
+  if [[ "$found_pair" -eq 0 ]]; then
+    die "PF-52: no matching initramfs found for any vmlinuz-* in $boot_dir"
   fi
 }
 

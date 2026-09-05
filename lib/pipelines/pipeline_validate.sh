@@ -1144,6 +1144,37 @@ phase_validate_report() {
 # ---------------------------------------------------------------------------
 # Outputs validation results as JSON for machine ingestion.
 
+# Escape a string for safe inclusion in a JSON string value.
+# Handles all JSON-required escapes: control chars (U+0000–U+001F),
+# backslash, and double-quote.
+_json_escape() {
+  local s="$1"
+  # Backslash must be first to avoid double-escaping
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  # Control characters that have short escape sequences
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\b'/\\b}"
+  s="${s//$'\f'/\\f}"
+  # Remaining control characters (U+0000–U+001F) as \u00XX
+  local i c
+  for (( i=0; i<${#s}; i++ )); do
+    c="${s:$i:1}"
+    # Check if character is a control character (ASCII < 0x20) that we
+    # haven't already escaped. printf %d gives the decimal codepoint.
+    local ord
+    printf -v ord '%d' "'$c" 2>/dev/null || ord=0
+    if (( ord >= 0 && ord < 32 )); then
+      s="${s:0:$i}$(printf '\\u%04x' "$ord")${s:$((i+1))}"
+      # skip past the 6-char escape we just inserted
+      (( i += 5 ))
+    fi
+  done
+  printf '%s' "$s"
+}
+
 _validate_report_json() {
   local total=$((_VALIDATE_PASSED + _VALIDATE_FAILED + _VALIDATE_SKIPPED + _VALIDATE_INFO + _VALIDATE_FOUND))
 
@@ -1186,18 +1217,28 @@ _validate_report_json() {
     esac
 
     # JSON escape detail, expected, found
-    local detail_escaped="${detail//\\/\\\\}"
-    detail_escaped="${detail_escaped//\"/\\\"}"
-    local expected_escaped="${expected//\\/\\\\}"
-    expected_escaped="${expected_escaped//\"/\\\"}"
-    local found_escaped="${found//\\/\\\\}"
-    found_escaped="${found_escaped//\"/\\\"}"
+    local detail_escaped
+    detail_escaped="$(_json_escape "$detail")"
+    local expected_escaped
+    expected_escaped="$(_json_escape "$expected")"
+    local found_escaped
+    found_escaped="$(_json_escape "$found")"
+
+    # Also escape item, display, section, status for safety
+    local item_escaped
+    item_escaped="$(_json_escape "$item")"
+    local display_escaped
+    display_escaped="$(_json_escape "$display")"
+    local section_escaped
+    section_escaped="$(_json_escape "$section")"
+    local status_escaped
+    status_escaped="$(_json_escape "$status")"
 
     [[ "$first" -eq 0 ]] && echo ","
     first=0
 
     printf '    {"status": "%s", "item": "%s", "display": "%s", "detail": "%s", "expected": "%s", "found": "%s", "section": "%s"}' \
-      "$status" "$item" "$display" "$detail_escaped" "$expected_escaped" "$found_escaped" "$section"
+      "$status_escaped" "$item_escaped" "$display_escaped" "$detail_escaped" "$expected_escaped" "$found_escaped" "$section_escaped"
   done
 
   echo ""

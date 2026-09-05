@@ -26,8 +26,8 @@ _build_devtools_create_root() {
   # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
   local profile="${2:?}"
 
-  local build_dir="${WORKDIR:-/tmp}/build-roots/$name-$$"
-  mkdir -p "$build_dir"
+  local build_dir
+  build_dir="$(mktemp -d "${WORKDIR:-/tmp}/build-roots/$name-XXXXXXXX")"
 
   local pacman_conf="${PROFILE_PACMAN:?profile must set PROFILE_PACMAN}"
   local arch="${PROFILE_ARCH:-x86_64}"
@@ -50,11 +50,17 @@ _build_devtools_create_root() {
 
   # Create the root with base packages
   local mkarchroot_output=""
-  mkarchroot_output="$(mkarchroot \
-    -C "$pacman_conf" \
-    ${PROFILE_MAKEPKG:+-M "$PROFILE_MAKEPKG"} \
-    "$build_dir/root" \
-    base base-devel 2>&1)" || {
+  local -a mkarchroot_args=(
+    -C "$pacman_conf"
+  )
+  if [[ -n "${PROFILE_MAKEPKG:-}" ]]; then
+    mkarchroot_args+=(-M "$PROFILE_MAKEPKG")
+  fi
+  mkarchroot_args+=(
+    "$build_dir/root"
+    base base-devel
+  )
+  mkarchroot_output="$(mkarchroot "${mkarchroot_args[@]}" 2>&1)" || {
     warn "mkarchroot failed:"
     echo "$mkarchroot_output" | while IFS="" read -r line; do
       warn "  $line"
@@ -150,11 +156,17 @@ _build_devtools_run() {
 
   (
     cd "$build_src" || exit 1
-    makechrootpkg \
-      -r "$root" \
-      -C "$pacman_conf" \
-      ${PROFILE_MAKEPKG:+-M "$PROFILE_MAKEPKG"} \
-      -l "$output_dir" \
+    local -a makechrootpkg_args=(
+      -r "$root"
+      -C "$pacman_conf"
+    )
+    if [[ -n "${PROFILE_MAKEPKG:-}" ]]; then
+      makechrootpkg_args+=(-M "$PROFILE_MAKEPKG")
+    fi
+    makechrootpkg_args+=(
+      -l "$output_dir"
+    )
+    makechrootpkg "${makechrootpkg_args[@]}" \
       2>&1
   ) | tee "$build_log" || {
     warn "Build failed — see log: $build_log"

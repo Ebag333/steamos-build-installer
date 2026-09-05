@@ -538,9 +538,9 @@ flash_write() {
     # percentages) goes to a named pipe so we can emit @@PROGRESS:XX@@
     # markers for the GUI while dd writes the data.
     local flash_fifo
-    flash_fifo="$(mktemp -u /tmp/flash-progress.XXXXXX)"
+    flash_fifo="$(mktemp -d)/fifo"
     mkfifo "$flash_fifo"
-    trap 'rm -f "$flash_fifo"' EXIT
+    trap 'rm -rf "$(dirname "$flash_fifo")"' EXIT
 
     pv -n -s "$img_bytes" "$img" 2>"$flash_fifo" \
       | dd of="$target" bs="$bs" conv=fsync oflag=sync &
@@ -554,10 +554,10 @@ flash_write() {
     done <"$flash_fifo"
 
     wait "$dd_pid" || {
-      rm -f "$flash_fifo"
+      rm -rf "$(dirname "$flash_fifo")"
       die "Flash write failed"
     }
-    rm -f "$flash_fifo"
+    rm -rf "$(dirname "$flash_fifo")"
     trap - EXIT
   else
     local dd_exit=0

@@ -60,6 +60,21 @@ warn() {
   fi
 }
 
+emit_prefixed_lines() {
+  local emitter="${1:?emit_prefixed_lines: missing emitter}"
+  local prefix="${2:?emit_prefixed_lines: missing prefix}"
+  local text="${3:-}"
+  local skip_empty="${4:-0}"
+  local line
+
+  [[ -n "$text" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$skip_empty" == 1 && -z "$line" ]] && continue
+    "$emitter" "${prefix}${line}"
+  done <<<"$text"
+}
+
 step() {
   CURRENT_STEP="$*"
   log "STEP: $CURRENT_STEP"
@@ -279,8 +294,9 @@ persist_project_files() {
   mkdir -p "$dest"
 
   # Sync project files using rsync if available, otherwise cp
+  local copy_rc=0
   if command -v rsync &>/dev/null; then
-    rsync -a --delete \
+    if ! rsync -a --delete \
       --exclude='.git/' \
       --exclude='.idea/' \
       --exclude='test-*.sh' \
@@ -289,13 +305,17 @@ persist_project_files() {
       --exclude='logs/' \
       --exclude='recovery/' \
       --exclude='.version' \
-      "$src/" "$dest/" \
-      || {
-        warn "rsync failed — falling back to cp"
-        _persist_project_files_cp "$src" "$dest"
-      }
+      "$src/" "$dest/"; then
+      warn "rsync failed — falling back to cp"
+      _persist_project_files_cp "$src" "$dest" || copy_rc=$?
+    fi
   else
-    _persist_project_files_cp "$src" "$dest"
+    _persist_project_files_cp "$src" "$dest" || copy_rc=$?
+  fi
+
+  if ((copy_rc != 0)); then
+    warn "Failed to persist project files to $dest (rc=$copy_rc)"
+    return 1
   fi
 
   # Write version stamp
@@ -347,6 +367,10 @@ ensure_project_persisted() {
 #   Run curl with retry on transient failures (network errors, HTTP 5xx).
 curl_retry() {
   local attempts="${1:?curl_retry: missing attempt count}"
+  if ! [[ "$attempts" =~ ^[0-9]+$ ]] || (( attempts < 1 )); then
+    warn "curl_retry: attempts must be a positive integer (got: $attempts)"
+    return 1
+  fi
   shift
   local i
   for ((i = 1; i <= attempts; i++)); do
@@ -514,8 +538,9 @@ wait_ext4_gone() {
       warn "    wchan: $_wchan"
 
       # status: voluntary/nonvoluntary ctxt switches, state
-      sed -n '1p;/^State:/p;/^voluntary/p' "/proc/$journal_pid/status" 2>/dev/null \
-        | while IFS="" read -r line; do warn "    $line"; done
+      local _status
+      _status="$(sed -n '1p;/^State:/p;/^voluntary/p' "/proc/$journal_pid/status" 2>/dev/null)"
+      emit_prefixed_lines warn "    " "$_status"
 
       # Kernel stack trace — shows the exact call chain
       if [[ -r "/proc/$journal_pid/stack" ]]; then
@@ -523,7 +548,7 @@ wait_ext4_gone() {
         _stack="$(cat "/proc/$journal_pid/stack" 2>/dev/null || true)"
         if [[ -n "$_stack" ]]; then
           warn "    kernel stack:"
-          printf '%s\n' "$_stack" | while IFS="" read -r line; do warn "      $line"; done
+          emit_prefixed_lines warn "      " "$_stack"
         fi
       fi
 
@@ -539,7 +564,7 @@ wait_ext4_gone() {
   _loop_refs="$(fuser -v "$loop" 2>/dev/null || true)"
   if [[ -n "$_loop_refs" ]]; then
     warn "  Processes with $loop open:"
-    printf '%s\n' "$_loop_refs" | while IFS="" read -r line; do warn "    $line"; done
+    emit_prefixed_lines warn "    " "$_loop_refs"
   fi
 
   # Check for any remaining mount references
@@ -547,7 +572,7 @@ wait_ext4_gone() {
   _mount_refs="$(findmnt -rn -S "$loop" 2>/dev/null || true)"
   if [[ -n "$_mount_refs" ]]; then
     warn "  Remaining mount references for $loop:"
-    printf '%s\n' "$_mount_refs" | while IFS="" read -r line; do warn "    $line"; done
+    emit_prefixed_lines warn "    " "$_mount_refs"
   fi
 
   # Ext4 sysfs state
@@ -556,7 +581,7 @@ wait_ext4_gone() {
     _ext4_state="$(find "$sys" -maxdepth 1 -mindepth 1 -printf '%f\n' 2>/dev/null | head -20)"
     if [[ -n "$_ext4_state" ]]; then
       warn "  ext4 sysfs entries for $name:"
-      printf '%s\n' "$_ext4_state" | while IFS="" read -r entry; do warn "    $entry"; done
+      emit_prefixed_lines warn "    " "$_ext4_state"
     fi
   fi
 
@@ -750,9 +775,7 @@ cleanup() {
         loop_mounts="$(mounts_for_loop "$LOOPDEV")"
         if [[ -n "$loop_mounts" ]]; then
           log "cleanup: $LOOPDEV has remaining mounts:"
-          while IFS="" read -r m; do
-            [[ -n "$m" ]] && log "cleanup:   $m"
-          done <<<"$loop_mounts"
+          emit_prefixed_lines log "    " "$loop_mounts"
         fi
 
         if ((rc == 0)); then
@@ -793,9 +816,7 @@ cleanup() {
 
       if [[ -n "$remaining" ]]; then
         warn "cleanup: overlay workspace still attached:"
-        while IFS="" read -r m; do
-          [[ -n "$m" ]] && warn "  $m"
-        done <<<"$remaining"
+        emit_prefixed_lines warn "  " "$remaining"
         rc=1
       fi
     fi
@@ -1001,35 +1022,35 @@ compare_system_state() {
 
   if [[ -n "$new_loops" ]]; then
     warn "  NEW loop devices (left behind):"
-    while IFS="" read -r l; do [[ -n "$l" ]] && warn "    $l"; done <<<"$new_loops"
+    emit_prefixed_lines warn "    " "$new_loops" 1
     rc=1
   fi
 
   if [[ -n "$new_mounts" ]]; then
     warn "  NEW mounts (left behind):"
-    while IFS="" read -r m; do [[ -n "$m" ]] && warn "    $m"; done <<<"$new_mounts"
+    emit_prefixed_lines warn "    " "$new_mounts" 1
     rc=1
   fi
 
   if [[ -n "$new_ext4" ]]; then
     warn "  NEW ext4 superblocks (left behind):"
-    while IFS="" read -r e; do [[ -n "$e" ]] && warn "    $e"; done <<<"$new_ext4"
+    emit_prefixed_lines warn "    " "$new_ext4" 1
     rc=1
   fi
 
   if [[ -n "$gone_loops" ]]; then
     log "  Removed loop devices (expected):"
-    while IFS="" read -r l; do [[ -n "$l" ]] && log "    $l"; done <<<"$gone_loops"
+    emit_prefixed_lines log "    " "$gone_loops" 1
   fi
 
   if [[ -n "$gone_mounts" ]]; then
     log "  Removed mounts (expected):"
-    while IFS="" read -r m; do [[ -n "$m" ]] && log "    $m"; done <<<"$gone_mounts"
+    emit_prefixed_lines log "    " "$gone_mounts" 1
   fi
 
   if [[ -n "$gone_ext4" ]]; then
     log "  Removed ext4 superblocks (expected):"
-    while IFS="" read -r e; do [[ -n "$e" ]] && log "    $e"; done <<<"$gone_ext4"
+    emit_prefixed_lines log "    " "$gone_ext4" 1
   fi
 
   if ((rc == 0)); then
@@ -1051,15 +1072,28 @@ compare_system_state() {
 append_arch_repos() {
   local conf="${1:?append_arch_repos: missing config path}"
 
-  cat >>"$conf" <<'EOF'
+  # Idempotency: only append sections that don't already exist
+  if ! grep -q '^\[core\]' "$conf" 2>/dev/null; then
+    cat >>"$conf" <<'EOF'
 
 [core]
 Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+EOF
+  fi
+
+  if ! grep -q '^\[extra\]' "$conf" 2>/dev/null; then
+    cat >>"$conf" <<'EOF'
 
 [extra]
 Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+EOF
+  fi
+
+  if ! grep -q '^\[multilib\]' "$conf" 2>/dev/null; then
+    cat >>"$conf" <<'EOF'
 
 [multilib]
 Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
 EOF
+  fi
 }

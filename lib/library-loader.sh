@@ -22,6 +22,13 @@ load_workflow_libs() {
   local workflow="${1:?load_workflow_libs: missing workflow type}"
   local base_dir="${2:?load_workflow_libs: missing base directory}"
 
+  # Idempotency guard: skip if this workflow+base_dir combination was already loaded.
+  # Use a sanitized sentinel variable name derived from the arguments.
+  local _sentinel_key="_LOADED_${workflow}_$(printf '%s' "$base_dir" | tr '/-' '__')"
+  if [[ -n "${!_sentinel_key:-}" ]]; then
+    return 0
+  fi
+
   # Common libraries (shared by all workflows).
   # Order matters: later libs may depend on functions/variables defined by
   # earlier ones (e.g. overlay needs common helpers, common_drivers needs
@@ -108,6 +115,9 @@ load_workflow_libs() {
 
   # Source customization entry point
   _load_lib "$base_dir" "customization" || return 1
+
+  # Mark this workflow+base_dir combination as loaded.
+  printf -v "$_sentinel_key" '%s' '1'
 }
 
 # Load a single library.
@@ -117,8 +127,8 @@ _load_lib() {
   local lib_name="$2"
   local lib_path="$base_dir/$lib_name.sh"
 
-  if [[ ! -r "$lib_path" ]]; then
-    printf '[loader] WARNING: Missing library: %s (base_dir=%s)\n' "$lib_path" "$base_dir" >&2
+  if [[ ! -f "$lib_path" || ! -r "$lib_path" ]]; then
+    printf '[loader] WARNING: Cannot source library: %s (base_dir=%s) — path is not a readable regular file\n' "$lib_path" "$base_dir" >&2
     return 1
   fi
 

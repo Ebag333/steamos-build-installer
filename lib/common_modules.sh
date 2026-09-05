@@ -203,10 +203,11 @@ verify_built_modules() {
   local kver="${2:?verify_built_modules: missing kver}"
   local on_fail="${3:-warn}"
 
-  # Minimal kver format sanity check — reject empty or clearly invalid values
-  # before attempting per-module verification (which would otherwise produce
-  # confusing "not found" errors for every module).
-  if [[ ! "$kver" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  # Minimal kver format sanity check — reject values containing path
+  # separators or the special directory names "." and ".." which would
+  # cause path traversal issues.  Empty strings are already caught by
+  # the mandatory parameter on $2 above.
+  if [[ "$kver" == */* || "$kver" == "." || "$kver" == ".." ]]; then
     warn "verify_built_modules: invalid kernel version format: $kver"
     return 1
   fi

@@ -110,9 +110,16 @@ repo_generate_config() {
   local output="${2:?}"
   local include_arch="${3:-1}"
 
+  # Validate that the target's pacman.conf exists and is readable
+  local pacman_conf="$root/etc/pacman.conf"
+  if [[ ! -r "$pacman_conf" ]]; then
+    echo "ERROR: Cannot read $pacman_conf — target root may be corrupt or incomplete." >&2
+    return 1
+  fi
+
   # Read DBPath from the target's config
   local dbpath
-  dbpath="$(sed -n 's/^[[:space:]]*DBPath[[:space:]]*=//p' "$root/etc/pacman.conf" 2>/dev/null | head -1 | tr -d ' ')"
+  dbpath="$(sed -n 's/^[[:space:]]*DBPath[[:space:]]*=//p' "$pacman_conf" | head -1 | tr -d ' ')"
   [[ -n "$dbpath" ]] || dbpath="/var/lib/pacman"
 
   # Start with options
@@ -125,7 +132,7 @@ repo_generate_config() {
   } >"$output"
 
   # Append repo sections from the target's config (skip [options])
-  sed -n '/^\[/,$p' "$root/etc/pacman.conf" 2>/dev/null | sed '/^\[options\]/,/^$/d' >>"$output"
+  sed -n '/^\[/,$p' "$pacman_conf" | sed '/^\[options\]/,/^$/d' >>"$output"
 
   # Optionally append Arch repos
   if ((include_arch)); then

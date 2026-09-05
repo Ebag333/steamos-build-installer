@@ -353,22 +353,23 @@ cleanup_dkms_scratch() {
 
   [[ -d "$dkms_dir" ]] || return 0
 
-  local module kernel arch ko_dir
-  while IFS= read -r -d '' module_dir; do
-    module="$(basename "$(dirname "$(dirname "$module_dir")")")"
-    kernel="$(basename "$module_dir")"
-    local -a _arch_candidates=("$module_dir"/*)
-    arch="$(basename "${_arch_candidates[0]}" 2>/dev/null)"
+  local module kernel arch ko_dir arch_dir
+  while IFS= read -r -d '' arch_dir; do
+    # DKMS layout: /var/lib/dkms/<module>/<kernel-version>/<arch>/
+    # arch_dir is the <arch> directory (depth 3 from dkms_dir)
+    kernel="$(basename "$(dirname "$arch_dir")")"
+    module="$(basename "$(dirname "$(dirname "$arch_dir")")")"
+    arch="$(basename "$arch_dir")"
 
-    [[ -n "$arch" ]] || continue
+    [[ -n "$module" && -n "$kernel" && -n "$arch" ]] || continue
 
     # Verify installed .ko exists before cleaning scratch
     ko_dir="$root/usr/lib/modules/$kernel"
     if [[ -d "$ko_dir" ]] && find "$ko_dir" -name "${module//-/_}.ko*" -print -quit | grep -q .; then
-      rm -rf -- "$module_dir/$arch/module" 2>/dev/null || true
-      rm -rf -- "$module_dir/$arch/log" 2>/dev/null || true
+      rm -rf -- "$arch_dir/module" 2>/dev/null || true
+      rm -rf -- "$arch_dir/log" 2>/dev/null || true
     fi
-  done < <(find "$dkms_dir" -mindepth 4 -maxdepth 4 -type d -print0 2>/dev/null)
+  done < <(find "$dkms_dir" -mindepth 3 -maxdepth 3 -type d -print0 2>/dev/null)
 }
 
 # ---------------------------------------------------------------------------
@@ -477,7 +478,10 @@ cleanup_disk_space() {
 # Set user password (interactive).
 
 set_user_password() {
-  if passwd -S deck 2>/dev/null | grep -q "P"; then
+  local passwd_status
+  if ! passwd_status=$(passwd -S deck 2>/dev/null); then
+    log "Warning: could not query password status for 'deck'"
+  elif echo "$passwd_status" | awk '$2 == "P" { exit 0 } { exit 1 }'; then
     log "User 'deck' already has a password set"
     return 0
   fi

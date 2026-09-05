@@ -244,6 +244,16 @@ preflight_efi_mountpoint_safe() {
     die "PF-09: refusing to stack or hide files with EFI mount (already a mountpoint): $mountpoint"
   fi
 
+  # Clean up stale test files left behind by a previous interrupted
+  # preflight_efi_accepts_writes run before checking emptiness.
+  local stale
+  for stale in "$mountpoint"/.preflight-writable-*; do
+    [[ -e "$stale" ]] || continue  # glob matched nothing
+    debug "PF-09: removing stale preflight test file: $stale"
+    rm -f "$stale" 2>/dev/null \
+      || die "PF-09: cannot remove stale preflight test file: $stale"
+  done
+
   # Verify empty.
   if [[ -n "$(ls -A "$mountpoint" 2>/dev/null)" ]]; then
     die "PF-09: refusing to stack or hide files with EFI mount (directory not empty): $mountpoint"
@@ -254,8 +264,8 @@ preflight_efi_mountpoint_safe() {
 
 # preflight_efi_not_mounted_elsewhere EFI_DEVICE
 #   PF-10: For temporary mount mode, verify the device is not already mounted.
-#   Uses MAJ:MIN comparison via findmnt to reliably detect mounts even for
-#   device aliases, device-mapper paths, and bind mounts.
+#   Uses MAJ:MIN comparison via /proc/self/mountinfo to reliably detect mounts
+#   even for device aliases, device-mapper paths, and bind mounts.
 #   This prevents accidentally operating on a device that is in use.
 preflight_efi_not_mounted_elsewhere() {
   local device="${1:?preflight_efi_not_mounted_elsewhere: missing device path}"
@@ -273,8 +283,12 @@ preflight_efi_not_mounted_elsewhere() {
   [[ -n "$dev_mm" ]] || die "PF-10: empty device identity for: $canonical"
 
   # Check if ANY mount point has this device's major:minor.
+  # We cannot rely on findmnt -S (source-string match) because the device
+  # may have been mounted through a different alias (e.g. /dev/sda1 vs
+  # /dev/disk/by-uuid/...).  Instead, parse /proc/self/mountinfo directly
+  # and compare MAJ:MIN (field 3) against the canonical device's identity.
   local mounted_mm
-  mounted_mm="$(findmnt -nro MAJ:MIN -S "$canonical" 2>/dev/null | head -1)" || mounted_mm=""
+  mounted_mm="$(awk -v target="$dev_mm" '$3 == target { print $3; found=1; exit } END { if (!found) exit 1 }' /proc/self/mountinfo 2>/dev/null)" || mounted_mm=""
 
   if [[ -n "$mounted_mm" ]]; then
     die "PF-10: EFI device is already mounted: $canonical (major:minor $mounted_mm)"
@@ -420,8 +434,8 @@ preflight_efi_reject_corrupt() {
 # preflight_efi_accepts_writes EFI_DEVICE EFIMNT
 #   PF-15: Verify the mounted EFI filesystem accepts writes by creating
 #   and removing a temporary file.
-#   Note: if interrupted between mktemp and rm, the test file may remain.
-#   The caller's cleanup should handle removal of .preflight-writable-* files.
+#   A RETURN trap ensures the test file is removed on all exit paths,
+#   including interruptions between mktemp and the explicit rm.
 preflight_efi_accepts_writes() {
   local device="${1:?preflight_efi_accepts_writes: missing device path}"
   local mountpoint="${2:?preflight_efi_accepts_writes: missing mountpoint}"
@@ -429,6 +443,9 @@ preflight_efi_accepts_writes() {
   local test_file
   test_file="$(mktemp "$mountpoint/.preflight-writable-XXXXXX" 2>/dev/null)" \
     || die "PF-15: EFI filesystem is not writable (cannot create file in $mountpoint): $device"
+
+  # Guarantee cleanup on any exit path (RETURN, ERR, signal).
+  trap 'rm -f "$test_file" 2>/dev/null' RETURN
 
   rm -f "$test_file" 2>/dev/null \
     || die "PF-15: EFI filesystem is not writable (cannot remove test file): $device"

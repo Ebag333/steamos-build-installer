@@ -691,7 +691,45 @@ flashless_verify_final() {
     warn "  VERIFY FAILED: SteamOS/partsets missing from target EFI"
     verify_failed=1
   else
-    log "  OK SteamOS/partsets present"
+    log "  OK SteamOS/partsets directory present"
+    # Verify expected partset entries exist and resolve to correct devices
+    local -a _expected_partsets=(rootfs efi var)
+    local _partset _resolved
+    for _partset in "${_expected_partsets[@]}"; do
+      if [[ ! -e "$efi_mnt/SteamOS/partsets/$_partset" ]]; then
+        warn "  VERIFY FAILED: SteamOS/partsets/$_partset missing from target EFI"
+        verify_failed=1
+      else
+        # Resolve the symlink and check it points to the expected device
+        _resolved="$(readlink -f "$efi_mnt/SteamOS/partsets/$_partset" 2>/dev/null)" || true
+        case "$_partset" in
+          rootfs)
+            if [[ "$_resolved" != "$FL_TARGET_ROOTFS" ]]; then
+              warn "  VERIFY FAILED: SteamOS/partsets/$_partset resolves to $_resolved (expected $FL_TARGET_ROOTFS)"
+              verify_failed=1
+            else
+              log "  OK SteamOS/partsets/$_partset resolves to correct device"
+            fi
+            ;;
+          efi)
+            if [[ "$_resolved" != "$FL_TARGET_EFI" ]]; then
+              warn "  VERIFY FAILED: SteamOS/partsets/$_partset resolves to $_resolved (expected $FL_TARGET_EFI)"
+              verify_failed=1
+            else
+              log "  OK SteamOS/partsets/$_partset resolves to correct device"
+            fi
+            ;;
+          var)
+            if [[ "$_resolved" != "$FL_TARGET_VAR" ]]; then
+              warn "  VERIFY FAILED: SteamOS/partsets/$_partset resolves to $_resolved (expected $FL_TARGET_VAR)"
+              verify_failed=1
+            else
+              log "  OK SteamOS/partsets/$_partset resolves to correct device"
+            fi
+            ;;
+        esac
+      fi
+    done
   fi
 
   umount "$efi_mnt" 2>/dev/null || umount -l "$efi_mnt" 2>/dev/null

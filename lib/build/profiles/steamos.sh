@@ -49,7 +49,7 @@ steamos_get_kernel_version() {
   # Try from the installed kernel package
   local kernel_pkg=""
   if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
-    kernel_pkg="$(pacman -Q --dbpath "$root/usr/lib/holo/pacmandb" 2>/dev/null | grep '^linux-neptune' | head -1 | awk '{print $2}' || true)"
+    kernel_pkg="$(pacman -Q --dbpath "$root/usr/lib/holo/pacmandb" 2>/dev/null | grep '^linux-neptune' | sort -V | tail -1 | awk '{print $2}' || true)"
   fi
 
   if [[ -n "$kernel_pkg" ]]; then
@@ -57,7 +57,7 @@ steamos_get_kernel_version() {
   else
     # Fallback: look for installed kernel
     local moddir
-    moddir="$(find "$root/usr/lib/modules" -maxdepth 1 -type d -name '6.*' 2>/dev/null | head -1)"
+    moddir="$(find "$root/usr/lib/modules" -maxdepth 1 -type d -name '6.*' 2>/dev/null | sort -V | tail -1)"
     if [[ -n "$moddir" ]]; then
       basename "$moddir"
     else
@@ -78,7 +78,10 @@ steamos_derive_profile() {
   log "Deriving SteamOS build profile"
 
   # Call the generic profile derivation
-  build_profile_from_root "$root" "$output_dir"
+  if ! build_profile_from_root "$root" "$output_dir"; then
+    log "ERROR: build_profile_from_root failed"
+    return 1
+  fi
 
   # Add SteamOS-specific metadata
   local version build_id kernel
@@ -86,11 +89,13 @@ steamos_derive_profile() {
   build_id="$(steamos_get_build_id "$root")"
   kernel="$(steamos_get_kernel_version "$root")"
 
-  cat >>"$output_dir/profile.conf" <<EOF
-STEAMOS_VERSION=$version
-STEAMOS_BUILD_ID=$build_id
-STEAMOS_KERNEL=$kernel
-EOF
+  # Write with shell-safe quoting so that values containing spaces,
+  # quotes, #, backslashes, or newlines don't corrupt the file.
+  {
+    printf 'STEAMOS_VERSION=%s\n' "$(printf '%q' "$version")"
+    printf 'STEAMOS_BUILD_ID=%s\n' "$(printf '%q' "$build_id")"
+    printf 'STEAMOS_KERNEL=%s\n' "$(printf '%q' "$kernel")"
+  } >>"$output_dir/profile.conf"
 
   log "  SteamOS version: $version"
   log "  Build ID: $build_id"

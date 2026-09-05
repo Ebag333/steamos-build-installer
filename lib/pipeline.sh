@@ -33,6 +33,21 @@ define_pipeline() {
     return 1
   fi
 
+  # Validate phase names
+  local -A _seen_phases=()
+  local _phase
+  for _phase in "$@"; do
+    if [[ -z "$_phase" ]]; then
+      warn "define_pipeline: empty phase name is not allowed"
+      return 1
+    fi
+    if [[ -n "${_seen_phases[$_phase]:-}" ]]; then
+      warn "define_pipeline: duplicate phase name '$_phase'"
+      return 1
+    fi
+    _seen_phases["$_phase"]=1
+  done
+
   unset _PIPELINE_ORDER
   declare -ga _PIPELINE_ORDER=("$@")
 

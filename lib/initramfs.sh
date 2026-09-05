@@ -380,17 +380,17 @@ reconcile_initramfs() {
   _reconcile_initramfs_cleanup() {
     set +e
     if ((effective_etc)); then unmount_effective_etc "$root" 2>/dev/null; fi
-    umount_chroot_fs_cleanup "$root" 2>/dev/null
+    if declare -F umount_chroot_fs >/dev/null 2>&1; then
+      umount_chroot_fs "$root" 2>/dev/null
+    fi
   }
+  trap _reconcile_initramfs_cleanup ERR EXIT
+
   local rc=0
   _configure_initramfs_modules "$root" "$kver" "$custom_modules" || rc=$?
 
-  if ((effective_etc)); then
-    unmount_effective_etc "$root"
-  fi
-  if declare -F umount_chroot_fs >/dev/null 2>&1; then
-    umount_chroot_fs "$root" strict
-  fi
+  trap - ERR EXIT
+  _reconcile_initramfs_cleanup
 
   return $rc
 }

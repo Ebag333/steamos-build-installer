@@ -501,6 +501,7 @@ configure_update_channel() {
 # Args: none (uses globals: $MERGED, $MNT, $KVER, $BUILT_MODULE_FILES)
 # ---------------------------------------------------------------------------
 copy_built_modules_to_image() {
+  local workdir="${WORKDIR:?copy_built_modules_to_image: WORKDIR is not set}"
   [[ -n "${MERGED:-}" ]] || die "copy_built_modules_to_image: MERGED is not set"
   [[ -n "${MNT:-}" ]] || die "copy_built_modules_to_image: MNT is not set"
   [[ -n "${KVER:-}" ]] || die "copy_built_modules_to_image: KVER is not set"
@@ -510,7 +511,7 @@ copy_built_modules_to_image() {
   if [[ -d "$MERGED/usr/lib/modules/$KVER/updates" ]]; then
     has_modules=1
   fi
-  if [[ -d "$WORKDIR/packages" ]] && compgen -G "$WORKDIR/packages/*.pkg.tar.*" >/dev/null; then
+  if [[ -d "$workdir/packages" ]] && compgen -G "$workdir/packages/*.pkg.tar.*" >/dev/null; then
     has_modules=1
   fi
 
@@ -529,9 +530,9 @@ copy_built_modules_to_image() {
   fi
 
   # Copy any custom-built packages (from build recipes)
-  if [[ -d "$WORKDIR/packages" ]]; then
+  if [[ -d "$workdir/packages" ]]; then
     local pkg
-    for pkg in "$WORKDIR/packages"/*.pkg.tar.*; do
+    for pkg in "$workdir/packages"/*.pkg.tar.*; do
       [[ -f "$pkg" ]] || continue
       log "  Installing built package: $(basename "$pkg")"
       install_build_artifact "$MNT" "$pkg"

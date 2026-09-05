@@ -195,27 +195,27 @@ _pf_path_scan_transaction_artifacts() {
     die "_pf_path_scan_transaction_artifacts: invalid maxdepth: $maxdepth (must be 0-20)"
   fi
 
-  local all_matches=""
+  local -a all_matches=()
 
   # --- Check installer-owned transaction namespace ---
   local txn_dir="$directory/$_PREF_PATH_SAFETY_TXN_DIR"
   if [[ -d "$txn_dir" ]]; then
     # Transaction directory exists — this is stale state.
-    local txn_matches
-    if ! txn_matches="$(find "$txn_dir" -maxdepth "$maxdepth" -type f -print0 2>/dev/null)"; then
-      if [[ -n "$txn_matches" ]]; then
-        all_matches="${all_matches}${txn_matches}"
+    local -a txn_matches=()
+    if ! mapfile -d '' txn_matches < <(find "$txn_dir" -maxdepth "$maxdepth" -type f -print0 2>/dev/null); then
+      if [[ ${#txn_matches[@]} -gt 0 ]]; then
+        all_matches+=("${txn_matches[@]}")
       else
         die "_pf_path_scan_transaction_artifacts: scan failed for $txn_dir (permission or I/O error)"
       fi
-    elif [[ -n "$txn_matches" ]]; then
-      all_matches="${all_matches}${txn_matches}"
+    elif [[ ${#txn_matches[@]} -gt 0 ]]; then
+      all_matches+=("${txn_matches[@]}")
     fi
   fi
 
   # --- Legacy pattern scan (backward compatibility) ---
-  local legacy_matches
-  if ! legacy_matches="$(find "$directory" \
+  local -a legacy_matches=()
+  if ! mapfile -d '' legacy_matches < <(find "$directory" \
     -maxdepth "$maxdepth" \
     \( \
       -name '*.new' \
@@ -225,19 +225,19 @@ _pf_path_scan_transaction_artifacts() {
     \) \
     -type f \
     -not -path "$directory/$_PREF_PATH_SAFETY_TXN_DIR/*" \
-    -print0 2>/dev/null)"; then
-    if [[ -n "$legacy_matches" ]]; then
-      all_matches="${all_matches}${legacy_matches}"
+    -print0 2>/dev/null); then
+    if [[ ${#legacy_matches[@]} -gt 0 ]]; then
+      all_matches+=("${legacy_matches[@]}")
     else
       die "_pf_path_scan_transaction_artifacts: scan failed for $directory (permission or I/O error)"
     fi
-  elif [[ -n "$legacy_matches" ]]; then
-    all_matches="${all_matches}${legacy_matches}"
+  elif [[ ${#legacy_matches[@]} -gt 0 ]]; then
+    all_matches+=("${legacy_matches[@]}")
   fi
 
-  if [[ -n "$all_matches" ]]; then
-    # Convert NUL to newlines for output.
-    echo "$all_matches" | tr '\0' '\n'
+  if [[ ${#all_matches[@]} -gt 0 ]]; then
+    # Strip trailing NUL and print one path per line.
+    printf '%s\n' "${all_matches[@]//$'\0'/}"
     return 0
   fi
 

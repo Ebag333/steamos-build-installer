@@ -78,7 +78,7 @@ verify_package_abi_compat() {
 
     # Check if this is an ABI-critical package
     local locked_ver=""
-    locked_ver="$(grep "^${dep_name}=" "$packages_lock" 2>/dev/null | cut -d= -f2-)"
+    locked_ver="$(awk -F= -v name="$dep_name" '$1 == name { print substr($0, length(name)+2); exit }' "$packages_lock" 2>/dev/null)"
 
     if [[ -z "$locked_ver" ]]; then
       continue

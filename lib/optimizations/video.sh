@@ -158,9 +158,9 @@ _verify_resize_bar() {
   local root
   root="$(get_root)"
   if is_live; then
-    grep -q 'nvidia.NVreg_EnableResizableBAR=1' /proc/cmdline 2>/dev/null
+    grep -q 'nvidia.NVreg_EnableResizableBar=1' /proc/cmdline 2>/dev/null
   else
     local grub_steamos="${root}/etc/default/grub-steamos"
-    [[ -f "$grub_steamos" ]] && grep -q 'nvidia.NVreg_EnableResizableBAR=1' "$grub_steamos"
+    [[ -f "$grub_steamos" ]] && grep -q 'nvidia.NVreg_EnableResizableBar=1' "$grub_steamos"
   fi
 }

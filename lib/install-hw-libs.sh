@@ -70,6 +70,12 @@ _parse_hw_manifest_line() {
   HW_LINE_DESC="${rest%%|*}"
   HW_LINE_RECIPE="${rest#*|}"
 
+  # Recipe, when present, must be a safe basename — reject path traversal,
+  # slashes, and any character outside the strict set.
+  if [[ -n "$HW_LINE_RECIPE" && ! "$HW_LINE_RECIPE" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+    return 2
+  fi
+
   # Package names, versions, defaults, and type cannot contain whitespace.
   HW_LINE_TYPE="${HW_LINE_TYPE//[[:space:]]/}"
   HW_LINE_GROUP="${HW_LINE_GROUP//[[:space:]]/}"
@@ -177,14 +183,20 @@ _hw_read_manifest() {
     _descs+=("$desc")
   done <"$conf"
 
+  # Safely assign arrays to caller-scope globals using printf -v.
+  # This avoids eval to prevent shell injection from manifest values.
   if ((${#_pkgs[@]} > 0)); then
-    eval "${prefix}_pkgs=(\"\${_pkgs[@]}\")"
-    eval "${prefix}_targets=(\"\${_targets[@]}\")"
-    eval "${prefix}_descs=(\"\${_descs[@]}\")"
+    local _i
+    for _i in "${!_pkgs[@]}"; do
+      printf -v "${prefix}_pkgs[$_i]" '%s' "${_pkgs[$_i]}"
+      printf -v "${prefix}_targets[$_i]" '%s' "${_targets[$_i]}"
+      printf -v "${prefix}_descs[$_i]" '%s' "${_descs[$_i]}"
+    done
   else
-    eval "${prefix}_pkgs=()"
-    eval "${prefix}_targets=()"
-    eval "${prefix}_descs=()"
+    # Empty arrays: declare in caller (global) scope
+    declare -g -a "${prefix}_pkgs=()"
+    declare -g -a "${prefix}_targets=()"
+    declare -g -a "${prefix}_descs=()"
   fi
 
   ((${#_pkgs[@]} > 0))

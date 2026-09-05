@@ -257,7 +257,7 @@ overlay_mount_with_image() {
           umount -R "$_m" \
             || die "Could not cleanly unmount stale overlay workspace: $_m"
         done < <(findmnt -rn -o TARGET,SOURCE 2>/dev/null \
-          | awk -v l="$_stale" '$2 == l || index($2, l) == 1 {print $1}' \
+          | awk -v l="$_stale" '$2 == l || index($2, l "p") == 1 {print $1}' \
           | tac)
         losetup -d "$_stale" 2>/dev/null || true
       done <<<"$_existing_loops"
@@ -886,6 +886,10 @@ for dev in data.get("loopdevices", []):
 # Args: $1 = (optional) space-separated extra keyrings to populate
 overlay_init_keyring() {
   local extra_keyrings="${1:-}"
+
+  # Guard: MERGED must be set and point to a mounted chroot
+  : "${MERGED:?overlay_init_keyring: MERGED is not set}"
+  mountpoint -q "$MERGED" || die "overlay_init_keyring: MERGED ($MERGED) is not a mountpoint"
 
   rm -rf "$MERGED/etc/pacman.d/gnupg"
   in_chroot "pacman-key --init" || die "pacman-key --init failed"

@@ -89,7 +89,7 @@ _apply_scx_lavd() {
   if [[ -n "${SCRIPT_DIR:-}" ]]; then
     config_src="$SCRIPT_DIR/lib/configs/scx_loader_config.toml"
   elif [[ -n "${CUSTOMIZATION_DIR:-}" ]]; then
-    config_src="$(dirname "$CUSTOMIZATION_DIR")/configs/scx_loader_config.toml"
+    config_src="${CUSTOMIZATION_DIR}/configs/scx_loader_config.toml"
   else
     warn "Cannot determine scx_loader config source"
     return 1
@@ -139,7 +139,7 @@ _apply_vm_tunables() {
   if [[ -n "${SCRIPT_DIR:-}" ]]; then
     configs_dir="$SCRIPT_DIR/lib/configs"
   elif [[ -n "${CUSTOMIZATION_DIR:-}" ]]; then
-    configs_dir="$(dirname "$CUSTOMIZATION_DIR")/configs"
+    configs_dir="${CUSTOMIZATION_DIR}/configs"
   else
     warn "Cannot determine configs source directory"
     return 1

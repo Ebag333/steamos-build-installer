@@ -334,8 +334,8 @@ phase_build_build() {
   local _hw_before="$WORKDIR/hw-pkgs-before.txt"
   local _hw_before_full="$WORKDIR/hw-pkgs-before-full.txt"
   pacman -Q --dbpath "$MERGED/usr/lib/holo/pacmandb" 2>/dev/null \
-    | LC_ALL=C sort >"$_hw_before_full" || true
-  awk '{print $1}' "$_hw_before_full" | LC_ALL=C sort -u >"$_hw_before" || true
+    | LC_ALL=C sort >"$_hw_before_full"
+  awk '{print $1}' "$_hw_before_full" | LC_ALL=C sort -u >"$_hw_before"
 
   install_hw_libs
 
@@ -344,8 +344,8 @@ phase_build_build() {
   local _hw_after="$WORKDIR/hw-pkgs-after.txt"
   local _hw_after_full="$WORKDIR/hw-pkgs-after-full.txt"
   pacman -Q --dbpath "$MERGED/usr/lib/holo/pacmandb" 2>/dev/null \
-    | LC_ALL=C sort >"$_hw_after_full" || true
-  awk '{print $1}' "$_hw_after_full" | LC_ALL=C sort -u >"$_hw_after" || true
+    | LC_ALL=C sort >"$_hw_after_full"
+  awk '{print $1}' "$_hw_after_full" | LC_ALL=C sort -u >"$_hw_after"
 
   # Detect new packages (names not in before) and removed packages (names not in after)
   local _hw_new_pkgs_file="$WORKDIR/hw-new-pkgs.txt"

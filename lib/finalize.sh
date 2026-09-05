@@ -319,16 +319,18 @@ finalize() {
     log "  size assertion passed: $EXPECTED_IMAGE_SIZE bytes"
   fi
 
-  # Mark the build as complete — setup_copy_image and flash_image_is_complete
-  # check this before reusing a cached image.
-  touch "${OUT}.build-complete" || die "Failed to create build-complete marker: ${OUT}.build-complete"
-
   # Unmount/detach everything.  This must succeed before we declare victory
   # so that a cleanup failure never coexists with a DONE message.
   log "Unmounting"
   cleanup || die "cleanup (unmount/detach) failed — image may be inconsistent"
   _cleanup_done=1
   trap - EXIT
+
+  # Mark the build as complete — setup_copy_image and flash_image_is_complete
+  # check this before reusing a cached image.
+  # Created AFTER cleanup succeeds so a failed teardown never leaves a
+  # marker that makes the image look acceptably complete.
+  touch "${OUT}.build-complete" || die "Failed to create build-complete marker: ${OUT}.build-complete"
 
   # Clean up temporary build artifacts from WORKDIR.
   # Keep the final image, package cache, and build manifest.

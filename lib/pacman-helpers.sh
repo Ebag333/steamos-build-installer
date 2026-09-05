@@ -26,12 +26,12 @@ _pacman_resolve_config() {
   local explicit="${1:-}"
 
   if [[ -n "$explicit" ]]; then
-    printf -- "--config '%s'\n" "$explicit"
+    printf -- "--config %s\n" "$(printf '%q' "$explicit")"
     return
   fi
 
   if [[ -n "${PACCONF:-}" ]]; then
-    printf -- "--config '%s'\n" "$PACCONF"
+    printf -- "--config %s\n" "$(printf '%q' "$PACCONF")"
     return
   fi
 
@@ -237,9 +237,11 @@ pacman_upgrade_all() {
 
   log "Running full system upgrade"
   local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
-  # shellcheck disable=SC2086 # extra is intentionally word-split
+  # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
+  local _safe_extra
+  _safe_extra="$(_shell_escape_args $extra)"
   set -o pipefail
-  _pacman_retry _pacman_exec "$context" "pacman $config_args -Syu $noconfirm $ask $extra" \
+  _pacman_retry _pacman_exec "$context" "pacman $config_args -Syu $noconfirm $ask $_safe_extra" \
     > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
     2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
   local _rc=${PIPESTATUS[0]}
@@ -322,7 +324,7 @@ pacman_install() {
         shift
         ;;
       --cachedir)
-        cachedir="--cachedir '$2'"
+        cachedir="--cachedir $(printf '%q' "$2")"
         shift 2
         ;;
       --freeze-installed)
@@ -357,7 +359,9 @@ pacman_install() {
   log "Installing packages: ${pkgs[*]}"
   local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
-  _pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args ${pkgs[*]}" \
+  local _safe_pkgs
+  _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
+  _pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
     > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
     2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
 }
@@ -420,7 +424,9 @@ pacman_install_local() {
   log "Installing local packages: ${pkgs[*]}"
   local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
-  _pacman_retry _pacman_exec "$context" "pacman $config_args -U $noconfirm $needed ${pkgs[*]}" \
+  local _safe_pkgs
+  _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
+  _pacman_retry _pacman_exec "$context" "pacman $config_args -U $noconfirm $needed $_safe_pkgs" \
     > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
     2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
 }
@@ -472,7 +478,7 @@ pacman_download() {
         shift
         ;;
       --cachedir)
-        cachedir="--cachedir '$2'"
+        cachedir="--cachedir $(printf '%q' "$2")"
         shift 2
         ;;
       --freeze-installed)
@@ -507,7 +513,9 @@ pacman_download() {
   log "Downloading packages: ${pkgs[*]}"
   local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
-  _pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -Sw $noconfirm $needed $cachedir $freeze_args ${pkgs[*]}" \
+  local _safe_pkgs
+  _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
+  _pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -Sw $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
     > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
     2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
 }
@@ -695,9 +703,27 @@ _pacman_run_in_root() {
 }
 
 # ---------------------------------------------------------------------------
+# Internal: Shell-escape an array of arguments for safe interpolation in bash -c.
+#
+# Takes a list of arguments and returns them as shell-escaped tokens separated
+# by spaces, suitable for embedding in a string passed to `bash -c`.
+#
+# Args: "$@" = arguments to escape
+# Prints: shell-escaped space-separated string
+# ---------------------------------------------------------------------------
+_shell_escape_args() {
+  local result=""
+  local arg
+  for arg in "$@"; do
+    result+=" $(printf '%q' "$arg")"
+  done
+  printf '%s' "$result"
+}
+
+# ---------------------------------------------------------------------------
 # Internal: Snapshot installed file ownership to a file for reuse.
 #
-# Runs `pacman -Ql` once and writes output in "pkg /path" format.
+# Runs `pacman -Ql` once and writes output in "pkg\t/path" format (tab-delimited).
 # Used by the individual preflight loop to check file conflicts without
 # re-querying the full installed file list for every package.
 #
@@ -714,12 +740,14 @@ _pacman_snapshot_installed_files() {
   local config_args
   config_args="$(_pacman_resolve_config)"
 
+  # pacman -Ql outputs "pkg /path" — normalize to tab-delimited "pkg\t/path"
+  # Use sub() to split on first space only, preserving paths with spaces.
   if [[ -n "$chroot_dir" && -d "$chroot_dir" ]]; then
     _pacman_run_in_root "$chroot_dir" \
-      "pacman $config_args -Ql 2>/dev/null" >"$output_file" || return 1
+      "pacman $config_args -Ql 2>/dev/null" | awk '{sub(/ /, "\t"); print}' >"$output_file" || return 1
   else
     # shellcheck disable=SC2086 # config_args is intentionally word-split
-    pacman $config_args -Ql 2>/dev/null >"$output_file" || return 1
+    pacman $config_args -Ql 2>/dev/null | awk '{sub(/ /, "\t"); print}' >"$output_file" || return 1
   fi
 
   [[ -s "$output_file" ]] || return 1
@@ -752,8 +780,10 @@ _pacman_check_single_pkg_file_conflicts() {
   # (command substitution strips \0, causing bash warnings with --machinereadable)
   local planned_raw_file="$WORKDIR/preflight-fl-${pkg//\//-}.txt"
   if [[ -n "$chroot_dir" && -d "$chroot_dir" ]]; then
+    local _safe_pkg
+    _safe_pkg="$(printf '%q' "$pkg")"
     _pacman_retry _pacman_run_in_root "$chroot_dir" \
-      "pacman $config_args -Fl --machinereadable '$pkg' 2>/dev/null" \
+      "pacman $config_args -Fl --machinereadable $_safe_pkg 2>/dev/null" \
       >"$planned_raw_file" || true
   else
     # shellcheck disable=SC2086 # config_args is intentionally word-split
@@ -761,16 +791,16 @@ _pacman_check_single_pkg_file_conflicts() {
       >"$planned_raw_file" || true
   fi
 
-  # Normalize to "pkg /path" format
+  # Normalize to "pkg\t/path" format (tab-delimited to handle paths with spaces)
   local planned_files
   if [[ -s "$planned_raw_file" ]]; then
-    planned_files=$(awk -F'\0' '{print $2 " /" $4}' "$planned_raw_file")
+    planned_files=$(awk -F'\0' '{print $2 "\t/" $4}' "$planned_raw_file")
   else
     # Fallback to non-machinereadable
     local planned_fallback_file="$WORKDIR/preflight-fl-fallback-${pkg//\//-}.txt"
     if [[ -n "$chroot_dir" && -d "$chroot_dir" ]]; then
       _pacman_retry _pacman_run_in_root "$chroot_dir" \
-        "pacman $config_args -Fl '$pkg' 2>/dev/null" \
+        "pacman $config_args -Fl $_safe_pkg 2>/dev/null" \
         >"$planned_fallback_file" || true
     else
       # shellcheck disable=SC2086 # config_args is intentionally word-split
@@ -778,7 +808,7 @@ _pacman_check_single_pkg_file_conflicts() {
         >"$planned_fallback_file" || true
     fi
     if [[ -s "$planned_fallback_file" ]]; then
-      planned_files=$(awk '{print $1 " /" $2}' "$planned_fallback_file")
+      planned_files=$(awk '{sub(/ /, "\t"); print}' "$planned_fallback_file")
     else
       return 2 # Could not get file list
     fi
@@ -790,19 +820,17 @@ _pacman_check_single_pkg_file_conflicts() {
   # For each file the new package would install, check whether it is already
   # owned by a different (installed) package — that's a collision.
   local conflicts
-  conflicts=$(awk '
+  conflicts=$(awk -F'\t' '
     NR==FNR {
-      # First file: installed files (pkg /path)
-      split($0, a, " ")
-      fpath = a[2]
-      owner[fpath] = a[1]
+      # First file: installed files (pkg\tpath)
+      fpath = $2
+      owner[fpath] = $1
       next
     }
     {
-      # Second file: planned files (pkg /path)
-      split($0, a, " ")
-      fpath = a[2]
-      newpkg = a[1]
+      # Second file: planned files (pkg\tpath)
+      fpath = $2
+      newpkg = $1
 
       # Check for collision
       if (fpath in owner) {
@@ -915,9 +943,15 @@ pacman_preflight_check() {
   local dry_stderr="$WORKDIR/pacman-dry-run-stderr.txt"
   local dry_rc=0
 
-  # shellcheck disable=SC2086 # _pf_targets is intentionally word-split
+  # Shell-escape all target package names for safe interpolation in bash -c
+  local _safe_pf_targets=""
+  local _t
+  for _t in "${_pf_targets[@]}"; do
+    _safe_pf_targets+=" $(printf '%q' "$_t")"
+  done
+  # shellcheck disable=SC2086 # _safe_pf_targets is intentionally word-split
   _pacman_run_in_root "$chroot_dir" \
-    "pacman $config_args $txn_flags --print --print-format '%r|%n' --noconfirm --ask=4 ${_pf_targets[*]}" \
+    "pacman $config_args $txn_flags --print --print-format '%r|%n' --noconfirm --ask=4 $_safe_pf_targets" \
     >"$dry_output" 2>"$dry_stderr" || dry_rc=$?
 
   # Build provider targets — only for virtuals the transaction actually needs
@@ -934,9 +968,13 @@ pacman_preflight_check() {
   if ((${#_provider_targets[@]} > 0)); then
     log "Pre-flight: re-running dry-run with ${#_provider_targets[@]} provider target(s)"
     dry_rc=0
-    # shellcheck disable=SC2086 # _provider_targets and _pf_targets are intentionally word-split
+    local _safe_provider_targets=""
+    for _t in "${_provider_targets[@]}"; do
+      _safe_provider_targets+=" $(printf '%q' "$_t")"
+    done
+    # shellcheck disable=SC2086 # _safe_pf_targets and _safe_provider_targets are intentionally word-split
     _pacman_run_in_root "$chroot_dir" \
-      "pacman $config_args $txn_flags --print --print-format '%r|%n' --noconfirm --ask=4 ${_pf_targets[*]} ${_provider_targets[*]}" \
+      "pacman $config_args $txn_flags --print --print-format '%r|%n' --noconfirm --ask=4 $_safe_pf_targets $_safe_provider_targets" \
       >"$dry_output" 2>"$dry_stderr" || dry_rc=$?
   fi
 
@@ -1062,24 +1100,27 @@ pacman_preflight_check() {
     # Use --machinereadable when available for robust NUL-separated parsing.
     # Format: repo\0pkgname\0version\0filepath\n  (no leading / on paths)
     # Normalize to "pkg /path" to match -Ql output.
-    local _pkg_list
-    # Convert repo|pkg format to repo/pkg for pacman -Fl queries
-    _pkg_list=$(sed 's/|/\//' "$dry_packages" | paste -sd' ')
+    local _safe_pkg_list=""
+    local _pl_pkg
+    # Convert repo|pkg format to repo/pkg for pacman -Fl queries (shell-escaped)
+    while IFS= read -r _pl_pkg; do
+      _safe_pkg_list+=" $(printf '%q' "${_pl_pkg//|//}")"
+    done <"$dry_packages"
     local planned_raw="$WORKDIR/preflight-planned-raw.txt"
     local fl_rc=0
     local machine_readable=1
-    # shellcheck disable=SC2086 # _pkg_list is intentionally word-split
+    # shellcheck disable=SC2086 # _safe_pkg_list is intentionally word-split
     _pacman_retry _pacman_run_in_root "$chroot_dir" \
-      "pacman $config_args -Fl --machinereadable $_pkg_list 2>/dev/null" \
+      "pacman $config_args -Fl --machinereadable $_safe_pkg_list 2>/dev/null" \
       >"$planned_raw" 2>/dev/null || fl_rc=$?
 
     if ((fl_rc != 0)) || [[ ! -s "$planned_raw" ]]; then
       machine_readable=0
       fl_rc=0
       # Fallback: regular -Fl output: "pkg path" → "pkg /path"
-      # shellcheck disable=SC2086 # _pkg_list is intentionally word-split
+      # shellcheck disable=SC2086 # _safe_pkg_list is intentionally word-split
       _pacman_retry _pacman_run_in_root "$chroot_dir" \
-        "pacman $config_args -Fl $_pkg_list 2>/dev/null" \
+        "pacman $config_args -Fl $_safe_pkg_list 2>/dev/null" \
         >"$planned_raw" 2>/dev/null || fl_rc=$?
     fi
 
@@ -1092,18 +1133,19 @@ pacman_preflight_check() {
     fi
 
     if ((machine_readable)); then
-      # --machinereadable: repo\0pkg\0ver\0path → "pkg /path"
-      awk -F'\0' '{print $2 " /" $4}' "$planned_raw" >"$planned_files"
+      # --machinereadable: repo\0pkg\0ver\0path → "pkg\t/path" (tab-delimited)
+      awk -F'\0' '{print $2 "\t/" $4}' "$planned_raw" >"$planned_files"
     else
-      awk '{print $1 " /" $2}' "$planned_raw" >"$planned_files"
+      # Regular -Fl: "pkg path" → "pkg\t/path" (tab-delimited)
+      awk '{sub(/ /, "\t"); print}' "$planned_raw" >"$planned_files"
     fi
 
     # All currently installed files and their owners.
-    # -Ql format: "pkg /path" — already normalized.
+    # -Ql format: "pkg /path" — normalize to tab-delimited "pkg\t/path".
     local ql_rc=0
     _pacman_run_in_root "$chroot_dir" \
       "pacman $config_args -Ql 2>/dev/null" \
-      >"$installed_files" 2>/dev/null || ql_rc=$?
+      2>/dev/null | awk '{sub(/ /, "\t"); print}' >"$installed_files" || ql_rc=${PIPESTATUS[0]}
 
     # If -Ql failed, fail closed
     if ((ql_rc != 0)); then
@@ -1129,7 +1171,7 @@ pacman_preflight_check() {
     if [[ -s "$planned_files" && -s "$installed_files" ]]; then
       local conflict_results="$WORKDIR/preflight-file-conflicts-raw.tsv"
 
-      awk '
+      awk -F'\t' '
         NR==FNR {
           pkg = $1; fpath = $2
           if (fpath ~ /\/$/) {
@@ -1176,7 +1218,7 @@ pacman_preflight_check() {
     # Detect target-vs-target collisions: paths claimed by >1 planned package
     if [[ -s "$planned_files" ]]; then
       local tvt_results="$WORKDIR/preflight-tvt-collisions.txt"
-      awk '
+      awk -F'\t' '
         {
           pkg = $1; fpath = $2
           if (fpath ~ /\/$/) {
@@ -1234,8 +1276,8 @@ pacman_preflight_check() {
       # Use installed_files as ownership database instead of per-file pacman -Qo
       # Extract paths that are NOT in installed_files (potential unowned files)
       local unowned_candidates="$WORKDIR/preflight-unowned-candidates.txt"
-      awk '{print $2}' "$installed_files" | sort -u >"$WORKDIR/preflight-installed-paths.txt"
-      awk '$2 !~ /\/$/ {print $2}' "$planned_files" | sort -u \
+      awk -F'\t' '{print $2}' "$installed_files" | sort -u >"$WORKDIR/preflight-installed-paths.txt"
+      awk -F'\t' '$2 !~ /\/$/ {print $2}' "$planned_files" | sort -u \
         | comm -23 - "$WORKDIR/preflight-installed-paths.txt" >"$unowned_candidates"
 
       # Check candidates against filesystem (in chroot namespace)
@@ -1243,19 +1285,21 @@ pacman_preflight_check() {
         [[ -n "$_uo_path" ]] || continue
         # Check existence in chroot namespace (handles symlinks correctly)
         local _is_file=0 _is_dir=0
+        local _safe_uo_path
+        _safe_uo_path="$(printf '%q' "$_uo_path")"
         if _pacman_run_in_root "$chroot_dir" \
-          "test -e '$_uo_path' || test -L '$_uo_path'" 2>/dev/null; then
+          "test -e $_safe_uo_path || test -L $_safe_uo_path" 2>/dev/null; then
           _is_file=1
         fi
         if _pacman_run_in_root "$chroot_dir" \
-          "test -d '$_uo_path'" 2>/dev/null; then
+          "test -d $_safe_uo_path" 2>/dev/null; then
           _is_dir=1
         fi
         ((_is_file || _is_dir)) || continue
 
         # Find which planned package claims this path
         local _uo_pkg
-        _uo_pkg=$(awk -v p="$_uo_path" '$2 == p {print $1; exit}' "$planned_files")
+        _uo_pkg=$(awk -F'\t' -v p="$_uo_path" '$2 == p {print $1; exit}' "$planned_files")
 
         if ((_is_dir)); then
           log "Pre-flight: detected unowned directory at file path: $_uo_path/ (would be overwritten by $_uo_pkg)"
@@ -1448,8 +1492,11 @@ pacman_preflight_check() {
   if ((${#uninstall_pkgs[@]} > 0)); then
     log "Pre-flight: removing ${#uninstall_pkgs[@]} conflicting package(s): ${uninstall_pkgs[*]}"
     for pkg in "${uninstall_pkgs[@]}"; do
+      local _safe_uninstall_pkg
+      _safe_uninstall_pkg="$(printf '%q' "$pkg")"
       log "Pre-flight:   pacman -Rdd --noconfirm $pkg"
-      if _pacman_run_in_root "$chroot_dir" "pacman $config_args -Rdd --noconfirm '$pkg'" \
+      # shellcheck disable=SC2086 # _safe_uninstall_pkg is intentionally word-split in bash -c
+      if _pacman_run_in_root "$chroot_dir" "pacman $config_args -Rdd --noconfirm $_safe_uninstall_pkg" \
         >>"$WORKDIR/preflight-uninstall.log" 2>&1; then
         log "Pre-flight:   ✓ removed $pkg"
       else
@@ -1589,7 +1636,10 @@ pacman_preflight_with_fallback() {
   local -a filtered_packages=()
   local already_installed=0
   for pkg in "${_pff_packages[@]}"; do
-    if _pacman_run_in_root "${MERGED:-}" "pacman -Q '$pkg' >/dev/null 2>&1"; then
+    local _safe_check_pkg
+    _safe_check_pkg="$(printf '%q' "$pkg")"
+    # shellcheck disable=SC2086 # _safe_check_pkg is intentionally word-split in bash -c
+    if _pacman_run_in_root "${MERGED:-}" "pacman -Q $_safe_check_pkg >/dev/null 2>&1"; then
       debug "Pre-flight: $pkg already installed — preserving current version"
       ((++already_installed)) || true
     else
@@ -1631,8 +1681,11 @@ pacman_preflight_with_fallback() {
     local rc=0
     local dry_stderr="$WORKDIR/preflight-individual-${pkg}-stderr.txt"
 
+    local _safe_pkg
+    _safe_pkg="$(printf '%q' "$pkg")"
+    # shellcheck disable=SC2086 # _safe_pkg is intentionally word-split in bash -c
     _pacman_run_in_root "${MERGED:-}" \
-      "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 '$pkg'" \
+      "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 $_safe_pkg" \
       >/dev/null 2>"$dry_stderr" || rc=$?
 
     if ((rc == 0)); then
@@ -1684,8 +1737,11 @@ pacman_preflight_with_fallback() {
   local bulk_rc=0
   local bulk_stderr="$WORKDIR/preflight-bulk-stderr.txt"
 
+  local _safe_passing
+  _safe_passing="$(_shell_escape_args "${passing_packages[@]}")"
+  # shellcheck disable=SC2086 # _safe_passing is intentionally word-split in bash -c
   _pacman_run_in_root "${MERGED:-}" \
-    "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 ${passing_packages[*]}" \
+    "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 $_safe_passing" \
     >/dev/null 2>"$bulk_stderr" || bulk_rc=$?
 
   if ((bulk_rc == 0)); then
@@ -1723,19 +1779,25 @@ pacman_preflight_with_fallback() {
       break
     fi
 
-    # Read the dep-breakage file to find the blocker
-    local blocker_file="$WORKDIR/preflight-dep-breakages.txt"
-    if [[ -s "$blocker_file" ]]; then
-      local blocker_name=""
-      read -r blocker_name _ <"$blocker_file"
-      blocker_name="${blocker_name%%|*}"
+    # Read the dep-breakage file to find the offending dependent
+    local dep_breakage_file="$WORKDIR/preflight-dep-breakages.txt"
+    if [[ -s "$dep_breakage_file" ]]; then
+      # Build set of dependents from all breaker|dependents lines
+      local -A _dep_dependents=()
+      while IFS='|' read -r _breaker _dependents_str; do
+        # Split space-separated dependents
+        local -a _deps_array=($_dependents_str)
+        for _dep in "${_deps_array[@]}"; do
+          _dep_dependents["$_dep"]=1
+        done
+      done <"$dep_breakage_file"
 
-      # Find and remove the first package that depends on the blocker
+      # Find and remove the first package in final_packages that is a dependent
       local found=0
       local -a new_final=()
       for pkg in "${final_packages[@]}"; do
-        if ((found == 0)) && _pacman_run_in_root "${MERGED:-}" "pacman -S --needed $freeze_args --print --print-format '%n' --noconfirm '$pkg' 2>/dev/null" | grep -q "^${blocker_name}$"; then
-          warn "Pre-flight: removing $pkg (requires $blocker_name upgrade)"
+        if ((found == 0)) && [[ -n "${_dep_dependents[$pkg]+_}" ]]; then
+          warn "Pre-flight: removing $pkg (dep-breakage dependent)"
           skipped_packages+=("$pkg")
           ((++conflict_skipped)) || true
           found=1
@@ -1743,6 +1805,10 @@ pacman_preflight_with_fallback() {
           new_final+=("$pkg")
         fi
       done
+
+      if ((found == 0)); then
+        warn "Pre-flight: dep-breakage detected but no matching dependent found in package list"
+      fi
       final_packages=("${new_final[@]}")
     else
       # No dep-breakage file, try file-conflict

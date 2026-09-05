@@ -56,12 +56,10 @@ _apply_gamemode() {
   # Check if gamemode group exists
   if run_in_root getent group gamemode >/dev/null 2>&1; then
     if ! run_in_root usermod -aG gamemode deck; then
-      warn "Failed to add deck to gamemode group (non-fatal)"
-      ok=0
+      warn "Failed to add deck to gamemode group (non-fatal, continuing)"
     fi
   else
-    warn "gamemode group not found in image — skipping"
-    ok=0
+    warn "gamemode group not found in image — skipping (non-fatal)"
   fi
 
   log "Enabling gamemoded user service"

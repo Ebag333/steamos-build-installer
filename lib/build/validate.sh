@@ -106,7 +106,7 @@ _validate_arch_fallback() {
 
   # Check that meson is resolvable from Arch
   local meson_ver
-  meson_ver="$(pacman --config "$PROFILE_PACCONF" -Si meson 2>/dev/null | sed -n 's/^Version[[:space:]]*: //p')"
+  meson_ver="$(pacman --config "$PROFILE_PACMAN" -Si meson 2>/dev/null | sed -n 's/^Version[[:space:]]*: //p')"
   if [[ -z "$meson_ver" ]]; then
     warn "FAIL: meson not available from Arch repos"
     return 1

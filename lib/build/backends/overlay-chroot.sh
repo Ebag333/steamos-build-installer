@@ -519,12 +519,16 @@ _build_overlay_diagnostics() {
     diag_pc_str="$(sed -n '/^DIAG_PC_FILES=(/,/^)/{/^DIAG_PC_FILES=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
     diag_pkgs_str="$(sed -n '/^DIAG_PKGS=(/,/^)/{/^DIAG_PKGS=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
 
-    # Parse arrays from strings
+    # Parse arrays from strings safely without eval
+    # Remove quotes and split by whitespace into array elements
     if [[ -n "$diag_pc_str" ]]; then
-      eval "diag_pc_files=($diag_pc_str)"
+      # Strip all double quotes, then read whitespace-separated tokens into array
+      local cleaned_pc="${diag_pc_str//\"/}"
+      read -ra diag_pc_files <<< "$cleaned_pc"
     fi
     if [[ -n "$diag_pkgs_str" ]]; then
-      eval "diag_pkgs=($diag_pkgs_str)"
+      local cleaned_pkgs="${diag_pkgs_str//\"/}"
+      read -ra diag_pkgs <<< "$cleaned_pkgs"
     fi
   fi
 

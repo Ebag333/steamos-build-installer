@@ -10,9 +10,22 @@ echo "=== Hardware scan: unclaimed PCI devices ==="
 echo
 
 found=0
+probe_failed=0
 
 if ! command -v lspci &>/dev/null; then
   echo "ERROR: lspci not found. Install pciutils." >&2
+  exit 1
+fi
+
+# Capture lspci -nn output and validate it succeeded.
+lspci_output="$(lspci -nn 2>&1)" || {
+  echo "ERROR: lspci -nn failed (exit $?). Cannot scan PCI devices." >&2
+  echo "  Output: $lspci_output" >&2
+  exit 1
+}
+
+if [[ -z "$lspci_output" ]]; then
+  echo "ERROR: lspci -nn returned no output. Cannot scan PCI devices." >&2
   exit 1
 fi
 
@@ -28,8 +41,16 @@ while IFS="" read -r line; do
       || true
   )"
 
+  # Run lspci -k -s for the specific device; detect probe failures
+  # separately from "no driver loaded".
+  lspci_k_output="$(lspci -k -s "$dev" 2>&1)" || {
+    echo "WARNING: lspci -k -s $dev failed; skipping device." >&2
+    probe_failed=1
+    continue
+  }
+
   driver="$(
-    lspci -k -s "$dev" 2>/dev/null \
+    printf '%s\n' "$lspci_k_output" \
       | grep "Kernel driver in use" \
       | awk '{print $NF}' \
       || true
@@ -69,11 +90,19 @@ while IFS="" read -r line; do
 
   echo
 
-done < <(lspci -nn)
+done <<< "$lspci_output"
 
-if [[ $found -eq 0 ]]; then
+if [[ $found -eq 0 && $probe_failed -eq 0 ]]; then
   echo "All PCI devices have drivers loaded."
   exit 0
+elif [[ $probe_failed -ne 0 ]]; then
+  echo "WARNING: One or more PCI device probes failed; results may be incomplete."
+  if [[ $found -eq 0 ]]; then
+    echo "No unclaimed devices found among probed devices."
+  else
+    echo "Unclaimed devices detected."
+  fi
+  exit 1
 else
   echo "Unclaimed devices detected."
   exit 1
