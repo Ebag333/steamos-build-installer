@@ -50,9 +50,9 @@ cleanup_stale_state() {
   resolved="$(realpath "$workdir" 2>/dev/null || true)"
   case "$resolved" in
     / | /dev | /dev/shm | /dev/shm/ | /home | /home/ | /root | /root/ | \
-    /tmp | /tmp/ | /var | /var/ | /usr | /usr/ | /etc | /etc/ | /proc | /proc/ | \
-    /sys | /sys/ | /boot | /boot/ | /mnt | /mnt/ | /media | /media/ | \
-    /opt | /opt/ | /run | /run/ | /snap | /snap/ | /srv | /srv/)
+      /tmp | /tmp/ | /var | /var/ | /usr | /usr/ | /etc | /etc/ | /proc | /proc/ | \
+      /sys | /sys/ | /boot | /boot/ | /mnt | /mnt/ | /media | /media/ | \
+      /opt | /opt/ | /run | /run/ | /snap | /snap/ | /srv | /srv/)
       echo "ERROR: cleanup_stale_state() refuses to operate on critical path: $resolved" >&2
       return 1
       ;;
@@ -147,8 +147,7 @@ cleanup_stale_state() {
       fi
 
       # Wait briefly for the loop to fully detach
-      local _i
-      for _i in $(seq 1 20); do
+      for _ in $(seq 1 20); do
         losetup "$loop_dev" >/dev/null 2>&1 || break
         sleep 0.1
       done
@@ -235,7 +234,7 @@ _on_exit() {
   fi
 }
 trap '_on_exit EXIT' EXIT
-trap '_on_exit INT'  INT
+trap '_on_exit INT' INT
 trap '_on_exit TERM' TERM
 
 passed=0
@@ -262,6 +261,7 @@ for conf in "$CONF_DIR"/*.conf; do
 
   # ── Build ──────────────────────────────────────────────────────────────
   echo "  Building... (log: $log_file)"
+  # shellcheck disable=SC2024  # log_file is user-writable; sudo is for the build, not the redirect
   sudo "$STEAMOS_BUILD" \
     --action build \
     --image "$SOURCE_IMG" \

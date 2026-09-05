@@ -1,4 +1,5 @@
 #!/bin/bash
+# lint-ignore: strict-mode  # sourced library; set -euo pipefail would contaminate caller
 #
 # detect-hw-packages.sh — Auto-detect required firmware and hardware packages.
 #
@@ -50,8 +51,8 @@ declare -A _USB_VENDOR_FW=(
 # GPU vendor ID → driver packages (Nouveau intentionally excluded).
 declare -A _GPU_VENDOR_PKGS=(
   [10de]="nvidia-open-dkms" # NVIDIA (build-recipe)
-  [8086]="intel-gpu"  # Intel
-  [1002]="amd-mesa"   # AMD
+  [8086]="intel-gpu"        # Intel
+  [1002]="amd-mesa"         # AMD
 )
 
 # ---------------------------------------------------------------------------

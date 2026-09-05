@@ -9,6 +9,7 @@
 # If repatch fails, invalidate the staged slot and keep booting the current
 # known-good image.
 
+# lint-ignore: strict-mode  # captures child exit codes; rollback logic must execute on failure
 REAL=/usr/bin/steamos-atomupd-client.orig
 
 # Resolve script directory
@@ -32,7 +33,7 @@ LOG="$LOGDIR/atomupd-$(date +%Y%m%d-%H%M%S)-$$.log"
 ln -sfn "$(basename "$LOG")" "$LOGDIR/atomupd-latest.log"
 
 alog() {
-  echo "[steamos-build-atomupd] $*" | tee -a "$LOG" >&2
+  printf '[steamos-build-atomupd] %s\n' "$*" | tee -a "$LOG" >&2
   logger -t steamos-build-atomupd -- "$*" 2>/dev/null || true
 }
 
@@ -50,7 +51,10 @@ boot_value() {
   local conf="/esp/SteamOS/conf/$slot.conf"
 
   [[ -f "$conf" ]] || return 1
-  sed -n "s/^${key}:[[:space:]]*//p" "$conf" | tail -n1
+  local val
+  val="$(sed -n "s/^${key}:[[:space:]]*//p" "$conf")" || return 1
+  [[ -n "$val" ]] || return 1
+  printf '%s\n' "$val" | tail -n1
 }
 
 read_build_id_from_root() {
@@ -249,7 +253,14 @@ install_self_into_target() {
     alog "ERROR: could not cleanly unmount $slot after wrapper propagation"
     alog "WARNING: falling back to lazy unmount; data integrity may be compromised"
     umount -l "$mnt" 2>/dev/null || true
-    rmdir "$mnt" 2>/dev/null || true
+    # Wait briefly for lazy unmount to release the mount point, then clean up
+    local _retries=0
+    while (( _retries < 5 )); do
+      rmdir "$mnt" 2>/dev/null && break
+      sleep 1
+      _retries=$((_retries + 1))
+    done
+    rmdir "$mnt" 2>/dev/null || alog "WARNING: could not remove mount point $mnt"
     return 1
   }
   rmdir "$mnt" 2>/dev/null || true

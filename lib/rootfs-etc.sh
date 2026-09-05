@@ -900,14 +900,11 @@ prepare_image_rootfs_size() {
   local -A part_fs_uuids=()
   local -A part_size_bytes=()
   local -A part_size_sectors=()
-  local -A part_start_old=()
   for entry in "${trailing[@]}"; do
     local pnum="${entry%%:*}"
     local pdev="${LOOPDEV}p${pnum}"
     [[ -b "$pdev" ]] || die "Partition device $pdev not found"
 
-    # shellcheck disable=SC2034
-    part_start_old[$pnum]="${entry#*:}"
     part_size_bytes[$pnum]="$(blockdev --getsize64 "$pdev")"
     ((part_size_bytes[$pnum] % logical_sector == 0)) \
       || die "Partition $pnum size (${part_size_bytes[$pnum]} bytes) is not sector-aligned"

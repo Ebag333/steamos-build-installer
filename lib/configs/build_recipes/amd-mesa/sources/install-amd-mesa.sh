@@ -47,8 +47,8 @@ fi
 echo "  Verifying installation"
 ALL_OK=1
 for pkg in "${PACKAGES[@]}"; do
-  if pacman -Q "$pkg" &>/dev/null; then
-    version="$(pacman -Q "$pkg" 2>/dev/null | awk '{print $2}')"
+  if pkg_info="$(pacman -Q "$pkg" 2>/dev/null)"; then
+    version="$(echo "$pkg_info" | awk '{print $2}')"
     echo "    OK $pkg $version"
   else
     echo "    FAIL $pkg — not found after install" >&2

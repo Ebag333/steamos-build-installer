@@ -18,10 +18,16 @@ mount_chroot_fs() {
   mount -t proc proc "$root/proc" \
     || die "Failed to mount proc in $root"
   mount --rbind /sys "$root/sys" \
-    || { umount -R "$root/proc" 2>/dev/null; die "Failed to mount sys in $root"; }
+    || {
+      umount -R "$root/proc" 2>/dev/null
+      die "Failed to mount sys in $root"
+    }
   mount --make-rslave "$root/sys" 2>/dev/null || true
   mount --rbind /dev "$root/dev" \
-    || { umount -R "$root/sys" "$root/proc" 2>/dev/null; die "Failed to mount dev in $root"; }
+    || {
+      umount -R "$root/sys" "$root/proc" 2>/dev/null
+      die "Failed to mount dev in $root"
+    }
   mount --make-rslave "$root/dev" 2>/dev/null || true
   log "  chroot mounts ready: proc sys dev"
 }
@@ -306,11 +312,11 @@ cleanup_diagnostics() {
   local root="${1:-/}"
 
   if [[ "$root" == "/" ]]; then
-    journalctl --vacuum-size=50M 2>/dev/null ||
-      warn "Journal cleanup failed"
+    journalctl --vacuum-size=50M 2>/dev/null \
+      || warn "Journal cleanup failed"
   else
-    journalctl --root="$root" --vacuum-size=50M 2>/dev/null ||
-      warn "Target journal cleanup failed"
+    journalctl --root="$root" --vacuum-size=50M 2>/dev/null \
+      || warn "Target journal cleanup failed"
   fi
 
   rm -f -- "$root"/var/lib/systemd/coredump/* 2>/dev/null || true
@@ -347,10 +353,9 @@ cleanup_dkms_scratch() {
 
   [[ -d "$dkms_dir" ]] || return 0
 
-  local module version kernel arch ko_dir
+  local module kernel arch ko_dir
   while IFS= read -r -d '' module_dir; do
     module="$(basename "$(dirname "$(dirname "$module_dir")")")"
-    version="$(basename "$(dirname "$module_dir")")"
     kernel="$(basename "$module_dir")"
     local -a _arch_candidates=("$module_dir"/*)
     arch="$(basename "${_arch_candidates[0]}" 2>/dev/null)"
@@ -407,7 +412,7 @@ cleanup_disk_space() {
   fi
 
   case "$policy" in
-    live|repatch|image-finalize) ;;
+    live | repatch | image-finalize) ;;
     *)
       warn "cleanup_disk_space: unknown policy '$policy' (use live, repatch, or image-finalize)"
       return 1
@@ -421,42 +426,42 @@ cleanup_disk_space() {
   # --- All policies ---
 
   if [[ "$root" == "/" ]]; then
-    pacman_clean_cache --host ||
-      warn "Pacman cache cleanup failed"
+    pacman_clean_cache --host \
+      || warn "Pacman cache cleanup failed"
   else
-    pacman_clean_cache --chroot "$root" ||
-      warn "Target pacman cache cleanup failed"
+    pacman_clean_cache --chroot "$root" \
+      || warn "Target pacman cache cleanup failed"
   fi
 
-  cleanup_temporary_files --host ||
-    warn "Temporary-file cleanup failed"
+  cleanup_temporary_files --host \
+    || warn "Temporary-file cleanup failed"
 
   if [[ "$root" != "/" ]]; then
-    cleanup_temporary_files --root "$root" ||
-      warn "Target temporary-file cleanup failed"
+    cleanup_temporary_files --root "$root" \
+      || warn "Target temporary-file cleanup failed"
   fi
 
-  cleanup_partial_downloads "$root" ||
-    warn "Partial download cleanup failed"
+  cleanup_partial_downloads "$root" \
+    || warn "Partial download cleanup failed"
 
-  cleanup_diagnostics "$root" ||
-    warn "Diagnostics cleanup failed"
+  cleanup_diagnostics "$root" \
+    || warn "Diagnostics cleanup failed"
 
   # --- repatch + image-finalize ---
 
   if [[ "$policy" == "repatch" || "$policy" == "image-finalize" ]]; then
-    cleanup_build_artifacts "$root" ||
-      warn "Build artifact cleanup failed"
+    cleanup_build_artifacts "$root" \
+      || warn "Build artifact cleanup failed"
 
-    cleanup_dkms_scratch "$root" ||
-      warn "DKMS scratch cleanup failed"
+    cleanup_dkms_scratch "$root" \
+      || warn "DKMS scratch cleanup failed"
   fi
 
   # --- image-finalize only ---
 
   if [[ "$policy" == "image-finalize" ]]; then
-    cleanup_image_finalize "$root" ||
-      warn "Image finalization cleanup failed"
+    cleanup_image_finalize "$root" \
+      || warn "Image finalization cleanup failed"
   fi
 
   after_kb="$(df -Pk "$root" | awk 'NR == 2 { print $4 }')"

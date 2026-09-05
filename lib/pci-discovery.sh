@@ -45,7 +45,11 @@ get_bound_driver() {
   local driver_link="$devdir/driver"
   if [[ -L "$driver_link" ]]; then
     local _target
-    _target="$(readlink "$driver_link" 2>/dev/null)" && basename "$_target" || echo "-"
+    if _target="$(readlink "$driver_link" 2>/dev/null)"; then
+      basename "$_target"
+    else
+      echo "-"
+    fi
   else
     echo "-"
   fi
@@ -67,7 +71,11 @@ get_bound_module() {
   local mod_link="$devdir/driver/module"
   if [[ -L "$mod_link" ]]; then
     local _target
-    _target="$(readlink -f "$mod_link" 2>/dev/null)" && basename "$_target" || echo ""
+    if _target="$(readlink -f "$mod_link" 2>/dev/null)"; then
+      basename "$_target"
+    else
+      echo ""
+    fi
   fi
 }
 
@@ -80,6 +88,7 @@ pci_discover_modules() {
 
   printf 'PCI\tCLASS\tCATEGORY\tDEVICE\tBOUND_DRIVER\tMODULE\tMODULE_DESCRIPTION\n'
 
+  shopt -s nullglob
   for modalias_file in /sys/bus/pci/devices/*/modalias; do
     [[ -r "$modalias_file" ]] || continue
 
@@ -87,10 +96,11 @@ pci_discover_modules() {
     local pci
     pci="$(basename "$devdir")"
 
-    local class class_type alias device_desc bound_driver bound_module
-    class="$(cat "$devdir/class" 2>/dev/null || echo unknown)"
+    local class class_type modalias device_desc bound_driver bound_module
+    class="$(cat "$devdir/class" 2>/dev/null)"
+    class="${class:-unknown}"
     class_type="$(class_name "$class")"
-    alias="$(cat "$modalias_file" 2>/dev/null || true)"
+    modalias="$(cat "$modalias_file" 2>/dev/null || true)"
     device_desc="$(get_device_description "$pci")"
     bound_driver="$(get_bound_driver "$devdir")"
     bound_module="$(get_bound_module "$devdir")"
@@ -100,7 +110,7 @@ pci_discover_modules() {
     mapfile -t mods < <(
       {
         [[ -n "$bound_module" ]] && echo "$bound_module"
-        modprobe -S "$kver" -R "$alias" 2>/dev/null
+        modprobe -S "$kver" -R "$modalias" 2>/dev/null
       } \
         | sed '/^[[:space:]]*$/d' \
         | sort -u
@@ -119,4 +129,5 @@ pci_discover_modules() {
         "$pci" "$class" "$class_type" "$device_desc" "$bound_driver" "$mod" "$mod_desc"
     done
   done
+  shopt -u nullglob
 }

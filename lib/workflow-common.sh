@@ -89,7 +89,10 @@ ensure_flatpak_service() {
     local src_service="$script_dir/lib/configs/steamos-build-flatpak-install.service"
     if [[ -f "$src_service" ]]; then
       mkdir -p "$(dirname "$service_file")" \
-        || { warn "ensure_flatpak_service: failed to create directory"; return 1; }
+        || {
+          warn "ensure_flatpak_service: failed to create directory"
+          return 1
+        }
       cp "$src_service" "$service_file"
       log "    Installed service file"
     else
@@ -408,7 +411,3 @@ EOF
 
   return 0
 }
-
-
-
-

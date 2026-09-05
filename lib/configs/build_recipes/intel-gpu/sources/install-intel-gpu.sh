@@ -35,7 +35,7 @@ fi
 if [[ ${#INSTALL_LIST[@]} -gt 0 ]]; then
   echo "  Installing: ${INSTALL_LIST[*]}"
   # DB sync is handled by the pipeline before this script runs.
-  if ! pacman -S --noconfirm "${INSTALL_LIST[@]}"; then
+  if ! pacman -S --noconfirm --needed "${INSTALL_LIST[@]}"; then
     echo "ERROR: Failed to install Intel GPU packages" >&2
     exit 1
   fi
@@ -47,8 +47,8 @@ fi
 echo "  Verifying installation"
 ALL_OK=1
 for pkg in "${PACKAGES[@]}"; do
-  if pacman -Q "$pkg" &>/dev/null; then
-    version="$(pacman -Q "$pkg" 2>/dev/null | awk '{print $2}')"
+  if qout="$(pacman -Q "$pkg" 2>/dev/null)"; then
+    version="${qout#* }"
     echo "    OK $pkg $version"
   else
     echo "    FAIL $pkg — not found after install" >&2

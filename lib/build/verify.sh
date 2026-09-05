@@ -120,5 +120,3 @@ verify_package_abi_compat() {
   log "  ABI compatibility: OK"
   return 0
 }
-
-

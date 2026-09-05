@@ -29,6 +29,7 @@ _BUILD_OVERLAY_LOADED=1
 _build_overlay_create_root() {
   local name="${1:?}"
   # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
+  # lint-ignore: dead-code  # intentionally unused; ${2:?} validates input and documents interface
   local profile="${2:?}"
 
   local build_dir="${WORKDIR:-/tmp}/build-roots/$name-$$"
@@ -258,9 +259,9 @@ _build_overlay_force_destroy_root() {
     "$merged"; do
     [[ -e "$m" ]] || continue
     if mountpoint -q "$m" 2>/dev/null; then
-        warn "  Force unmounting (lazy): $m"
-        umount -l "$m" 2>/dev/null || true
-        untrack_mount "$m" 2>/dev/null || true
+      warn "  Force unmounting (lazy): $m"
+      umount -l "$m" 2>/dev/null || true
+      untrack_mount "$m" 2>/dev/null || true
     fi
   done
 

@@ -87,23 +87,23 @@ while IFS= read -r -d '' file; do
 
   while IFS= read -r line; do
     # Check for BASH_SOURCE guard (indicates sourced library)
-    if [[ "$line" =~ \[\[[[:space:]]*\"\$\{BASH_SOURCE\[0\]\}\"[[:space:]]*==[[:space:]]*\"\$\{0\}\"[[:space:]]*\]\] ]] || \
-       [[ "$line" =~ \[\[[[:space:]]*\"\$\{BASH_SOURCE\[0\]\}\"[[:space:]]*!=[[:space:]]*\"\$\{0\}\"[[:space:]]*\]\] ]]; then
+    if [[ "$line" =~ \[\[[[:space:]]*\"\$\{BASH_SOURCE\[0\]\}\"[[:space:]]*==[[:space:]]*\"\$\{0\}\"[[:space:]]*\]\] ]] \
+      || [[ "$line" =~ \[\[[[:space:]]*\"\$\{BASH_SOURCE\[0\]\}\"[[:space:]]*!=[[:space:]]*\"\$\{0\}\"[[:space:]]*\]\] ]]; then
       has_bash_source_guard=true
     fi
 
     # Check for strict mode
-    if [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-Eeuo[[:space:]]+pipefail ]] || \
-       [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-euo[[:space:]]+pipefail ]]; then
+    if [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-Eeuo[[:space:]]+pipefail ]] \
+      || [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-euo[[:space:]]+pipefail ]]; then
       has_strict_mode=true
     fi
 
     # Detect partial variants for better error messages
-    if [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-.*u.*pipefail ]] && \
-       ! [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-Eeuo[[:space:]]+pipefail ]] && \
-       ! [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-euo[[:space:]]+pipefail ]]; then
+    if [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-.*u.*pipefail ]] \
+      && ! [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-Eeuo[[:space:]]+pipefail ]] \
+      && ! [[ "$line" =~ ^[[:space:]]*set[[:space:]]+-euo[[:space:]]+pipefail ]]; then
       # Extract the set command for the detail message
-      partial_variant="$(echo "$line" | sed 's/^[[:space:]]*//')"
+      partial_variant="${line#"${line%%[![:space:]]*}"}"
     fi
 
     # Check for inline suppression

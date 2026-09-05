@@ -28,7 +28,7 @@ fi
 # ── 2. Source the project's library loader ────────────────────────────────
 # load_workflow_libs loads grub.sh (and its dependency common.sh) via the
 # repo's lib/ directory — no local copy is needed.
-source "$SCRIPT_DIR/lib/library-loader.sh"
+source "$SCRIPT_DIR/lib/library-loader.sh" # lint-ignore: single-source
 load_workflow_libs "build" "$SCRIPT_DIR/lib"
 
 # ── 3. Patch grub-steamos with NVIDIA kernel parameters ──────────────────
@@ -42,6 +42,7 @@ fi
 # NVIDIA_CMDLINE_ADD is defined by common_drivers.sh (loaded via the loader).
 # Add each parameter idempotently — _add_params_to_grub_steamos skips
 # parameters that are already present.
+# shellcheck disable=SC2086  # word splitting intentional: each param is a separate arg
 _add_params_to_grub_steamos "$GRUB_FILE" $NVIDIA_CMDLINE_ADD
 
 # ── 4. Patch EFI grub.cfg with NVIDIA kernel parameters ──────────────────
@@ -50,6 +51,7 @@ _add_params_to_grub_steamos "$GRUB_FILE" $NVIDIA_CMDLINE_ADD
 # both grub-steamos and EFI cmdline params.
 if [[ -n "${EFIMNT:-}" && -f "$EFIMNT/EFI/steamos/grub.cfg" ]]; then
   echo "Patching EFI grub.cfg at $EFIMNT/EFI/steamos/grub.cfg"
+  # shellcheck disable=SC2086  # word splitting intentional: each param is a separate arg
   _add_params_to_efi_grub_cfg "$EFIMNT/EFI/steamos/grub.cfg" $NVIDIA_CMDLINE_ADD
 elif [[ -n "${EFIMNT:-}" ]]; then
   echo "EFI grub.cfg not found at $EFIMNT/EFI/steamos/grub.cfg — skipping EFI write"

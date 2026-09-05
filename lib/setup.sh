@@ -23,7 +23,7 @@ setup_resolve_workdir() {
   if [[ "${WORKDIR_LOCATION:-auto}" == "ram" ]]; then
     WORKDIR="/dev/shm/steamos-build"
     OUT="$WORKDIR/$(basename "$OUT")"
-    mkdir -p "$WORKDIR"
+    mkdir -p "$WORKDIR" || die "Failed to create work directory: $WORKDIR"
     log "Build workspace: RAM (forced by config)"
     return 0
   fi
@@ -31,7 +31,8 @@ setup_resolve_workdir() {
   local disk_avail ram_avail need_mb
 
   disk_avail="$(df -m --output=avail "$(dirname "$OUT")" | tail -1 | tr -d ' ')"
-  ram_avail="$(df -m --output=avail /dev/shm 2>/dev/null | tail -1 | tr -d ' ' || echo 0)"
+  ram_avail="$(df -m --output=avail /dev/shm 2>/dev/null | tail -1 | tr -d ' ')"
+  ram_avail="${ram_avail:-0}"
 
   # Get the actual decompressed image size from the GPT header, and also
   # find rootfs-A's partition size so we can project the image growth when
@@ -114,7 +115,7 @@ if len(d) >= 596 and d[512:520] == b"EFI PART":
   if ((ram_avail >= need_mb)); then
     WORKDIR="/dev/shm/steamos-build"
     OUT="$WORKDIR/$(basename "$OUT")"
-    mkdir -p "$WORKDIR"
+    mkdir -p "$WORKDIR" || die "Failed to create work directory: $WORKDIR"
     log "Build workspace: RAM (/dev/shm, ${ram_avail} MB free, need ~${need_mb})"
   elif ((disk_avail >= need_mb)); then
     log "Build workspace: disk (${disk_avail} MB free, RAM only ${ram_avail} MB)"
@@ -126,7 +127,8 @@ if len(d) >= 596 and d[512:520] == b"EFI PART":
 # Build/scratch mountpoints used across the whole run.
 setup_dirs() {
   log "Creating build directories under $WORKDIR"
-  mkdir -p "$MNT" "$EFIMNT" "$HOMEMNT" "$OVLWORK" "$MERGED"
+  mkdir -p "$MNT" "$EFIMNT" "$HOMEMNT" "$OVLWORK" "$MERGED" \
+    || die "Failed to create build directories under $WORKDIR"
   mkdir -p "${OVL_MNT:-$WORKDIR/overlay-mnt}"
   log "  MERGED=$MERGED (exists: $([[ -d "$MERGED" ]] && echo yes || echo no))"
 }
@@ -150,7 +152,7 @@ setup_udev_guard() {
 SUBSYSTEM=="block", KERNEL=="${loop_name}p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0", ENV{ID_PART_ENTRY_UUID}=""
 EOF
 
-  udevadm control --reload-rules
+  udevadm control --reload-rules || warn "Failed to reload udev rules — quarantine may not be active"
 }
 
 # Copy (or decompress) the input image into $OUT.  The copy is what we modify;
@@ -235,13 +237,13 @@ setup_copy_image() {
 setup_loop_mount() {
   # Attach the image WITHOUT scanning its partition table yet.
   # We need our udev quarantine rule installed before loopXpN devices appear.
-  LOOPDEV="$(losetup -f --show "$OUT")"
+  LOOPDEV="$(losetup -f --show "$OUT")" || die "Failed to attach loop device for $OUT"
   log "Loop device: $LOOPDEV"
 
   setup_udev_guard
 
   # Now expose the partitions, with the guard already active.
-  partx -a "$LOOPDEV"
+  partx -a "$LOOPDEV" || die "Failed to register partition devices on $LOOPDEV"
   udevadm settle --timeout=10
 
   local checked=0 passed=0
@@ -300,6 +302,7 @@ setup_loop_mount() {
   log "Scanning partitions on $LOOPDEV"
 
   ROOTPART="" EFIPART="" HOMEPART="" VARPART=""
+  local _pname=""
   for part in "$LOOPDEV"p*; do
     [[ -b "$part" ]] || {
       warn "No partition devices found on $LOOPDEV — image may be corrupt"
@@ -345,13 +348,16 @@ setup_mount_partitions() {
   log "Loop device RO: $(blockdev --getro "$LOOPDEV")"
   log "Root partition RO: $(blockdev --getro "$ROOTPART")"
   log "Mounting rootfs ($ROOTPART) → $MNT"
-  mount -o compress-force=zstd:3 "$ROOTPART" "$MNT"
+  mount -o compress-force=zstd:3 "$ROOTPART" "$MNT" \
+    || die "Failed to mount rootfs: $ROOTPART → $MNT"
   track_mount "$MNT"
   log "Mounting efi ($EFIPART) → $EFIMNT"
-  mount "$EFIPART" "$EFIMNT"
+  mount "$EFIPART" "$EFIMNT" \
+    || die "Failed to mount EFI partition: $EFIPART → $EFIMNT"
   track_mount "$EFIMNT"
   log "Mounting home ($HOMEPART) → $HOMEMNT"
-  mount "$HOMEPART" "$HOMEMNT"
+  mount "$HOMEPART" "$HOMEMNT" \
+    || die "Failed to mount home partition: $HOMEPART → $HOMEMNT"
   track_mount "$HOMEMNT"
 
   log "Rootfs mount options: $(findmnt -no OPTIONS "$MNT")"

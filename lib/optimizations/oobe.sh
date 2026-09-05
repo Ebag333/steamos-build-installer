@@ -27,6 +27,7 @@ apply_oobe_optimization() {
   case "$item" in
     neutralize-oobe)
       _apply_neutralize_oobe
+      return $?
       ;;
     *)
       warn "Unknown oobe optimization: $item"
@@ -52,6 +53,7 @@ verify_oobe_optimization() {
   case "$item" in
     neutralize-oobe)
       _verify_neutralize_oobe
+      return $?
       ;;
     *)
       warn "Unknown oobe optimization: $item"
@@ -93,15 +95,19 @@ _apply_neutralize_oobe() {
 
   # Handle both argument orderings seen across SteamOS versions
   # shellcheck disable=SC2016
-  sed -i 's/rm -rf --one-file-system "\$STEAM_DIR" "\$STEAM_LINKS"/: # neutralized by steamos-build-installer/' "$jupiter"
-  # shellcheck disable=SC2016
-  sed -i 's/rm -rf --one-file-system "\$STEAM_LINKS" "\$STEAM_DIR"/: # neutralized by steamos-build-installer/' "$jupiter"
+  if ! sed -i \
+    -e 's/rm -rf --one-file-system "\$STEAM_DIR" "\$STEAM_LINKS"/: # neutralized by steamos-build-installer/' \
+    -e 's/rm -rf --one-file-system "\$STEAM_LINKS" "\$STEAM_DIR"/: # neutralized by steamos-build-installer/' \
+    "$jupiter"; then
+    warn "sed failed while patching steam-jupiter"
+    return 1
+  fi
 
   # Fail closed: if the destructive line survived (whitespace change,
   # restructure), return failure rather than shipping a silently
   # unpatched image.
   # shellcheck disable=SC2016
-  if grep -Eq 'rm -rf --one-file-system "\$STEAM_(DIR|LINKS)" "\$STEAM_(DIR|LINKS)"' "$jupiter"; then
+  if grep -Eq 'rm[[:space:]]+-rf[[:space:]]+--one-file-system[[:space:]].*\$STEAM_(DIR|LINKS)' "$jupiter"; then
     warn "Failed to neutralize destructive OOBE Steam reset in steam-jupiter"
     return 1
   fi
@@ -127,11 +133,12 @@ _verify_neutralize_oobe() {
   local jupiter="${root}/usr/bin/steam-jupiter"
 
   if [[ ! -f "$jupiter" ]]; then
+    warn "steam-jupiter not found at ${jupiter#"${root}"} — cannot verify OOBE neutralization"
     return 1
   fi
 
   # shellcheck disable=SC2016
-  if grep -Eq 'rm -rf --one-file-system "\$STEAM_(DIR|LINKS)" "\$STEAM_(DIR|LINKS)"' "$jupiter"; then
+  if grep -Eq 'rm[[:space:]]+-rf[[:space:]]+--one-file-system[[:space:]].*\$STEAM_(DIR|LINKS)' "$jupiter"; then
     return 1
   fi
 

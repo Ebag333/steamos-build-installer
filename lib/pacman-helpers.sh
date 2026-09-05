@@ -512,8 +512,6 @@ pacman_download() {
     2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
 }
 
-
-
 # ---------------------------------------------------------------------------
 # Conflict resolution config
 # ---------------------------------------------------------------------------
@@ -782,7 +780,7 @@ _pacman_check_single_pkg_file_conflicts() {
     if [[ -s "$planned_fallback_file" ]]; then
       planned_files=$(awk '{print $1 " /" $2}' "$planned_fallback_file")
     else
-      return 2  # Could not get file list
+      return 2 # Could not get file list
     fi
   fi
 
@@ -1237,8 +1235,8 @@ pacman_preflight_check() {
       # Extract paths that are NOT in installed_files (potential unowned files)
       local unowned_candidates="$WORKDIR/preflight-unowned-candidates.txt"
       awk '{print $2}' "$installed_files" | sort -u >"$WORKDIR/preflight-installed-paths.txt"
-      awk '$2 !~ /\/$/ {print $2}' "$planned_files" | sort -u | \
-        comm -23 - "$WORKDIR/preflight-installed-paths.txt" >"$unowned_candidates"
+      awk '$2 !~ /\/$/ {print $2}' "$planned_files" | sort -u \
+        | comm -23 - "$WORKDIR/preflight-installed-paths.txt" >"$unowned_candidates"
 
       # Check candidates against filesystem (in chroot namespace)
       while IFS= read -r _uo_path; do
@@ -1315,7 +1313,6 @@ pacman_preflight_check() {
   # We check this against the conflict resolutions config.
   local -a extra_overwrite_args=()
   local -a uninstall_pkgs=()
-  local -a skip_actions=()
   local resolved=0 unresolved=0
   local -A _resolved_conflict_pairs=()
   local -A _resolved_files=()
@@ -1374,7 +1371,6 @@ pacman_preflight_check() {
         _resolved_files["$cr_new|$cr_old|$cr_file"]=1
         ;;
       skip)
-        skip_actions+=("$cr_old → $cr_new")
         warn "Pre-flight: skipping conflict $cr_old → $cr_new (manual intervention required)"
         ((++unresolved)) || true
         _resolved_conflict_pairs["$cr_new|$cr_old"]=1
@@ -1498,7 +1494,9 @@ pacman_preflight_check() {
 pacman_preflight_with_fallback() {
   local -n _pff_packages=$1
   local -n _pff_mode=$2
+  # lint-ignore: dead-code
   local -n _pff_extra_args=${3:-_pff_extra_args_dummy}
+  # lint-ignore: dead-code
   local -n _pff_provider_targets=${4:-_pff_provider_targets_dummy}
   local interactive="${5:-0}"
 
@@ -1586,8 +1584,6 @@ pacman_preflight_with_fallback() {
     _pff_result_installable=0
     return 0
   fi
-
-  local requested_count=${#_pff_packages[@]}
 
   # Layer 1: Remove already-installed targets
   local -a filtered_packages=()
@@ -1713,10 +1709,9 @@ pacman_preflight_with_fallback() {
 
   # Use pacman_preflight_check on the passing set
   local -a final_packages=("${passing_packages[@]}")
-  local removed_count=0
   local max_iterations=${#final_packages[@]}
 
-  for ((i=0; i<max_iterations; i++)); do
+  for ((i = 0; i < max_iterations; i++)); do
     if ((${#final_packages[@]} == 0)); then
       break
     fi
@@ -1742,7 +1737,6 @@ pacman_preflight_with_fallback() {
         if ((found == 0)) && _pacman_run_in_root "${MERGED:-}" "pacman -S --needed $freeze_args --print --print-format '%n' --noconfirm '$pkg' 2>/dev/null" | grep -q "^${blocker_name}$"; then
           warn "Pre-flight: removing $pkg (requires $blocker_name upgrade)"
           skipped_packages+=("$pkg")
-          ((++removed_count)) || true
           ((++conflict_skipped)) || true
           found=1
         else
@@ -1763,7 +1757,6 @@ pacman_preflight_with_fallback() {
           if [[ "$pkg" == "$conflict_pkg" ]]; then
             warn "Pre-flight: removing $pkg (file conflict)"
             skipped_packages+=("$pkg")
-            ((++removed_count)) || true
             ((++conflict_skipped)) || true
           else
             new_final+=("$pkg")
@@ -1772,9 +1765,8 @@ pacman_preflight_with_fallback() {
         final_packages=("${new_final[@]}")
       else
         warn "Pre-flight: unknown failure, removing last package"
-        skipped_packages+=("${final_packages[${#final_packages[@]}-1]}")
+        skipped_packages+=("${final_packages[${#final_packages[@]} - 1]}")
         final_packages=("${final_packages[@]::${#final_packages[@]}-1}")
-        ((++removed_count)) || true
         ((++conflict_skipped)) || true
       fi
     fi

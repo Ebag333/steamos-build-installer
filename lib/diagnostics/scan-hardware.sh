@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 #
 # steamos-build-installer — lib/diagnostics/scan-hardware.sh
 # PCI hardware scan: identifies unclaimed devices and suggests kernel modules.
@@ -10,12 +11,18 @@ echo
 
 found=0
 
+if ! command -v lspci &>/dev/null; then
+  echo "ERROR: lspci not found. Install pciutils." >&2
+  exit 1
+fi
+
 while IFS="" read -r line; do
-  dev="$(echo "$line" | cut -d' ' -f1)"
-  desc="$(echo "$line" | cut -d' ' -f2-)"
+  [[ -z "$line" ]] && continue
+  dev="$(printf '%s\n' "$line" | cut -d' ' -f1)"
+  desc="$(printf '%s\n' "$line" | cut -d' ' -f2-)"
 
   vendor_device="$(
-    echo "$line" \
+    printf '%s\n' "$line" \
       | grep -oP '\[\K[0-9a-fA-F]{4}:[0-9a-fA-F]{4}' \
       | head -1 \
       || true
@@ -41,8 +48,7 @@ while IFS="" read -r line; do
     vendor="${vendor_device%:*}"
     device="${vendor_device#*:}"
 
-    vendor="${vendor^^}"
-    device="${device^^}"
+    # vendor and device are already lowercase from lspci — no conversion needed
 
     modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
 
@@ -67,4 +73,8 @@ done < <(lspci -nn)
 
 if [[ $found -eq 0 ]]; then
   echo "All PCI devices have drivers loaded."
+  exit 0
+else
+  echo "Unclaimed devices detected."
+  exit 1
 fi

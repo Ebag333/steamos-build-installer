@@ -49,8 +49,6 @@ apply_system_optimization() {
 #   - live: Modify running system
 
 _apply_gamemode() {
-  local root
-  root="$(get_root)"
   local ok=1
 
   log "Adding deck user to gamemode group"
@@ -89,16 +87,19 @@ sddm_disable_autologin() {
   local root="${1:?sddm_disable_autologin: missing root}"
 
   local sddm_confs
-  sddm_confs="$(find "$root" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
+  sddm_confs="$(find "$root/etc" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
 
   if [[ -z "$sddm_confs" ]]; then
     # No steamos.conf found — check if sddm is installed
     local sddm_conf_dirs
-    sddm_conf_dirs="$(find "$root" -type d -name "sddm.conf.d" 2>/dev/null)"
+    sddm_conf_dirs="$(find "$root/etc" -type d -name "sddm.conf.d" 2>/dev/null)"
     if [[ -n "$sddm_conf_dirs" ]]; then
       local new_conf="$root/etc/sddm.conf.d/steamos.conf"
       log "No steamos.conf found but sddm is installed — creating $new_conf with autologin disabled"
-      mkdir -p "$(dirname "$new_conf")"
+      if ! mkdir -p "$(dirname "$new_conf")"; then
+        warn "Failed to create directory for $new_conf"
+        return 1
+      fi
       cat >"$new_conf" <<EOF
 [Autologin]
 User=
@@ -122,15 +123,31 @@ EOF
     # Clear User= to disable initial autologin
     if grep -q '^User=' "$sddm_conf"; then
       log "Disabling initial autologin (clearing User=) in $sddm_conf"
-      sed -i 's/^User=.*/User=/' "$sddm_conf"
-      changed=1
+      if ! sed -i 's/^User=.*/User=/' "$sddm_conf"; then
+        warn "Failed to clear User= in $sddm_conf"
+      else
+        changed=1
+      fi
     fi
 
     # Set Relogin=false to prevent auto re-login after session exit
     if grep -q '^Relogin=true' "$sddm_conf"; then
       log "Disabling re-login (Relogin=false) in $sddm_conf"
-      sed -i 's/^Relogin=true/Relogin=false/' "$sddm_conf"
-      changed=1
+      if ! sed -i 's/^Relogin=true/Relogin=false/' "$sddm_conf"; then
+        warn "Failed to set Relogin=false in $sddm_conf"
+      else
+        changed=1
+      fi
+    fi
+
+    # Clear Session= to prevent auto-starting a specific session
+    if grep -q '^Session=' "$sddm_conf"; then
+      log "Clearing Session= in $sddm_conf"
+      if ! sed -i 's/^Session=.*/Session=/' "$sddm_conf"; then
+        warn "Failed to clear Session= in $sddm_conf"
+      else
+        changed=1
+      fi
     fi
   done <<<"$sddm_confs"
 
@@ -176,12 +193,12 @@ _verify_disable_autologin() {
   root="$(get_root)"
 
   local sddm_confs
-  sddm_confs="$(find "$root" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
+  sddm_confs="$(find "$root/etc" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
 
   # No steamos.conf — check if sddm is installed
   if [[ -z "$sddm_confs" ]]; then
     local sddm_conf_dirs
-    sddm_conf_dirs="$(find "$root" -type d -name "sddm.conf.d" 2>/dev/null)"
+    sddm_conf_dirs="$(find "$root/etc" -type d -name "sddm.conf.d" 2>/dev/null)"
     if [[ -n "$sddm_conf_dirs" ]]; then
       warn "  sddm installed but no steamos.conf found — autologin not explicitly disabled"
       return 1

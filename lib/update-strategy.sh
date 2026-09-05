@@ -13,8 +13,14 @@ fi
 
 apply_update_strategy() {
   UPDATE_MODE="${UPDATE_MODE:-selfheal}"
-  [[ -n "${MNT:-}" && -d "${MNT:-}" ]] || { warn "apply_update_strategy: MNT is not set or not a directory"; return 1; }
-  [[ -n "${SCRIPT_DIR:-}" && -d "${SCRIPT_DIR:-}" ]] || { warn "apply_update_strategy: SCRIPT_DIR is not set or not a directory"; return 1; }
+  [[ -n "${MNT:-}" && -d "${MNT:-}" ]] || {
+    warn "apply_update_strategy: MNT is not set or not a directory"
+    return 1
+  }
+  [[ -n "${SCRIPT_DIR:-}" && -d "${SCRIPT_DIR:-}" ]] || {
+    warn "apply_update_strategy: SCRIPT_DIR is not set or not a directory"
+    return 1
+  }
   # OOBE day-1 auto-migration stays masked in all modes except stock — a
   # surprise multi-GB update mid-first-boot is bad UX even when self-healing.
   if [[ "$UPDATE_MODE" != "stock" ]]; then
@@ -40,7 +46,10 @@ apply_update_strategy() {
         continue
       fi
       mv "$MNT/usr/bin/$bin" "$MNT/usr/bin/$bin.orig" \
-        || { warn "hold: failed to back up $bin"; continue; }
+        || {
+          warn "hold: failed to back up $bin"
+          continue
+        }
       cat >"$MNT/usr/bin/$bin" <<'STUB'
 #!/bin/bash
 # Stubbed by steamos-build-installer: an OS update would replace the rootfs
@@ -63,7 +72,10 @@ STUB
     if [[ -f "$MNT/usr/bin/steamos-update" ]]; then
       if [[ ! -f "$MNT/usr/bin/steamos-update.orig" ]]; then
         mv "$MNT/usr/bin/steamos-update" "$MNT/usr/bin/steamos-update.orig" \
-          || { warn "selfheal: failed to back up steamos-update"; return 1; }
+          || {
+            warn "selfheal: failed to back up steamos-update"
+            return 1
+          }
         log "  selfheal: backed up steamos-update"
       fi
     fi
@@ -80,7 +92,10 @@ STUB
     if [[ -f "$MNT/usr/bin/steamos-atomupd-client" ]]; then
       if [[ ! -f "$MNT/usr/bin/steamos-atomupd-client.orig" ]]; then
         mv "$MNT/usr/bin/steamos-atomupd-client" "$MNT/usr/bin/steamos-atomupd-client.orig" \
-          || { warn "selfheal: failed to back up steamos-atomupd-client"; return 1; }
+          || {
+            warn "selfheal: failed to back up steamos-atomupd-client"
+            return 1
+          }
         log "  selfheal: backed up steamos-atomupd-client"
       fi
     fi

@@ -71,7 +71,10 @@ _apply_cpu_performance() {
 
 _apply_scx_lavd() {
   local root
-  root="$(get_root)"
+  root="$(get_root)" || {
+    warn "get_root failed"
+    return 1
+  }
 
   # Check if scx_lavd is available
   if [[ ! -x "${root}/usr/bin/scx_lavd" ]]; then
@@ -98,8 +101,10 @@ _apply_scx_lavd() {
   fi
 
   # Enable scx.service
+  local rc=0
   if ! enable_service "scx.service"; then
-    warn "Failed to enable scx.service (non-fatal)"
+    warn "Failed to enable scx.service"
+    rc=1
   fi
 
   # Live mode: reload and restart immediately
@@ -109,7 +114,7 @@ _apply_scx_lavd() {
       || warn "Failed to start scx.service (will activate on next boot)"
   fi
 
-  return 0
+  return $rc
 }
 
 # ---------------------------------------------------------------------------
@@ -124,7 +129,10 @@ _apply_scx_lavd() {
 
 _apply_vm_tunables() {
   local root
-  root="$(get_root)"
+  root="$(get_root)" || {
+    warn "get_root failed"
+    return 1
+  }
 
   # Determine source directory
   local configs_dir
@@ -155,6 +163,7 @@ _apply_vm_tunables() {
   # Read target's current swappiness (fall back to kernel default 60)
   local target_swappiness
   target_swappiness="$(cat "${root}/proc/sys/vm/swappiness" 2>/dev/null || echo 60)"
+  [[ "$target_swappiness" =~ ^[0-9]+$ ]] || target_swappiness=60
 
   # Apply appropriate swappiness config
   if ((has_zram)) && ((target_swappiness < 100)); then
@@ -175,7 +184,7 @@ _apply_vm_tunables() {
   # Live mode: apply immediately
   if is_live; then
     local target_val
-    ((has_zram)) && target_val=180 || target_val=10
+    if ((has_zram)); then target_val=180; else target_val=10; fi
     sysctl -q -w "vm.swappiness=$target_val" 2>/dev/null \
       || warn "Failed to apply swappiness live (will take effect on next boot)"
   fi

@@ -161,14 +161,14 @@ apply_customizations() {
   local root="${3:-}"
   local failed=0
 
-  set -f  # disable globbing for item name iteration
+  set -f # disable globbing for item name iteration
   for item in $items; do
     if ! apply_optimization_for_item "$item" "$mode" "$root"; then
       warn "Customization failed: $item"
       failed=1
     fi
   done
-  set +f  # re-enable globbing
+  set +f # re-enable globbing
 
   return $failed
 }

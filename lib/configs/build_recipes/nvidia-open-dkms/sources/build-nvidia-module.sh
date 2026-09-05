@@ -23,13 +23,11 @@ set -euo pipefail
 # Detection: the chroot launcher (overlay-chroot.sh) sets environment
 # variables and mounts overlay filesystems.  We check for several
 # indicators that are reliable in overlay-chroot environments.
-_NV_CONTEXT="chroot"
 if [[ -f /.dockerenv ]] \
   || grep -q 'overlay.*overlay' /proc/mounts 2>/dev/null \
   || [[ -n "${MERGED:-}" && -d "${MERGED:-}" ]] \
   || [[ -n "${NEWROOT:-}" && -d "${NEWROOT:-}" ]] \
-  || [[ -n "${PARTSET:-}" ]] \
-  || [[ "${REBUILD:-0}" == "1" ]]; then
+  || [[ -n "${PARTSET:-}" && -d "${PARTSET:-}" ]]; then
   _NV_CONTEXT="chroot"
 else
   _NV_CONTEXT="live"
@@ -44,7 +42,7 @@ if [[ "$_NV_CONTEXT" == "live" ]]; then
   # Root is mandatory — DKMS install and depmod require it.
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
     echo "ERROR: live-system NVIDIA build requires root privileges." >&2
-    echo "       Run with: sudo $0" >&2
+    echo "       Run with: sudo \"$0\"" >&2
     exit 1
   fi
 
@@ -88,7 +86,7 @@ fi
 _STEAMOS_LIB="/usr/lib/steamos-build/lib"
 if [[ -r "$_STEAMOS_LIB/pacman-helpers.sh" ]]; then
   # shellcheck source=/dev/null
-  source "$_STEAMOS_LIB/pacman-helpers.sh"
+  source "$_STEAMOS_LIB/pacman-helpers.sh" # lint-ignore: single-source
 fi
 
 # ── 1. Discover kernel version ──────────────────────────────────────────
@@ -138,12 +136,18 @@ mapfile -t NV_SOURCES < <(
 
 if ((${#NV_SOURCES[@]} != 1)); then
   printf 'ERROR: expected exactly one NVIDIA source tree, found %d:\n' "${#NV_SOURCES[@]}" >&2
-  printf '  %s\n' "${NV_SOURCES[@]}" >&2
+  if ((${#NV_SOURCES[@]} > 0)); then
+    printf '  %s\n' "${NV_SOURCES[@]}" >&2
+  fi
   exit 1
 fi
 
 NV_SRC="${NV_SOURCES[0]}"
 NVVER="${NV_SRC##*/nvidia-}"
+if [[ ! "$NVVER" =~ ^[0-9]+(\.[0-9]+)* ]]; then
+  echo "ERROR: could not parse NVIDIA version from $NV_SRC (got '$NVVER')" >&2
+  exit 1
+fi
 
 INSTALL_DIR="/usr/lib/modules/$KVER/updates/dkms"
 
@@ -170,8 +174,8 @@ if [[ "$(type -t _pacman_exec 2>/dev/null)" == "function" ]]; then
   for _pkg in "${_required_pkgs[@]}"; do
     if ! _pacman_exec "host" "pacman -Q $_pkg" &>/dev/null; then
       echo "ERROR: required package '$_pkg' is not installed" >&2
-      [[ "$_NV_CONTEXT" == "live" ]] && \
-        echo "       Install with: sudo pacman -S $_pkg" >&2
+      [[ "$_NV_CONTEXT" == "live" ]] \
+        && echo "       Install with: sudo pacman -S $_pkg" >&2
       exit 1
     fi
   done
@@ -180,8 +184,8 @@ else
   for _pkg in "${_required_pkgs[@]}"; do
     if ! pacman -Q "$_pkg" &>/dev/null; then
       echo "ERROR: required package '$_pkg' is not installed" >&2
-      [[ "$_NV_CONTEXT" == "live" ]] && \
-        echo "       Install with: sudo pacman -S $_pkg" >&2
+      [[ "$_NV_CONTEXT" == "live" ]] \
+        && echo "       Install with: sudo pacman -S $_pkg" >&2
       exit 1
     fi
   done
@@ -203,8 +207,8 @@ echo
 echo "Building nvidia/$NVVER for $KVER"
 if ! dkms build "${DKMS_ARGS[@]}" --kernelsourcedir "$KBUILD" -m nvidia -v "$NVVER" -k "$KVER"; then
   echo "ERROR: DKMS build failed" >&2
-  echo "--- make.log ---"
-  find /var/lib/dkms/nvidia -type f -name make.log -exec tail -n 100 {} \; 2>/dev/null || true
+  echo "--- make.log ---" >&2
+  find /var/lib/dkms/nvidia -type f -name make.log -exec tail -n 100 {} \; 2>&1 || true
   exit 1
 fi
 
@@ -217,7 +221,10 @@ if ! dkms install "${DKMS_ARGS[@]}" -m nvidia -v "$NVVER" -k "$KVER"; then
 fi
 
 # Update module dependency database so the kernel can resolve symbols
-depmod "$KVER"
+if ! depmod "$KVER"; then
+  echo "ERROR: depmod $KVER failed" >&2
+  exit 1
+fi
 
 # ── 6b. Live-system: unload old modules if needed ────────────────────────
 # On a live system the old nvidia modules may be loaded.  We cannot unload
@@ -253,7 +260,7 @@ fi
 # ── 7. Verify ───────────────────────────────────────────────────────────
 echo
 echo "--- DKMS status after build ---"
-dkms status "${DKMS_ARGS[@]}"
+dkms status "${DKMS_ARGS[@]}" || true
 
 echo
 echo "--- Built modules ---"
@@ -292,7 +299,10 @@ echo "  OK nvidia module built successfully"
 # On live systems, the bundle path is the real /home.
 BUNDLE_DIR="/home/.steamos-build/bundles/nvidia-open-dkms"
 echo "  Bundling modules for self-heal"
-mkdir -p "$BUNDLE_DIR"
+if ! mkdir -p "$BUNDLE_DIR"; then
+  echo "ERROR: failed to create bundle directory $BUNDLE_DIR" >&2
+  exit 1
+fi
 cp -a "$INSTALL_DIR"/nvidia*.ko* "$BUNDLE_DIR/" || {
   echo "ERROR: failed to create NVIDIA self-heal bundle at $BUNDLE_DIR" >&2
   exit 1

@@ -35,7 +35,8 @@ echo "  Version: $VERSION"
 echo "  URL: $URL"
 
 # ── 2. Download ──────────────────────────────────────────────────────────
-TMP="/tmp/$FILE"
+TMP="$(mktemp "/tmp/dlss-updater.XXXXXX")"
+trap 'rm -f "$TMP"' EXIT
 echo "  Downloading $FILE"
 curl -fSL "$URL" -o "$TMP" || {
   echo "ERROR: Failed to download $URL" >&2
@@ -57,14 +58,17 @@ mkdir -p "$SERVICE_DIR" "$WANTS_DIR"
 
 if [[ -f "$SCRIPT_DIR/steamos-build-flatpak-install.service" ]]; then
   cp "$SCRIPT_DIR/steamos-build-flatpak-install.service" "$SERVICE_DIR/"
+  ln -sf /etc/systemd/user/steamos-build-flatpak-install.service \
+    "$WANTS_DIR/steamos-build-flatpak-install.service"
+else
+  echo "ERROR: steamos-build-flatpak-install.service not found in $SCRIPT_DIR" >&2
+  exit 1
 fi
 
 if [[ -f "$SCRIPT_DIR/install-staged-flatpaks.sh" ]]; then
+  mkdir -p "$ROOT/usr/lib/steamos-build"
   install -m 755 "$SCRIPT_DIR/install-staged-flatpaks.sh" "$ROOT/usr/lib/steamos-build/install-staged-flatpaks"
 fi
-
-ln -sf /etc/systemd/user/steamos-build-flatpak-install.service \
-  "$WANTS_DIR/steamos-build-flatpak-install.service"
 
 # ── 5. Write stamp ───────────────────────────────────────────────────────
 STAMP_DIR="$ROOT/var/lib/steamos-build/builds/dlss-updater"
@@ -73,7 +77,7 @@ cat >"$STAMP_DIR/build.stamp" <<STAMP
 driver=dlss-updater
 version=$VERSION
 installed_sha=$SHA
-installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ || echo "unknown")
 STAMP
 
 echo "=== DLSS Updater $VERSION staged successfully ==="

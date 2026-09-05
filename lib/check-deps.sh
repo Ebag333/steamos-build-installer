@@ -32,9 +32,9 @@ NC='\033[0m'
 
 MODE="interactive" # interactive | install | check-only
 case "${1:-}" in
-  --install)    MODE="install" ;;
+  --install) MODE="install" ;;
   --check-only) MODE="check-only" ;;
-  "")           ;;  # no argument, keep default
+  "") ;; # no argument, keep default
   *)
     echo "Unknown option: $1" >&2
     echo "Usage: $0 [--install | --check-only]" >&2
@@ -100,7 +100,10 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
   echo "  - Docker with --privileged (partial support)"
   echo ""
   if [[ "$MODE" != "check-only" ]]; then
-    read -rp "Continue anyway? [y/N]: " wsl_continue || { echo "Aborted."; exit 1; }
+    read -rp "Continue anyway? [y/N]: " wsl_continue || {
+      echo "Aborted."
+      exit 1
+    }
     [[ "$wsl_continue" =~ ^[Yy] ]] || exit 1
   fi
 fi
@@ -121,15 +124,17 @@ done < <(printf '%s\n' "${!REQUIRED[@]}" | sort)
 OPTIONAL_TOTAL=${#OPTIONAL[@]}
 OPTIONAL_PASSED=0
 
-while IFS= read -r cmd; do
-  IFS=':' read -r pkg desc <<<"${OPTIONAL[$cmd]}"
-  if command -v "$cmd" >/dev/null 2>&1; then
-    ((++OPTIONAL_PASSED))
-  else
-    echo -e "  ${YELLOW}○${NC} $cmd ($desc)"
-    MISSING_OPTIONAL+=("$pkg")
-  fi
-done < <(printf '%s\n' "${!OPTIONAL[@]}" | sort)
+if [[ ${#OPTIONAL[@]} -gt 0 ]]; then
+  while IFS= read -r cmd; do
+    IFS=':' read -r pkg desc <<<"${OPTIONAL[$cmd]}"
+    if command -v "$cmd" >/dev/null 2>&1; then
+      ((++OPTIONAL_PASSED))
+    else
+      echo -e "  ${YELLOW}○${NC} $cmd ($desc)"
+      MISSING_OPTIONAL+=("$pkg")
+    fi
+  done < <(printf '%s\n' "${!OPTIONAL[@]}" | sort)
+fi
 
 echo ""
 
@@ -215,7 +220,10 @@ echo "  1) Yes (all)       — install required + optional"
 echo "  2) Yes (required)  — install required only"
 echo "  3) No              — exit without installing"
 echo ""
-read -rp "Choice [1/2/3]: " choice || { echo "Aborted."; exit 1; }
+read -rp "Choice [1/2/3]: " choice || {
+  echo "Aborted."
+  exit 1
+}
 
 case "$choice" in
   1)

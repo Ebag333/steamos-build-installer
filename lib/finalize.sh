@@ -67,7 +67,8 @@ finalize() {
       || die "NVIDIA version mismatch: pacman=$nvidia_ver module=$module_ver"
     log "  NVIDIA kernel module: $module_ver for $KVER"
 
-    grep -q 'blacklist nouveau' "$MNT/etc/modprobe.d/99-nvidia-patch.conf" || die "modprobe conf is empty/missing"
+    grep -q 'blacklist nouveau' "$MNT/etc/modprobe.d/99-nvidia-patch.conf" 2>/dev/null \
+      || die "modprobe conf is empty/missing"
     compgen -G "$MNT/usr/lib/firmware/nvidia/*/gsp_*.bin" >/dev/null \
       || die "GSP firmware not found — nvidia-open requires it"
     [[ -f "$MNT/usr/share/vulkan/icd.d/nvidia_icd.json" ]] \
@@ -130,16 +131,17 @@ finalize() {
       die "atomupd must NOT be masked in selfheal mode"
     fi
   fi
+  local AVAIL_AFTER
   AVAIL_AFTER="$(df -m --output=avail "$MNT" | tail -1 | tr -d ' ')"
   log "Rootfs free space after install: ${AVAIL_AFTER} MB"
 
   # Disk usage diagnostics — distinguishes original SteamOS from our additions.
   log "Disk usage breakdown:"
-  log "  /usr:        $(du -shx "$MNT/usr" 2>/dev/null | cut -f1)"
-  log "  /usr/lib:    $(du -shx "$MNT/usr/lib" 2>/dev/null | cut -f1)"
-  log "  /usr/lib/firmware: $(du -shx "$MNT/usr/lib/firmware" 2>/dev/null | cut -f1)"
-  log "  /usr/lib/modules: $(du -shx "$MNT/usr/lib/modules" 2>/dev/null | cut -f1)"
-  log "  /usr/share:  $(du -shx "$MNT/usr/share" 2>/dev/null | cut -f1)"
+  log "  /usr:        $(du -shx "$MNT/usr" 2>/dev/null | cut -f1 || true)"
+  log "  /usr/lib:    $(du -shx "$MNT/usr/lib" 2>/dev/null | cut -f1 || true)"
+  log "  /usr/lib/firmware: $(du -shx "$MNT/usr/lib/firmware" 2>/dev/null | cut -f1 || true)"
+  log "  /usr/lib/modules: $(du -shx "$MNT/usr/lib/modules" 2>/dev/null | cut -f1 || true)"
+  log "  /usr/share:  $(du -shx "$MNT/usr/share" 2>/dev/null | cut -f1 || true)"
 
   # Per-package apparent size — files that landed in the image rootfs.
   # NEW_PKGS is from the old overlay copy-back model; initialize if unset.
@@ -172,7 +174,7 @@ finalize() {
   log "  /usr top-level:"
   du -xhd1 "$MNT/usr" 2>/dev/null | sort -h | tail -10 | while IFS="" read -r line; do
     log "    $line"
-  done
+  done || true
 
   # Convenience symlink so boot logs are easy to find from the command line.
   if [[ -d "$HOMEMNT/deck/logs/boot" ]]; then
@@ -238,8 +240,7 @@ finalize() {
 
   # ── Update branch: manifest.json (both lib paths) ─────────────────────
   for _manifest_path in /usr/lib/steamos-atomupd/manifest.json /usr/lib64/steamos-atomupd/manifest.json; do
-    local _manifest="$_manifest_path" # reuse from loop above is fine; reassign
-    _manifest="$MNT$_manifest_path"
+    local _manifest="$MNT$_manifest_path"
     if [[ -f "$_manifest" ]] && grep -q "\"default_update_branch\"[[:space:]]*:[[:space:]]*\"$_branch\"" "$_manifest"; then
       log "  OK $_manifest_path default_update_branch=$_branch"
     else
@@ -272,21 +273,22 @@ finalize() {
       -e 's/^\[core-[^]]+\][[:space:]]*$/[core-main]/' \
       -e 's/^\[extra-[^]]+\][[:space:]]*$/[extra-main]/' \
       -e 's/^\[multilib-[^]]+\][[:space:]]*$/[multilib-main]/' \
-      "$MNT/etc/pacman.conf"
+      "$MNT/etc/pacman.conf" \
+      || die "Failed to rewrite pacman.conf repos to main branch"
   fi
 
   # Flush all pending writes BEFORE flipping the subvolume read-only —
   # flipping with delalloc data still queued can silently produce 0-byte files.
   log "Syncing filesystems"
-  btrfs filesystem sync "$MNT"
-  sync -f "$MNT"
-  sync -f "$HOMEMNT"
-  sync -f "$EFIMNT"
+  btrfs filesystem sync "$MNT" || die "btrfs filesystem sync failed for $MNT"
+  sync -f "$MNT" || die "sync -f $MNT failed"
+  [[ -n "${HOMEMNT:-}" ]] && { sync -f "$HOMEMNT" || die "sync -f $HOMEMNT failed"; }
+  [[ -n "${EFIMNT:-}" ]] && { sync -f "$EFIMNT" || die "sync -f $EFIMNT failed"; }
 
   # Restore btrfs rootfs to read-only to match Valve's source image.
   # The build process clears this property for modifications; restore it now
   # that all writes (including user custom script) are complete.
-  restore_rootfs_readonly "$MNT"
+  restore_rootfs_readonly "$MNT" || die "Failed to restore rootfs to read-only — image is compromised"
 
   # Publish: rename .building to final output BEFORE tearing down mounts.
   # When WORKDIR is in RAM (/dev/shm), OUT lives inside WORKDIR, so
@@ -298,19 +300,19 @@ finalize() {
     OUT="$OUT_FINAL"
   fi
 
-  [[ -s "$OUT_FINAL" ]] \
-    || die "Published image is missing or empty: $OUT_FINAL"
+  [[ -s "$OUT" ]] \
+    || die "Published image is missing or empty: $OUT"
 
   # ── Final image verification ───────────────────────────────────────────
   # Log image details and assert expected size if configured.
   log "Final image details:"
   stat -c '  %n
   size:     %s bytes
-  modified: %y' "$OUT_FINAL" | while IFS="" read -r line; do log "$line"; done
+  modified: %y' "$OUT" | while IFS="" read -r line; do log "$line"; done
 
   if [[ -n "${EXPECTED_IMAGE_SIZE:-}" ]]; then
     local actual_size
-    actual_size="$(stat -c '%s' "$OUT_FINAL")"
+    actual_size="$(stat -c '%s' "$OUT")"
     if [[ "$actual_size" != "$EXPECTED_IMAGE_SIZE" ]]; then
       die "Image size mismatch: expected $EXPECTED_IMAGE_SIZE bytes, got $actual_size bytes"
     fi
@@ -319,12 +321,12 @@ finalize() {
 
   # Mark the build as complete — setup_copy_image and flash_image_is_complete
   # check this before reusing a cached image.
-  touch "${OUT}.build-complete"
+  touch "${OUT}.build-complete" || die "Failed to create build-complete marker: ${OUT}.build-complete"
 
   # Unmount/detach everything.  This must succeed before we declare victory
   # so that a cleanup failure never coexists with a DONE message.
   log "Unmounting"
-  cleanup
+  cleanup || die "cleanup (unmount/detach) failed — image may be inconsistent"
   _cleanup_done=1
   trap - EXIT
 
@@ -358,14 +360,12 @@ finalize() {
       warn "  This is typically caused by the kernel's jbd2 journal thread"
       warn "  holding an ext4 superblock reference after unmount."
       warn "  Attempting detach..."
-      local _detached=0
       while IFS="" read -r _loop; do
         [[ -n "$_loop" ]] || continue
         local _backing
         _backing="$(losetup -l -O BACK-FILE "$_loop" 2>/dev/null | tail -1 | tr -d ' ')"
         if losetup -d "$_loop" 2>/dev/null; then
           log "  Detached $_loop (${_backing:-unknown})"
-          ((++_detached)) || true
         else
           warn "  Could not detach $_loop (${_backing:-unknown})"
         fi

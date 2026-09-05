@@ -293,11 +293,13 @@ patch_persistent_defaults() {
 
     if [[ ${#params_to_add[@]} -gt 0 ]]; then
       _add_params_to_grub_steamos "$grub_steamos" "${params_to_add[@]}"
-      # Only add to keep-list if we actually have params to preserve
-      _ensure_grub_steamos_keep_list
     else
       log "  All params already in grub-steamos"
     fi
+
+    # Always ensure keep-list, even when no new params were added.
+    # The entry may have been removed by an A/B update.
+    _ensure_grub_steamos_keep_list
   fi
 }
 
@@ -307,8 +309,7 @@ _ensure_grub_steamos_keep_list() {
   local keep_dir="$MNT/etc/atomic-update.conf.d"
   local keep_file="$keep_dir/steamos-build-installer.conf"
   if [[ -d "$keep_dir" ]]; then
-    if ! grep -q '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
-      mkdir -p "$keep_dir"
+    if ! grep -qxF '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
       echo "/etc/default/grub-steamos" >>"$keep_file"
       log "  Added grub-steamos to atomic-update keep-list"
     fi
@@ -351,14 +352,14 @@ _add_params_to_efi_grub_cfg() {
   local params_to_add=("$@")
 
   if [[ ! -f "$grub_cfg" ]]; then
-    echo "EFI grub.cfg not found: $grub_cfg" >&2
+    warn "EFI grub.cfg not found: $grub_cfg"
     return 1
   fi
 
   local param
   for param in "${params_to_add[@]}"; do
     if ! _param_on_kernel_line "$grub_cfg" "$param"; then
-      echo "  Adding $param to EFI grub.cfg"
+      log "  Adding $param to EFI grub.cfg"
       awk -v param="$param" '
         /steamenv_boot[[:space:]]+linux[[:space:]]+\/boot\/vmlinuz/ {
           n = split($0, tokens, " ")
@@ -482,7 +483,7 @@ finalize_grub() {
     if [[ -n "$all_params" ]]; then
       local keep_file="$MNT/etc/atomic-update.conf.d/steamos-build-installer.conf"
       if [[ -d "$MNT/etc/atomic-update.conf.d" ]]; then
-        if ! grep -q '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
+        if ! grep -qxF '/etc/default/grub-steamos' "$keep_file" 2>/dev/null; then
           warn "  MISSING: grub-steamos not in atomic-update keep-list"
           failed=1
         else
@@ -578,14 +579,16 @@ reconcile_grub() {
   patch_persistent_defaults
 
   log "Attempting update-grub (non-fatal if it fails)"
-  chroot "$root" update-grub 2>/dev/null \
-    || log "update-grub failed — will patch EFI grub.cfg directly"
+  local ug_output
+  ug_output="$(chroot "$root" update-grub 2>&1)" \
+    || {
+      log "update-grub failed — will patch EFI grub.cfg directly"
+      log "  update-grub output: $ug_output"
+    }
 
   # Authoritative patch + validation.  Do not rely on update-grub alone.
   patch_kernel_cmdline
   finalize_grub
-
-  trap - ERR
 
   log "Syncing $label rootfs and EFI"
   btrfs filesystem sync "$root"
@@ -600,6 +603,7 @@ reconcile_grub() {
     fi
   fi
   untrack_mount "$EFIMNT"
+  trap - ERR
 }
 
 # ── Compatibility wrappers ────────────────────────────────────────────────────

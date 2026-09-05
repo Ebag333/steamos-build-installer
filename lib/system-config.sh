@@ -59,7 +59,10 @@ read_system_config() {
     variant) _read_variant "$root" ;;
     update-branch) _read_update_branch "$root" ;;
     default-session) _read_default_session "$root" ;;
-    *) warn "Unknown system config: $item"; echo "" ;;
+    *)
+      warn "Unknown system config: $item"
+      echo ""
+      ;;
   esac
 }
 

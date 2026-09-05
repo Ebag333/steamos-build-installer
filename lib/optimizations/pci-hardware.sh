@@ -51,9 +51,9 @@ _apply_pci_realloc() {
   log "Applying pci-realloc optimization (pci=realloc=on)"
 
   if declare -F add_kernel_param >/dev/null 2>&1; then
-    add_kernel_param "pci=realloc=on"
+    add_kernel_param "pci=realloc=on" || return 1
     if declare -F _persist_kernel_param_live >/dev/null 2>&1; then
-      _persist_kernel_param_live "pci=realloc=on"
+      _persist_kernel_param_live "pci=realloc=on" || return 1
     fi
     return 0
   else
@@ -80,7 +80,11 @@ verify_pci_hardware_optimization() {
 
 _verify_pci_realloc() {
   local root
-  root="$(get_root)"
+  root="$(get_root)" || return 1
+  [[ -z "$root" ]] && {
+    warn "_verify_pci_realloc: get_root returned empty"
+    return 1
+  }
   if is_live; then
     grep -q 'pci=realloc=on' /proc/cmdline 2>/dev/null
   else

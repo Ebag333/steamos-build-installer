@@ -19,7 +19,6 @@ fi
 declare -gA _PIPELINE_PHASES=()
 declare -gA _PIPELINE_PHASE_DESC=()
 declare -ga _PIPELINE_ORDER=()
-declare -g _PIPELINE_CURRENT_PHASE=""
 declare -g _PIPELINE_START_TIME=0
 
 # ---------------------------------------------------------------------------
@@ -115,7 +114,6 @@ run_pipeline() {
   local func desc phase_start phase_end phase_duration
   for phase in "${phases_to_run[@]}"; do
     phase_num=$((phase_num + 1))
-    _PIPELINE_CURRENT_PHASE="$phase"
 
     func="${_PIPELINE_PHASES[$phase]}"
     desc="${_PIPELINE_PHASE_DESC[$phase]:-$phase}"

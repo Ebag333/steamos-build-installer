@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+for cmd in sha256sum awk basename flatpak; do
+  command -v "$cmd" >/dev/null 2>&1 || {
+    echo "Required command '$cmd' not found in PATH." >&2
+    exit 1
+  }
+done
+
 STAGE_DIR="/usr/share/steamos-build/flatpaks"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/steamos-build/flatpaks"
 
 mkdir -p "$STATE_DIR"
 
 shopt -s nullglob
+
+if [[ ! -d "$STAGE_DIR" ]]; then
+  echo "Stage directory not found: $STAGE_DIR — nothing to install." >&2
+  exit 0
+fi
+
+failures=0
 
 for bundle in "$STAGE_DIR"/*.flatpak; do
   name="$(basename "$bundle")"
@@ -30,6 +44,11 @@ for bundle in "$STAGE_DIR"/*.flatpak; do
     echo "Installed staged Flatpak: $name"
   else
     echo "Failed to install staged Flatpak: $name" >&2
-    exit 1
+    failures=$((failures + 1))
   fi
 done
+
+if ((failures > 0)); then
+  echo "$failures flatpak bundle(s) failed to install." >&2
+  exit 1
+fi

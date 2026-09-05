@@ -69,7 +69,8 @@ _resolve_root() {
       elif [[ -n "${MNT:-}" && -d "$MNT" ]]; then
         OPT_ROOT="$MNT"
       else
-        OPT_ROOT="/"
+        warn "_resolve_root: OPT_MODE is chroot but no valid root path found (MERGED, NEWROOT, MNT all unset/missing)"
+        return 1
       fi
       ;;
     live)
@@ -102,6 +103,11 @@ get_root() {
 _persist_kernel_param_live() {
   local param="$1"
 
+  if [[ -z "$param" ]]; then
+    warn "_persist_kernel_param_live called with empty parameter"
+    return 1
+  fi
+
   is_live || return 0
 
   local grub_steamos="/etc/default/grub-steamos"
@@ -111,12 +117,14 @@ _persist_kernel_param_live() {
   fi
 
   # Check if already present
-  if grep -qF "$param" "$grub_steamos" 2>/dev/null; then
+  if grep "^GRUB_CMDLINE_LINUX=" "$grub_steamos" 2>/dev/null | grep -qF "$param"; then
     return 0
   fi
 
   # Append to GRUB_CMDLINE_LINUX
-  if sed -i "/^GRUB_CMDLINE_LINUX=/s/\"$/ $param\"/" "$grub_steamos"; then
+  local escaped_param
+  escaped_param=$(printf '%s\n' "$param" | sed 's/[&/\]/\\&/g')
+  if sed -i "/^GRUB_CMDLINE_LINUX=/s/\"$/ $escaped_param\"/" "$grub_steamos"; then
     log "Persisted $param to grub-steamos"
     # Regenerate grub.cfg if update-grub is available
     if command -v update-grub &>/dev/null; then
@@ -143,14 +151,11 @@ run_in_root() {
   root="$(get_root)"
 
   if [[ "$root" == "/" ]]; then
-    # Live system or already at root
     "$@"
-  elif [[ -n "${MERGED:-}" ]]; then
-    # Build-time chroot with MERGED overlay
-    chroot "$MERGED" /bin/bash -c "$*"
   else
-    # Mounted rootfs (build or rebuild)
-    chroot "$root" /bin/bash -c "$*"
+    local cmd
+    printf -v cmd '%q ' "$@"
+    chroot "$root" /bin/bash -c "$cmd"
   fi
 }
 
@@ -159,6 +164,10 @@ run_in_root() {
 # Returns 0 on success, 1 on failure
 remove_file() {
   local filepath="$1"
+  if [[ -z "$filepath" ]]; then
+    warn "remove_file called with empty path"
+    return 1
+  fi
   local root
   root="$(get_root)"
   local fullpath="${root}${filepath}"
@@ -193,10 +202,18 @@ install_file() {
   fi
 
   # Ensure destination directory exists
-  mkdir -p "$(dirname "$fullpath")"
+  if ! mkdir -p "$(dirname "$fullpath")"; then
+    warn "Failed to create directory for $dest"
+    return 1
+  fi
 
   if cp "$source" "$fullpath"; then
-    [[ -n "$mode" ]] && chmod "$mode" "$fullpath"
+    if [[ -n "$mode" ]]; then
+      if ! chmod "$mode" "$fullpath"; then
+        warn "Failed to set mode $mode on $dest"
+        return 1
+      fi
+    fi
     log "Installed $dest"
     return 0
   else
@@ -215,9 +232,12 @@ create_symlink() {
   local fullpath="${root}${linkpath}"
 
   # Ensure parent directory exists
-  mkdir -p "$(dirname "$fullpath")"
+  if ! mkdir -p "$(dirname "$fullpath")"; then
+    warn "Failed to create directory for symlink"
+    return 1
+  fi
 
-  if ln -sf "$target" "$fullpath"; then
+  if ln -sfn "$target" "$fullpath"; then
     log "Created symlink $linkpath -> $target"
     return 0
   else
@@ -234,12 +254,21 @@ enable_service() {
   root="$(get_root)"
 
   if is_live; then
-    systemctl enable "$service" 2>/dev/null
+    if ! systemctl enable "$service" 2>&1; then
+      warn "Failed to enable $service"
+      return 1
+    fi
   else
     # For chroot, create the symlink manually
     local wants_dir="${root}/etc/systemd/system/multi-user.target.wants"
-    mkdir -p "$wants_dir"
-    create_symlink "/usr/lib/systemd/system/$service" "/etc/systemd/system/multi-user.target.wants/$service"
+    if ! mkdir -p "$wants_dir"; then
+      warn "Failed to create $wants_dir"
+      return 1
+    fi
+    if ! create_symlink "/usr/lib/systemd/system/$service" "/etc/systemd/system/multi-user.target.wants/$service"; then
+      warn "Failed to enable $service in chroot"
+      return 1
+    fi
   fi
 }
 
@@ -262,6 +291,10 @@ enable_service() {
 # Returns 0 on success, 1 on failure.
 
 install_boot_framework() {
+  if [[ $# -eq 0 ]]; then
+    warn "install_boot_framework called with no hooks"
+    return 1
+  fi
   local hooks=("$@")
   local root
   root="$(get_root)"
@@ -291,6 +324,10 @@ install_boot_framework() {
   # Install requested hooks
   local hook
   for hook in "${hooks[@]}"; do
+    if [[ "$hook" == *..* || "$hook" == /* || "$hook" == */* ]]; then
+      warn "Invalid hook name (must be a bare filename): $hook"
+      return 1
+    fi
     if [[ -f "$boot_src/$hook" ]]; then
       if ! install_file "$boot_src/$hook" "/usr/lib/steam-perf/boot.d/$hook" 755; then
         return 1
@@ -307,7 +344,8 @@ install_boot_framework() {
   fi
 
   if ! enable_service "steam-perf.service"; then
-    warn "Failed to enable steam-perf.service (non-fatal)"
+    warn "Failed to enable steam-perf.service"
+    return 1
   fi
 
   # Live mode: reload systemd

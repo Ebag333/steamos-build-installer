@@ -118,8 +118,8 @@ while IFS= read -r -d '' file; do
     # literal empty string, so we match VAR="" where the value is exactly ""
     # or '' (literal empty).
     if [[ "$line" =~ ^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?([A-Z_][A-Z_0-9]*)=\"\" ]] \
-       || [[ "$line" =~ ^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?([A-Z_][A-Z_0-9]*)=\'\' ]] \
-       || [[ "$line" =~ ^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?([A-Z_][A-Z_0-9]*)=[[:space:]]*$ ]]; then
+      || [[ "$line" =~ ^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?([A-Z_][A-Z_0-9]*)=\'\' ]] \
+      || [[ "$line" =~ ^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?([A-Z_][A-Z_0-9]*)=[[:space:]]*$ ]]; then
       echo "clobber-init: $rel:$lineno: $line"
       echo "  ^-- unconditional assignment clobbers caller's value at source time"
       echo "  fix: use \": \"\${VAR:=}\" to set only when unset"

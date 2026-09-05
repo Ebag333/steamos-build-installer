@@ -84,7 +84,7 @@ construct_hdr_url() {
   mirror="$(awk '/^Server/{print $3; exit}' "$root/etc/pacman.d/mirrorlist")"
 
   [[ -n "$jupiter_repo" ]] || die "construct_hdr_url: could not find jupiter repo in $root/etc/pacman.conf"
-  [[ -n "$mirror" ]]       || die "construct_hdr_url: could not find mirror in $root/etc/pacman.d/mirrorlist"
+  [[ -n "$mirror" ]] || die "construct_hdr_url: could not find mirror in $root/etc/pacman.d/mirrorlist"
 
   HDR_URL="${mirror/\$repo/$jupiter_repo}"
   HDR_URL="${HDR_URL/\$arch/x86_64}/${KPKG_NAME}-headers-${KPKG_VERREL}-x86_64.pkg.tar.zst"

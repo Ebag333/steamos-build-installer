@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # cpu-scaling-monitor — poll CPU scaling state every 1s.
 # Ctrl-C to stop.
-set -uo pipefail
+set -euo pipefail
 
 printf '%-24s %-14s %-14s %-8s\n' "TIMESTAMP" "GOVERNOR" "EPP" "BOOST"
 printf '%s\n' "$(printf '%.0s-' {1..64})"

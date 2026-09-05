@@ -16,6 +16,8 @@ fi
 # Inject a boot log collector: systemd service + script that writes
 # initramfs logs, dmesg, journal, etc. to the USB's home partition.
 inject_log_collector() {
+  [[ -n "${MNT:-}" && -d "$MNT" ]] || die "inject_log_collector: MNT is unset or not a directory"
+  [[ -n "${HOMEMNT:-}" && -d "$HOMEMNT" ]] || die "inject_log_collector: HOMEMNT is unset or not a directory"
   log "Injecting boot log collector"
 
   # Ensure the persistent .steamos-build tree exists (logs + recovery).
@@ -69,6 +71,15 @@ if ! find_usb; then
   echo "collect-boot-logs: USB not found, skipping." >&2
   exit 0
 fi
+
+cleanup() {
+  [[ -n "${OUT:-}" && -d "$OUT" ]] && rm -rf "$OUT"
+  if [[ -n "${USB_MOUNT:-}" ]]; then
+    umount "$USB_MOUNT" 2>/dev/null || true
+    rmdir "$USB_MOUNT" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 mkdir -p "$LOG_DIR"
 
@@ -151,7 +162,7 @@ dmesg | grep -Ei \
 
 # --- compress and clean up ---
 TARBALL="$LOG_DIR/boot-logs-${TS}.tar.gz"
-tar czf "$TARBALL" -C "$LOG_DIR" "boot-${TS}" 2>/dev/null
+tar czf "$TARBALL" -C "$LOG_DIR" "boot-${TS}"
 rm -rf "$OUT"
 
 # Keep only the 20 most recent log archives.

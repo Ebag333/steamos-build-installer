@@ -70,6 +70,10 @@ flash_is_system_disk() {
       src_disk="$(basename "$dev")"
       break
     fi
+    if [[ "/dev/$src_disk" == "$dev" ]]; then
+      src_disk="$(basename "$dev")"
+      break
+    fi
     dev="/dev/$src_disk"
   done
 
@@ -87,8 +91,18 @@ flash_preflight() {
   local _saved_opts="$-"
   set +e # diagnostic function — don't die on individual command failures
 
-  IMG_BYTES="$(stat -c '%s' "$img")"
-  TARGET_BYTES="$(blockdev --getsize64 "$target")"
+  IMG_BYTES="$(stat -c '%s' "$img")" || {
+    echo "Cannot determine image size: $img" >&2; return 1
+  }
+  TARGET_BYTES="$(blockdev --getsize64 "$target")" || {
+    echo "Cannot determine target size: $target" >&2; return 1
+  }
+  [[ -n "$IMG_BYTES" && "$IMG_BYTES" =~ ^[0-9]+$ ]] || {
+    echo "Invalid image size from stat" >&2; return 1
+  }
+  [[ -n "$TARGET_BYTES" && "$TARGET_BYTES" =~ ^[0-9]+$ ]] || {
+    echo "Invalid target size from blockdev" >&2; return 1
+  }
 
   local img_human target_human
   img_human="$(numfmt --to=iec "$IMG_BYTES" 2>/dev/null || echo "$IMG_BYTES bytes")"
@@ -410,6 +424,7 @@ flash_verify_raw() {
   echo "Reading back $img_bytes bytes from $target..."
   local device_hash
   device_hash="$(
+    set -o pipefail
     dd if="$target" \
       bs=1M \
       count="$img_bytes" \
@@ -525,6 +540,7 @@ flash_write() {
     local flash_fifo
     flash_fifo="$(mktemp -u /tmp/flash-progress.XXXXXX)"
     mkfifo "$flash_fifo"
+    trap 'rm -f "$flash_fifo"' EXIT
 
     pv -n -s "$img_bytes" "$img" 2>"$flash_fifo" \
       | dd of="$target" bs="$bs" conv=fsync oflag=sync &
@@ -542,22 +558,23 @@ flash_write() {
       die "Flash write failed"
     }
     rm -f "$flash_fifo"
+    trap - EXIT
   else
     local dd_exit=0
-    dd if="$img" of="$target" bs="$bs" status=progress conv=fsync oflag=sync 2>&1 \
+    dd if="$img" of="$target" bs="$bs" status=progress conv=fsync oflag=sync \
       > >(while IFS="" read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+bytes ]]; then
-              local written="${BASH_REMATCH[1]}"
-              local pct=$((written * 100 / img_bytes))
-              [[ "$pct" -eq "$last_pct" ]] && continue
-              [[ "$pct" -gt 100 ]] && pct=100
-              last_pct=$pct
-              printf '%s\n' "@@PROGRESS:$pct@@"
-            else
-              # Let dd error/status lines through to stderr
-              printf '%s\n' "$line" >&2
-            fi
-          done) || dd_exit=$?
+        if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+bytes ]]; then
+          local written="${BASH_REMATCH[1]}"
+          local pct=$((written * 100 / img_bytes))
+          [[ "$pct" -eq "$last_pct" ]] && continue
+          [[ "$pct" -gt 100 ]] && pct=100
+          last_pct=$pct
+          printf '%s\n' "@@PROGRESS:$pct@@"
+        else
+          # Let dd error/status lines through to stderr
+          printf '%s\n' "$line" >&2
+        fi
+      done) 2>&1 || dd_exit=$?
     if [[ "$dd_exit" -ne 0 ]]; then
       die "Flash write failed (dd exited with code $dd_exit)"
     fi
@@ -607,10 +624,11 @@ flash_write() {
       echo "         Flash succeeded, but the backup GPT remains at the image-size boundary." >&2
       echo "         Install GPT fdisk/sgdisk and run:" >&2
       echo "           sgdisk --move-second-header $target" >&2
-      # shellcheck disable=SC2034
       gpt_fixup="unavailable"
     fi
   fi
+
+  debug "  GPT fixup: $gpt_fixup"
 
   # Verify target GPT is valid — this is independent of whether the
   # kernel reread succeeded.

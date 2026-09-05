@@ -85,13 +85,43 @@ parse_common_arg() {
       local key="${1%%=*}"
       local val="${1#*=}"
       case "$key" in
-        --action)       ACTION="$val";          _ARG_SHIFT=1; return 0 ;;
-        --image)        IMG="$val";             _ARG_SHIFT=1; return 0 ;;
-        --device)       TARGET_DEV="$val";      _ARG_SHIFT=1; return 0 ;;
-        --config)       CONFIG_FILE="$val";     _ARG_SHIFT=1; return 0 ;;
-        --output-dir)   OUTPUT_DIR="$val";      _ARG_SHIFT=1; return 0 ;;
-        --output)       VALIDATE_OUTPUT_FILE="$val"; _ARG_SHIFT=1; return 0 ;;
-        *)              return 1 ;;
+        --action)
+          # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
+          ACTION="$val"
+          _ARG_SHIFT=1
+          return 0
+          ;;
+        --image)
+          # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh, lib/setup.sh, lib/pipelines/
+          IMG="$val"
+          _ARG_SHIFT=1
+          return 0
+          ;;
+        --device)
+          # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
+          TARGET_DEV="$val"
+          _ARG_SHIFT=1
+          return 0
+          ;;
+        --config)
+          # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh, lib/pipelines/
+          CONFIG_FILE="$val"
+          _ARG_SHIFT=1
+          return 0
+          ;;
+        --output-dir)
+          # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
+          OUTPUT_DIR="$val"
+          _ARG_SHIFT=1
+          return 0
+          ;;
+        --output)
+          # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
+          VALIDATE_OUTPUT_FILE="$val"
+          _ARG_SHIFT=1
+          return 0
+          ;;
+        *) return 1 ;;
       esac
       ;;
     *)

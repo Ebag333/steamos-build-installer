@@ -615,7 +615,8 @@ _persist_debug_logs() {
   [[ "${DEBUG:-0}" == 1 ]] || return 0
   [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]] || return 0
 
-  local dest="/tmp/steamos-build-logs-$(date +%Y%m%d-%H%M%S)-$$"
+  local dest
+  dest="/tmp/steamos-build-logs-$(date +%Y%m%d-%H%M%S)-$$"
   mkdir -p "$dest" || return 0
 
   local count=0
@@ -684,7 +685,7 @@ cleanup() {
       _WORKDIR_INVALID=1
     else
       case "$_wd_real" in
-        /|/bin|/boot|/dev|/etc|/home|/lib*|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+        / | /bin | /boot | /dev | /etc | /home | /lib* | /media | /mnt | /opt | /proc | /root | /run | /sbin | /srv | /sys | /tmp | /usr | /var)
           warn "cleanup: WORKDIR ($_wd_real) is a critical system path — refusing workspace removal"
           _WORKDIR_INVALID=1
           ;;
@@ -838,13 +839,13 @@ cleanup() {
 # of files that actually ship, then size-check it against available rootfs space.
 compute_payload() {
   # --- input validation (match copy_driver_payload style) ---
-  [[ -n "${MNT:-}" ]]     || die "compute_payload: MNT is not set"
-  [[ -d "${MNT:-}" ]]     || die "compute_payload: MNT directory not found: $MNT"
-  [[ -n "${MERGED:-}" ]]  || die "compute_payload: MERGED is not set"
-  [[ -d "${MERGED:-}" ]]  || die "compute_payload: MERGED directory not found: $MERGED"
-  [[ -n "${UPPER:-}" ]]   || die "compute_payload: UPPER is not set"
-  [[ -d "${UPPER:-}" ]]   || die "compute_payload: UPPER directory not found: $UPPER"
-  [[ -n "${KVER:-}" ]]    || die "compute_payload: KVER is not set"
+  [[ -n "${MNT:-}" ]] || die "compute_payload: MNT is not set"
+  [[ -d "${MNT:-}" ]] || die "compute_payload: MNT directory not found: $MNT"
+  [[ -n "${MERGED:-}" ]] || die "compute_payload: MERGED is not set"
+  [[ -d "${MERGED:-}" ]] || die "compute_payload: MERGED directory not found: $MERGED"
+  [[ -n "${UPPER:-}" ]] || die "compute_payload: UPPER is not set"
+  [[ -d "${UPPER:-}" ]] || die "compute_payload: UPPER directory not found: $UPPER"
+  [[ -n "${KVER:-}" ]] || die "compute_payload: KVER is not set"
   [[ -n "${WORKDIR:-}" ]] || die "compute_payload: WORKDIR is not set"
 
   # "Before" = the pristine image's own pacman db (read directly, host-side) —

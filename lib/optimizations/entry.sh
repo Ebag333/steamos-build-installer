@@ -14,7 +14,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-OPTIMIZATIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPTIMIZATIONS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || {
+  echo "Fatal: failed to resolve optimizations directory" >&2
+  return 1
+}
 
 # Source common utilities
 # shellcheck source=lib/optimizations/common.sh
@@ -42,23 +45,21 @@ CUSTOMIZATIONS_CONF="$(dirname "$OPTIMIZATIONS_DIR")/configs/customizations.conf
 # Use -gA (global associative) to ensure arrays persist when sourced from functions
 declare -gA _OPT_ITEM_TO_MODULE=()
 declare -gA _OPT_ITEM_DEFAULT=()
-declare -gA _OPT_ITEM_DESCRIPTION=()
 
 _load_customizations() {
-  local module item default desc
+  local module item default _
 
   if [[ ! -r "$CUSTOMIZATIONS_CONF" ]]; then
     warn "Customizations config not found: $CUSTOMIZATIONS_CONF"
     return 1
   fi
 
-  while IFS='|' read -r module item default desc; do
+  while IFS='|' read -r module item default _; do
     # Skip comments and empty lines
-    [[ "$module" =~ ^#.*$ || -z "$module" ]] && continue
+    [[ "$module" =~ ^[[:space:]]*# || -z "${module// /}" ]] && continue
 
     _OPT_ITEM_TO_MODULE["$item"]="$module"
     _OPT_ITEM_DEFAULT["$item"]="$default"
-    _OPT_ITEM_DESCRIPTION["$item"]="$desc"
   done <"$CUSTOMIZATIONS_CONF"
 }
 
@@ -71,12 +72,13 @@ _load_customizations
 # Loaded from configs/customizations.conf.
 
 _opt_item_to_module() {
-  local item="$1"
+  local item="${1:?_opt_item_to_module: missing item name}"
 
   if [[ -n "${_OPT_ITEM_TO_MODULE["$item"]:-}" ]]; then
     echo "${_OPT_ITEM_TO_MODULE["$item"]}"
   else
     echo ""
+    return 1
   fi
 }
 
@@ -205,7 +207,7 @@ verify_optimization() {
       verify_oobe_optimization "$item"
       ;;
     *)
-      # Module does not support verify — return 2 (unknown)
+      warn "Unknown optimization module: $module"
       return 2
       ;;
   esac

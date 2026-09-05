@@ -11,7 +11,7 @@
 #
 # No root required (read-only operations).
 
-set -uo pipefail
+set -euo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -62,11 +62,11 @@ while IFS="" read -r line; do
   parse_lspci_line "$line"
 
   # Get device class
-    local sysfs_dev="$dev"
-    if [[ "$dev" =~ ^[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]+$ ]]; then
-      sysfs_dev="0000:${dev}"
-    fi
-    class_code=$(cat "/sys/bus/pci/devices/${sysfs_dev}/class" 2>/dev/null || echo "0x000000")
+  sysfs_dev="$dev"
+  if [[ "$dev" =~ ^[0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f]+$ ]]; then
+    sysfs_dev="0000:${dev}"
+  fi
+  class_code=$(cat "/sys/bus/pci/devices/${sysfs_dev}/class" 2>/dev/null || echo "0x000000")
   case "${class_code:0:6}" in
     0x0108) class="NVMe" ;;
     0x0106) class="SATA" ;;
@@ -134,9 +134,15 @@ fi
 echo ""
 echo -e "${CYAN}=== Loaded critical drivers ===${NC}"
 for mod in $CRITICAL; do
-    if (set +o pipefail; lsmod 2>/dev/null | grep -q "^${mod} "); then
+  if (
+    set +o pipefail
+    lsmod 2>/dev/null | grep -q "^${mod} "
+  ); then
     echo -e "  ${GREEN}✓${NC} $mod"
-    elif (set +o pipefail; modinfo -F filename "$mod" 2>/dev/null | grep -q '(builtin)'); then
+  elif (
+    set +o pipefail
+    modinfo -F filename "$mod" 2>/dev/null | grep -q '(builtin)'
+  ); then
     echo -e "  ${GREEN}✓${NC} $mod (built-in)"
   else
     echo -e "  ${YELLOW}○${NC} $mod (not loaded)"

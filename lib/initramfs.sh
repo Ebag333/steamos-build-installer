@@ -22,18 +22,17 @@ INITRAMFS_CONF="$INITRAMFS_DIR/configs/initramfs.conf"
 
 declare -A _INITRAMFS_GROUP_MODULES=()
 declare -A _INITRAMFS_GROUP_DEFAULT=()
-declare -A _INITRAMFS_GROUP_DESC=()
 
 _load_initramfs_conf() {
-  local group modules default desc
+  local group modules default _
 
   if [[ ! -r "$INITRAMFS_CONF" ]]; then
     warn "Initramfs config not found: $INITRAMFS_CONF"
     return 1
   fi
 
-  while IFS='|' read -r group modules default desc; do
-    [[ "$group" =~ ^#.*$ || -z "$group" ]] && continue
+  while IFS='|' read -r group modules default _; do
+    [[ "$group" =~ ^# || -z "${group// /}" ]] && continue
 
     if [[ -n "${_INITRAMFS_GROUP_MODULES[$group]:-}" ]]; then
       _INITRAMFS_GROUP_MODULES[$group]+=" $modules"
@@ -41,7 +40,6 @@ _load_initramfs_conf() {
       _INITRAMFS_GROUP_MODULES[$group]="$modules"
     fi
     _INITRAMFS_GROUP_DEFAULT[$group]="$default"
-    _INITRAMFS_GROUP_DESC[$group]="$desc"
   done <"$INITRAMFS_CONF"
 }
 
@@ -66,12 +64,13 @@ _collect_and_dedup_modules() {
   local -a groups=("$@")
   local all_modules=""
 
+  local group
   for group in "${groups[@]}"; do
     local mods="${_INITRAMFS_GROUP_MODULES[$group]:-}"
     [[ -n "$mods" ]] && all_modules+=" $mods"
   done
 
-  echo "$all_modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ' | sed 's/ $//'
+  echo "$all_modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ' | sed 's/^ *//;s/ *$//'
 }
 
 # Get all modules from all groups (deduplicated).
@@ -81,6 +80,7 @@ get_all_initramfs_modules() {
   local -a groups=("$@")
 
   if [[ ${#groups[@]} -eq 0 ]]; then
+    local group
     for group in "${!_INITRAMFS_GROUP_MODULES[@]}"; do
       [[ "${_INITRAMFS_GROUP_DEFAULT[$group]:-FALSE}" == "TRUE" ]] || continue
       groups+=("$group")
@@ -108,6 +108,12 @@ discover_auto_modules() {
   local kver="${2:-${KVER:-$(uname -r)}}"
   local modules=""
 
+  if [[ ! -d "$root" ]]; then
+    warn "discover_auto_modules: root path does not exist: $root"
+    return 1
+  fi
+
+  local dev
   for dev in /sys/bus/pci/devices/*/modalias; do
     [[ -f "$dev" ]] || continue
     modules+="$(chroot "$root" modprobe -S "$kver" -R "$(cat "$dev")" 2>/dev/null || true)"$'\n'
@@ -132,6 +138,7 @@ validate_initramfs_modules() {
   local modules="${3:-}"
   local validated=""
 
+  local mod
   for mod in $modules; do
     if chroot "$root" modinfo -k "$kver" "$mod" >/dev/null 2>&1; then
       validated+=" $mod"
@@ -209,6 +216,7 @@ _regenerate_initramfs() {
       mk_warnings="$(echo "$mkinitcpio_out" | grep -iE 'warning|missing|Possibly' || true)"
       if [[ -n "$mk_warnings" ]]; then
         log "  mkinitcpio warnings:"
+        local w
         while IFS="" read -r w; do log "    $w"; done <<<"$mk_warnings"
       fi
     fi
@@ -227,6 +235,11 @@ _configure_initramfs_modules() {
   local root="${1:?_configure_initramfs_modules: missing root}"
   local kver="${2:?_configure_initramfs_modules: missing kernel version}"
   local modules="${3:-}"
+
+  if [[ -z "$modules" ]]; then
+    log "  No modules specified — skipping initramfs configuration"
+    return 0
+  fi
 
   _write_initramfs_config "$root" "$kver" "$modules" || return 1
   _regenerate_initramfs "$root"
@@ -259,7 +272,7 @@ _write_mkinitcpio_config() {
   if [[ -f "$root/etc/mkinitcpio.conf" ]]; then
     existing_modules=$(sed -n 's/^MODULES=(\(.*\))/\1/p' "$root/etc/mkinitcpio.conf")
     log "  Existing modules: ${existing_modules:-<none>}"
-    merged_modules=$(echo "$existing_modules $modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ')
+    merged_modules=$(echo "$existing_modules $modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
   else
     merged_modules="$modules"
   fi
@@ -320,9 +333,12 @@ apply_initramfs() {
   else
     log "Auto-discovering initramfs modules"
     local auto_modules
-    auto_modules="$(discover_auto_modules "$root" "$kver")"
+    local auto_modules
+    if ! auto_modules="$(discover_auto_modules "$root" "$kver")"; then
+      warn "Auto-discovery failed — using default modules only"
+    fi
     modules="$(get_all_initramfs_modules) $auto_modules"
-    modules="$(echo "$modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ')"
+    modules="$(echo "$modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ' | sed 's/^ *//;s/ *$//')"
   fi
 
   _configure_initramfs_modules "$root" "$kver" "$modules"
@@ -366,12 +382,8 @@ reconcile_initramfs() {
     if ((effective_etc)); then unmount_effective_etc "$root" 2>/dev/null; fi
     umount_chroot_fs_cleanup "$root" 2>/dev/null
   }
-  trap _reconcile_initramfs_cleanup ERR
-
-  _configure_initramfs_modules "$root" "$kver" "$custom_modules"
-  local rc=$?
-
-  trap - ERR
+  local rc=0
+  _configure_initramfs_modules "$root" "$kver" "$custom_modules" || rc=$?
 
   if ((effective_etc)); then
     unmount_effective_etc "$root"
@@ -442,7 +454,10 @@ verify_initramfs() {
   if [[ -n "$kver" && -n "$configured_modules" ]]; then
     local validated
     validated="$(validate_initramfs_modules "$root" "$kver" "$configured_modules")"
-    if [[ -z "$validated" ]]; then
+    local configured_count validated_count
+    configured_count=$(echo "$configured_modules" | wc -w)
+    validated_count=$(echo "$validated" | wc -w)
+    if [[ "$configured_count" -ne "$validated_count" ]]; then
       return 1
     fi
   fi

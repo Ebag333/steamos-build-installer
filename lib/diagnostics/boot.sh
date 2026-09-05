@@ -70,26 +70,26 @@ diagnose_boot_layout() {
 
   # Check steamos-bootconf
   if command -v steamos-bootconf >/dev/null 2>&1; then
-    if out="$(steamos-bootconf this-image 2>&1)"; then
+    out="$(steamos-bootconf this-image 2>&1)" && rc=0 || rc=$?
+    if [[ $rc -eq 0 ]]; then
       log "  steamos-bootconf this-image: $out"
     else
-      rc=$?
       warn "steamos-bootconf this-image failed (rc=$rc): $out"
     fi
 
-    if out="$(steamos-bootconf list-images 2>&1)"; then
+    out="$(steamos-bootconf list-images 2>&1)" && rc=0 || rc=$?
+    if [[ $rc -eq 0 ]]; then
       while IFS="" read -r path; do
         log "  steamos-bootconf list-images: $path"
       done <<<"$out"
     else
-      rc=$?
       warn "steamos-bootconf list-images failed (rc=$rc): $out"
     fi
 
-    if out="$(steamos-bootconf selected-image 2>&1)"; then
+    out="$(steamos-bootconf selected-image 2>&1)" && rc=0 || rc=$?
+    if [[ $rc -eq 0 ]]; then
       log "  steamos-bootconf selected-image: $out"
     else
-      rc=$?
       warn "steamos-bootconf selected-image failed (rc=$rc): $out"
     fi
   else
@@ -105,21 +105,26 @@ diagnose_boot_layout() {
 diagnose_boot_state() {
   local slot out rc line
 
+  if ! command -v steamos-bootconf >/dev/null 2>&1; then
+    warn "steamos-bootconf not found — cannot diagnose boot state"
+    return 0
+  fi
+
   log "SteamOS boot state:"
 
   for slot in A B; do
-    if out="$(steamos-bootconf --image "$slot" config \
+    out="$(steamos-bootconf --image "$slot" config \
       --get boot-attempts \
       --get boot-requested-at \
       --get image-invalid \
-      --get comment 2>&1)"; then
+      --get comment 2>&1)" && rc=0 || rc=$?
+    if [[ $rc -eq 0 ]]; then
 
       log "  [$slot]"
       while IFS="" read -r line; do
         log "    $line"
       done <<<"$out"
     else
-      rc=$?
       warn "Could not read boot state for $slot (rc=$rc): $out"
     fi
   done

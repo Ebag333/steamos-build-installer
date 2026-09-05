@@ -430,7 +430,6 @@ validate_build_artifact() {
       warn "  ldd produced no output"
     else
       local dep_failed=0
-      local dep_ok=0
       local line
       while IFS="" read -r line; do
         if [[ "$line" == *"not found"* ]]; then
@@ -441,7 +440,6 @@ validate_build_artifact() {
           rc=1
         elif [[ "$line" =~ ^[[:space:]]([^[:space:]]+\.so[^[:space:]]*) ]]; then
           local lib_name="${BASH_REMATCH[1]}"
-          ((++dep_ok)) || true
         fi
       done <<<"$ldd_output"
 

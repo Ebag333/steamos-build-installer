@@ -89,7 +89,9 @@ _apply_unset_libva_driver() {
 
 _apply_gpu_power_limit() {
   log "Applying gpu-power-limit optimization"
-  install_boot_framework "20-nvidia-gpu" "25-amd-gpu"
+  if ! install_boot_framework "20-nvidia-gpu" "25-amd-gpu"; then
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -108,7 +110,9 @@ _apply_resize_bar() {
   log "Applying resize-bar optimization (nvidia.NVreg_EnableResizableBar=1)"
 
   if declare -F add_kernel_param >/dev/null 2>&1; then
-    add_kernel_param "nvidia.NVreg_EnableResizableBar=1"
+    if ! add_kernel_param "nvidia.NVreg_EnableResizableBar=1"; then
+      return 1
+    fi
     _persist_kernel_param_live "nvidia.NVreg_EnableResizableBar=1"
     return 0
   else

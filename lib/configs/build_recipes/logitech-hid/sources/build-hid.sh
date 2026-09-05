@@ -16,6 +16,11 @@ KVER="$(
     | tail -1
 )"
 
+if [[ -z "$KVER" ]]; then
+  echo "ERROR: no kernel versions found in /usr/lib/modules" >&2
+  exit 1
+fi
+
 [[ -d "/usr/lib/modules/$KVER/build" ]] || {
   echo "ERROR: headers/build tree missing for $KVER" >&2
   exit 1
@@ -45,7 +50,10 @@ done
 # usbhid.h — prefer the kernel's own copy (ABI match), fall back to upstream
 if [[ -f "/usr/lib/modules/$KVER/build/drivers/hid/usbhid/usbhid.h" ]]; then
   echo "  Copying usbhid.h from kernel headers"
-  cp "/usr/lib/modules/$KVER/build/drivers/hid/usbhid/usbhid.h" "$BUILD_DIR/usbhid/usbhid.h"
+  cp "/usr/lib/modules/$KVER/build/drivers/hid/usbhid/usbhid.h" "$BUILD_DIR/usbhid/usbhid.h" || {
+    echo "ERROR: failed to copy usbhid.h from kernel headers" >&2
+    exit 1
+  }
 else
   echo "  WARNING: usbhid.h not in kernel headers — downloading master"
   curl -sfL "$BASE_URL/usbhid/usbhid.h" -o "$BUILD_DIR/usbhid/usbhid.h" || {
@@ -68,11 +76,16 @@ for f in "$BUILD_DIR"/hid-logitech-*.c; do
 done
 
 # Verify patches took effect
-if grep -REn '\bkzalloc_objs?\(' "$BUILD_DIR"; then
+if grep -REn '\bkzalloc_objs?\(' "$BUILD_DIR" >&2; then
   echo "ERROR: unpatched kzalloc_obj/kzalloc_objs remains" >&2
   exit 1
 fi
-if grep -qE 'sizeof\(consumer_report\), 5, 1' "$BUILD_DIR"/hid-logitech-*.c; then
+matched_files=("$BUILD_DIR"/hid-logitech-*.c)
+if [[ ${#matched_files[@]} -eq 0 ]]; then
+  echo "ERROR: no hid-logitech-*.c files found for hid_report_raw_event check" >&2
+  exit 1
+fi
+if grep -qE 'sizeof\(consumer_report\), 5, 1' "${matched_files[@]}"; then
   echo "ERROR: hid_report_raw_event still has 6-arg form" >&2
   exit 1
 fi
@@ -103,7 +116,7 @@ fi
 
 # ── 5. Build ─────────────────────────────────────────────────────────────
 echo "  Building modules"
-make -C "/usr/lib/modules/$KVER/build" M="$BUILD_DIR" clean
+make -C "/usr/lib/modules/$KVER/build" M="$BUILD_DIR" clean || true
 make -C "/usr/lib/modules/$KVER/build" M="$BUILD_DIR" modules
 
 # ── 6. Verify built modules ──────────────────────────────────────────────

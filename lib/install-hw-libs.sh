@@ -847,6 +847,7 @@ _install_build_recipes() {
             _post_script_name="$(basename "$_post_install")"
             if [[ -f "$MERGED/tmp/build/sources/$_post_script_name" ]]; then
               log "  Running post-install: $_post_script_name"
+              # shellcheck disable=SC2097,SC2098 # prefix assignments intentionally set env for child process
               if MERGED="$MERGED" SCRIPT_DIR="$SCRIPT_DIR" EFIMNT="${EFIMNT:-}" /bin/bash "$MERGED/tmp/build/sources/$_post_script_name"; then
                 log "    ✓ Post-install completed for $name"
               else
@@ -1235,7 +1236,7 @@ install_hw_libs() {
         else
           warn "    $_pkg was selected but is not registered as installed"
           HW_FAILED_PKGS+=("$_pkg")
-          ((_amd_missing++))
+          ((++_amd_missing))
         fi
       done
       if ((_amd_missing)); then

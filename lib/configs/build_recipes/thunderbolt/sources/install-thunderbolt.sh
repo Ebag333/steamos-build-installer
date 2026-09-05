@@ -24,18 +24,35 @@ fi
 
 # ── 2. Install PCI rescan script ───────────────────────────────────────
 echo "  Installing thunderbolt-rescan.sh"
-install -Dm755 /tmp/build/sources/thunderbolt-rescan.sh /usr/local/bin/thunderbolt-rescan.sh
+for src in /tmp/build/sources/thunderbolt-rescan.sh /tmp/build/sources/98-thunderbolt-rescan.rules; do
+  if [[ ! -f "$src" ]]; then
+    echo "ERROR: Source file $src not found — build pipeline may not have staged sources" >&2
+    exit 1
+  fi
+done
+if ! install -Dm755 /tmp/build/sources/thunderbolt-rescan.sh /usr/local/bin/thunderbolt-rescan.sh; then
+  echo "ERROR: Failed to install thunderbolt-rescan.sh" >&2
+  exit 1
+fi
 echo "    OK /usr/local/bin/thunderbolt-rescan.sh"
 
 # ── 3. Install udev rules ──────────────────────────────────────────────
 echo "  Installing 98-thunderbolt-rescan.rules"
-install -Dm644 /tmp/build/sources/98-thunderbolt-rescan.rules /etc/udev/rules.d/98-thunderbolt-rescan.rules
+if ! install -Dm644 /tmp/build/sources/98-thunderbolt-rescan.rules /etc/udev/rules.d/98-thunderbolt-rescan.rules; then
+  echo "ERROR: Failed to install 98-thunderbolt-rescan.rules" >&2
+  exit 1
+fi
 echo "    OK /etc/udev/rules.d/98-thunderbolt-rescan.rules"
 
 # ── 4. Enable bolt.service ─────────────────────────────────────────────
 echo "  Enabling bolt.service"
 mkdir -p /etc/systemd/system/multi-user.target.wants
-ln -sf /usr/lib/systemd/system/bolt.service /etc/systemd/system/multi-user.target.wants/bolt.service
+bolt_service="/usr/lib/systemd/system/bolt.service"
+if [[ ! -f "$bolt_service" ]]; then
+  echo "ERROR: $bolt_service not found — bolt package may be broken" >&2
+  exit 1
+fi
+ln -sf "$bolt_service" /etc/systemd/system/multi-user.target.wants/bolt.service
 echo "    OK /etc/systemd/system/multi-user.target.wants/bolt.service"
 
 # ── 5. Verify all installed files ──────────────────────────────────────
