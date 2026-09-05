@@ -8,7 +8,7 @@
 # Called by the unified EFI state application mechanism.
 #
 # Requires: lib/common.sh (die, debug)
-#           lib/preflight_efi.sh (_canonicalize_efi_device, _efi_dev_major_minor)
+#           lib/preflight_efi.sh (_pf_efi_canonicalize_device, _pf_efi_device_major_minor)
 # Do not run it directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
@@ -16,10 +16,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-# Source preflight_efi.sh to reuse its internal helpers.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=preflight_efi.sh
-source "${SCRIPT_DIR}/preflight_efi.sh"
+# NOTE: This module requires _pf_efi_canonicalize_device and _pf_efi_device_major_minor
+# from preflight_efi.sh, which must be sourced by the wrapper before this module.
+# Do NOT source preflight_efi.sh here — it can overwrite SCRIPT_DIR and cause
+# redefinition issues when sourced multiple times.
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -46,6 +46,17 @@ _pf_si_read_os_release() {
     return 1
   fi
 
+  # Verify the resolved path is still within the rootfs (symlink escape check).
+  local canonical_os_release
+  canonical_os_release="$(realpath "$os_release" 2>/dev/null)" || return 1
+  local canonical_rootfs
+  canonical_rootfs="$(realpath "$rootfs" 2>/dev/null)" || return 1
+
+  case "$canonical_os_release" in
+    "$canonical_rootfs"/*) ;;
+    *) return 1 ;;  # Escaped the rootfs boundary
+  esac
+
   # os-release fields are KEY=VALUE; strip quotes from values.
   local line
   while IFS= read -r line; do
@@ -66,16 +77,17 @@ _pf_si_read_os_release() {
   return 1
 }
 
-# _pf_si_resolve_partset_device SLOT PARTITION
-#   Resolve /dev/disk/by-partsets/$SLOT/$PARTITION to its canonical device.
+# _pf_si_resolve_partset_device SLOT PARTITION [TOPOLOGY_DIR]
+#   Resolve $TOPOLOGY_DIR/$SLOT/$PARTITION to its canonical device.
 #   Prints the canonical path on success; dies on failure.
 _pf_si_resolve_partset_device() {
   local slot="${1:?_pf_si_resolve_partset_device: missing slot}"
   local partition="${2:?_pf_si_resolve_partset_device: missing partition}"
+  local topology_dir="${3:-/dev/disk/by-partsets}"
 
   local device
-  device="$(readlink -f "/dev/disk/by-partsets/$slot/$partition" 2>/dev/null)" \
-    || die "_pf_si_resolve_partset_device: cannot resolve /dev/disk/by-partsets/$slot/$partition"
+  device="$(readlink -f "$topology_dir/$slot/$partition" 2>/dev/null)" \
+    || die "_pf_si_resolve_partset_device: cannot resolve $topology_dir/$slot/$partition"
 
   [[ -n "$device" ]] \
     || die "_pf_si_resolve_partset_device: resolved path is empty for slot=$slot partition=$partition"
@@ -115,26 +127,65 @@ _pf_si_get_partlabel() {
   echo "$partlabel"
 }
 
+# _pf_si_parse_partset_file FILE
+#   Parse a SteamOS partset file in "role PARTUUID" format.
+#   Each non-comment, non-empty line contains: role PARTUUID
+#   Prints "role=PARTUUID" pairs, one per line.
+#   Returns 0 on success, 1 on empty/invalid file.
+_pf_si_parse_partset_file() {
+  local file="${1:?_pf_si_parse_partset_file: missing file path}"
+
+  if [[ ! -f "$file" || ! -s "$file" ]]; then
+    return 1
+  fi
+
+  local line
+  while IFS= read -r line; do
+    # Skip empty lines and comments.
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+
+    # Parse "role PARTUUID" format.
+    local role partuuid
+    if [[ "$line" =~ ^[[:space:]]*([a-zA-Z0-9_-]+)[[:space:]]+([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})[[:space:]]*$ ]]; then
+      role="${BASH_REMATCH[1]}"
+      partuuid="${BASH_REMATCH[2]}"
+      echo "${role}=${partuuid}"
+    elif [[ "$line" =~ ^[[:space:]]*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})[[:space:]]*$ ]]; then
+      # Plain UUID without role — treat as legacy format.
+      partuuid="${BASH_REMATCH[1]}"
+      echo "unknown=${partuuid}"
+    else
+      debug "_pf_si_parse_partset_file: skipping unparseable line: '$line' in $file"
+    fi
+  done <"$file"
+}
+
 # ---------------------------------------------------------------------------
 # Individual checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_system_identity_os_release ROOTFS [EXPECTED_VARIANT]
+# preflight_system_identity_os_release ROOTFS [EXPECTED_VARIANT] [ACCEPTED_VARIANTS]
 #   PF-40: Verify the rootfs os-release declares a supported SteamOS variant
-#   and architecture.  When EXPECTED_VARIANT is provided, also verify the
-#   ID field matches (case-insensitive).
+#   and architecture.
+#
+#   EXPECTED_VARIANT: if provided, VARIANT_ID must match (case-insensitive).
+#   ACCEPTED_VARIANTS: optional space-separated list of accepted VARIANT_ID values.
+#                      If provided, VARIANT_ID must be one of these values.
+#                      If both EXPECTED_VARIANT and ACCEPTED_VARIANTS are provided,
+#                      EXPECTED_VARIANT takes precedence.
 #
 #   Required fields:
 #     ID=steamos          — must be SteamOS
 #     VERSION_ID          — must be non-empty
 #     ID_LIKE=arch        — must indicate Arch lineage
-#     BASE_ARCH           — must be x86_64
 #
 #   Optional:
-#     VARIANT_ID           — when EXPECTED_VARIANT is provided, must match
+#     BASE_ARCH           — must be x86_64 when present
+#     VARIANT_ID           — validated against EXPECTED_VARIANT or ACCEPTED_VARIANTS
 preflight_system_identity_os_release() {
   local rootfs="${1:?preflight_system_identity_os_release: missing rootfs path}"
   local expected_variant="${2:-}"
+  local accepted_variants="${3:-}"
 
   # --- ID check: must be "steamos" ---
   local id
@@ -161,10 +212,13 @@ preflight_system_identity_os_release() {
     die "PF-40: os-release ID_LIKE is empty (expected 'arch'): $rootfs"
   fi
 
-  # ID_LIKE may contain multiple space-separated values (e.g. "arch linux").
+  # Parse ID_LIKE into an array (no glob expansion, controlled splitting).
+  local id_like_tokens
+  read -ra id_like_tokens <<< "$id_like"
+
   local found_arch=0
   local token
-  for token in $id_like; do
+  for token in "${id_like_tokens[@]}"; do
     if [[ "${token,,}" == "arch" ]]; then
       found_arch=1
       break
@@ -175,16 +229,19 @@ preflight_system_identity_os_release() {
     die "PF-40: os-release ID_LIKE does not contain 'arch' (got '$id_like'): $rootfs"
   fi
 
-  # --- BASE_ARCH check: must be x86_64 ---
+  # --- BASE_ARCH check (preferred but not mandatory) ---
+  # BASE_ARCH is not universally guaranteed in os-release.  When absent we
+  # warn and continue; the GRUB x86_64-efi platform check in the build
+  # pipeline is the stronger architecture gate.
   local base_arch
   base_arch="$(_pf_si_read_os_release "$rootfs" BASE_ARCH)" || base_arch=""
 
   if [[ -z "$base_arch" ]]; then
-    die "PF-40: os-release BASE_ARCH is empty (expected 'x86_64'): $rootfs"
-  fi
-
-  if [[ "${base_arch,,}" != "x86_64" ]]; then
+    warn "PF-40: os-release BASE_ARCH is empty — cannot verify architecture (expected 'x86_64'): $rootfs"
+  elif [[ "${base_arch,,}" != "x86_64" ]]; then
     die "PF-40: unsupported architecture '$base_arch' (expected 'x86_64'): $rootfs"
+  else
+    debug "PF-40: architecture is x86_64 (BASE_ARCH=$base_arch)"
   fi
 
   # --- VARIANT_ID check (optional) ---
@@ -199,64 +256,105 @@ preflight_system_identity_os_release() {
     if [[ "${variant_id,,}" != "${expected_variant,,}" ]]; then
       die "PF-40: os-release VARIANT_ID '$variant_id' does not match expected '$expected_variant': $rootfs"
     fi
+  elif [[ -n "${accepted_variants:-}" ]]; then
+    local variant_id
+    variant_id="$(_pf_si_read_os_release "$rootfs" VARIANT_ID)" || variant_id=""
+
+    if [[ -n "$variant_id" ]]; then
+      local found=0
+      local av
+      read -ra av_tokens <<< "$accepted_variants"
+      for av in "${av_tokens[@]}"; do
+        if [[ "${variant_id,,}" == "${av,,}" ]]; then
+          found=1
+          break
+        fi
+      done
+      if [[ "$found" -eq 0 ]]; then
+        die "PF-40: os-release VARIANT_ID '$variant_id' is not in accepted variants ($accepted_variants): $rootfs"
+      fi
+    fi
   fi
 
   debug "PF-40: os-release is a valid SteamOS variant (ID=$id VERSION_ID=$version_id BASE_ARCH=$base_arch)"
 }
 
-# preflight_system_identity_topology_complete ROOTFS [EFIMNT]
-#   PF-41: Verify that required partitions exist for both A and B slots.
-#   When EFIMNT is provided, also verify the shared partition paths
-#   (rootfs, efi, var) resolve under /dev/disk/by-partsets for each slot.
+# preflight_system_identity_topology_complete ROOTFS [EFIMNT] [SCENARIO] [TOPOLOGY_DIR]
+#   PF-41: Verify that required partitions exist for the target system.
+#   The topology source defaults to /dev/disk/by-partsets but can be
+#   overridden via TOPOLOGY_DIR (e.g. a loop device's topology for Build).
 #
-#   Required per-slot partitions:
-#     /dev/disk/by-partsets/A/rootfs
-#     /dev/disk/by-partsets/A/efi
-#     /dev/disk/by-partsets/A/var
-#     /dev/disk/by-partsets/B/rootfs
-#     /dev/disk/by-partsets/B/efi
-#     /dev/disk/by-partsets/B/var
+#   SCENARIO controls required slot depth:
+#     build     — only declared partitions (may be A-only); if TOPOLOGY_DIR
+#                 is missing this is acceptable (loop devices may not have
+#                 by-partsets).
+#     flashless / recovery / live (default) — require complete A/B topology.
+#
+#   Required per-slot partitions (for each slot dictated by SCENARIO):
+#     $TOPOLOGY_DIR/{slot}/rootfs
+#     $TOPOLOGY_DIR/{slot}/efi
+#     $TOPOLOGY_DIR/{slot}/var
 preflight_system_identity_topology_complete() {
   local rootfs="${1:?preflight_system_identity_topology_complete: missing rootfs path}"
   local efimnt="${2:-}"
+  local scenario="${3:-}"
+  local topology_dir="${4:-/dev/disk/by-partsets}"
 
-  # Require /dev/disk/by-partsets/ to exist at all.
-  if [[ ! -d "/dev/disk/by-partsets" ]]; then
-    die "PF-41: /dev/disk/by-partsets/ does not exist — cannot validate partition topology"
+  if [[ ! -d "$topology_dir" ]]; then
+    case "$scenario" in
+      build)
+        # Build may not have by-partsets if using loop devices.
+        debug "PF-41: topology directory missing ($topology_dir) — acceptable for build scenario"
+        return 0
+        ;;
+      *)
+        die "PF-41: $topology_dir does not exist — cannot validate partition topology"
+        ;;
+    esac
   fi
+
+  # Determine required slots based on scenario.
+  local slots
+  case "$scenario" in
+    build) slots="A" ;;  # Build is A-only
+    *)     slots="A B" ;;  # All others require both slots
+  esac
 
   # Check each required partition exists and resolves to a block device.
   local slot partition dev
-  for slot in A B; do
+  for slot in $slots; do
     for partition in rootfs efi var; do
-      dev="$(readlink -f "/dev/disk/by-partsets/$slot/$partition" 2>/dev/null)" || dev=""
+      dev="$(readlink -f "$topology_dir/$slot/$partition" 2>/dev/null)" || dev=""
 
       if [[ -z "$dev" ]]; then
-        die "PF-41: partition topology incomplete — /dev/disk/by-partsets/$slot/$partition does not resolve"
+        die "PF-41: partition topology incomplete — $topology_dir/$slot/$partition does not resolve"
       fi
 
       if [[ ! -b "$dev" ]]; then
-        die "PF-41: partition topology invalid — /dev/disk/by-partsets/$slot/$partition resolves to non-block-device: $dev"
+        die "PF-41: partition topology invalid — $topology_dir/$slot/$partition resolves to non-block-device: $dev"
       fi
     done
   done
 
-  debug "PF-41: partition topology is complete (A and B rootfs/efi/var all present)"
+  debug "PF-41: partition topology complete (scenario=${scenario:-live} slots=$slots)"
 }
 
-# preflight_system_identity_partition_consistent SLOT PARTITION
+# preflight_system_identity_partition_consistent SLOT PARTITION [TOPOLOGY_DIR]
 #   PF-42: Verify that PARTLABEL, partset name, PARTUUID, and the actual
 #   device agree for a given slot/partition.  The PARTLABEL is expected
 #   to encode the slot and partition (e.g. "rootfs-A", "efi-B").
 #
+#   TOPOLOGY_DIR defaults to /dev/disk/by-partsets but can be overridden.
+#
 #   Checks:
-#     1. Device exists under /dev/disk/by-partsets/$SLOT/$PARTITION
+#     1. Device exists under $TOPOLOGY_DIR/$SLOT/$PARTITION
 #     2. PARTLABEL matches the expected pattern: ${PARTITION}-${SLOT}
 #     3. PARTUUID is available and non-empty
 #     4. The resolved device is a valid block device
 preflight_system_identity_partition_consistent() {
   local slot="${1:?preflight_system_identity_partition_consistent: missing slot}"
   local partition="${2:?preflight_system_identity_partition_consistent: missing partition}"
+  local topology_dir="${3:-/dev/disk/by-partsets}"
 
   case "$slot" in
     A | B) ;;
@@ -264,10 +362,10 @@ preflight_system_identity_partition_consistent() {
   esac
 
   local dev
-  dev="$(_pf_si_resolve_partset_device "$slot" "$partition")"
+  dev="$(_pf_si_resolve_partset_device "$slot" "$partition" "$topology_dir")"
 
   [[ -b "$dev" ]] \
-    || die "PF-42: /dev/disk/by-partsets/$slot/$partition is not a block device: $dev"
+    || die "PF-42: $topology_dir/$slot/$partition is not a block device: $dev"
 
   # Check PARTLABEL matches expected pattern: ${PARTITION}-${SLOT}
   local partlabel
@@ -275,7 +373,7 @@ preflight_system_identity_partition_consistent() {
 
   local expected_label="${partition}-${slot}"
   if [[ "${partlabel,,}" != "${expected_label,,}" ]]; then
-    die "PF-42: PARTLABEL mismatch — got '$partlabel' but expected '$expected_label' for /dev/disk/by-partsets/$slot/$partition ($dev)"
+    die "PF-42: PARTLABEL mismatch — got '$partlabel' but expected '$expected_label' for $topology_dir/$slot/$partition ($dev)"
   fi
 
   # Check PARTUUID is available.
@@ -283,64 +381,90 @@ preflight_system_identity_partition_consistent() {
   partuuid="$(_pf_si_get_partuuid "$dev")"
 
   [[ -n "$partuuid" ]] \
-    || die "PF-42: PARTUUID is empty for /dev/disk/by-partsets/$slot/$partition ($dev)"
+    || die "PF-42: PARTUUID is empty for $topology_dir/$slot/$partition ($dev)"
 
   debug "PF-42: partition identity consistent (slot=$slot partition=$partition label=$partlabel partuuid=$partuuid device=$dev)"
 }
 
-# preflight_system_identity_no_cross_slot_alias()
-#   PF-43: Verify that slot A and slot B do not resolve to the same device.
-#   Compares each partition type (rootfs, efi, var) between slots using
-#   major:minor numbers.
+# preflight_system_identity_no_cross_slot_alias [TOPOLOGY_DIR]
+#   PF-43: Verify that all partition devices across slots A and B are
+#   distinct.  Checks both major:minor identity and PARTUUID to catch
+#   cross-role aliases (e.g. A/rootfs == B/efi) and cloned partitions.
+#   TOPOLOGY_DIR defaults to /dev/disk/by-partsets but can be overridden.
 preflight_system_identity_no_cross_slot_alias() {
-  local partition rootfs_a rootfs_b efi_a efi_b var_a var_b
+  local topology_dir="${1:-/dev/disk/by-partsets}"
 
-  for partition in rootfs efi var; do
-    rootfs_a="$(readlink -f "/dev/disk/by-partsets/A/$partition" 2>/dev/null)" || rootfs_a=""
-    rootfs_b="$(readlink -f "/dev/disk/by-partsets/B/$partition" 2>/dev/null)" || rootfs_b=""
+  if [[ ! -d "$topology_dir" ]]; then
+    debug "PF-43: topology directory missing ($topology_dir) — skipping cross-slot alias check"
+    return 0
+  fi
 
-    # Skip if either side doesn't exist (single-slot build).
-    if [[ -z "$rootfs_a" || -z "$rootfs_b" ]]; then
-      continue
-    fi
+  # Build lists of all device identity pairs (major:minor + PARTUUID).
+  local -a all_mm=()
+  local -a all_uuid=()
+  local -a all_labels=()
+  local slot partition dev mm uuid label
 
-    [[ -b "$rootfs_a" ]] \
-      || die "PF-43: slot A $partition is not a block device: $rootfs_a"
-    [[ -b "$rootfs_b" ]] \
-      || die "PF-43: slot B $partition is not a block device: $rootfs_b"
+  for slot in A B; do
+    for partition in rootfs efi var verity; do
+      dev="$(readlink -f "$topology_dir/$slot/$partition" 2>/dev/null)" || continue
+      [[ -b "$dev" ]] || continue
 
-    local mm_a mm_b
-    mm_a="$(_efi_dev_major_minor "$rootfs_a")"
-    mm_b="$(_efi_dev_major_minor "$rootfs_b")"
+      label="${slot}/${partition}"
 
-    if [[ "$mm_a" == "$mm_b" ]]; then
-      die "PF-43: slots A and B resolve to the same device for partition '$partition' (major:minor $mm_a): A=$rootfs_a B=$rootfs_b"
-    fi
+      # Get major:minor via stat (hex format from device node).
+      mm=""
+      local dev_t
+      dev_t="$(stat -c '%t:%T' "$dev" 2>/dev/null)" || dev_t=""
+      if [[ -n "$dev_t" ]]; then
+        local major_hex="${dev_t%%:*}" minor_hex="${dev_t##*:}"
+        mm="$((16#${major_hex})):$((16#${minor_hex}))"
+      fi
 
-    # Also compare PARTUUIDs to catch cloned partitions with identical major:minor.
-    local uuid_a uuid_b
-    uuid_a="$(blkid -s PARTUUID -o value "$rootfs_a" 2>/dev/null)" || uuid_a=""
-    uuid_b="$(blkid -s PARTUUID -o value "$rootfs_b" 2>/dev/null)" || uuid_b=""
+      # Get PARTUUID via blkid.
+      uuid="$(blkid -s PARTUUID -o value "$dev" 2>/dev/null)" || uuid=""
 
-    if [[ -n "$uuid_a" && -n "$uuid_b" && "${uuid_a,,}" == "${uuid_b,,}" ]]; then
-      die "PF-43: slots A and B share the same PARTUUID for partition '$partition' ($uuid_a): A=$rootfs_a B=$rootfs_b"
-    fi
+      # Check for major:minor collision with any previously seen device.
+      if [[ -n "$mm" ]]; then
+        local i
+        for ((i=0; i<${#all_mm[@]}; i++)); do
+          if [[ "${all_mm[$i]}" == "$mm" ]]; then
+            die "PF-43: duplicate device identity — $label shares major:minor $mm with ${all_labels[$i]}"
+          fi
+        done
+      fi
+
+      # Check for PARTUUID collision with any previously seen device.
+      if [[ -n "$uuid" ]]; then
+        local i
+        for ((i=0; i<${#all_uuid[@]}; i++)); do
+          if [[ "${all_uuid[$i],,}" == "${uuid,,}" ]]; then
+            die "PF-43: duplicate PARTUUID — $label shares PARTUUID $uuid with ${all_labels[$i]}"
+          fi
+        done
+      fi
+
+      all_mm+=("$mm")
+      all_uuid+=("$uuid")
+      all_labels+=("$label")
+    done
   done
 
-  debug "PF-43: no cross-slot aliasing detected (A and B resolve to distinct devices)"
+  debug "PF-43: no cross-slot aliasing detected (${#all_labels[@]} devices checked)"
 }
 
-# preflight_system_identity_partset_map()
-#   PF-44: Verify the current-slot partset map at /efi/SteamOS/partsets/
-#   (or /esp/SteamOS/partsets/ if accessible).  Entries A, B, self, and
-#   other must be regular files containing a PARTUUID that resolves to a
-#   real block device.  If the EFI is mounted at a different path, the
-#   caller should pass EFIMNT as $1.
+# preflight_system_identity_partset_map EFIMNT [SELF_SLOT] [TOPOLOGY_DIR]
+#   PF-44: Verify the current-slot partset map at $EFIMNT/SteamOS/partsets/.
+#   Entries A, B, self, and other must be regular files parseable by
+#   _pf_si_parse_partset_file.  Each role=PARTUUID pair is validated.
 #
-#   When EFIMNT is provided, checks $EFIMNT/SteamOS/partsets/.
-#   Otherwise checks /efi/SteamOS/partsets/ (live scenario default).
+#   SELF_SLOT, when provided, is the explicit slot label for the self side
+#   (e.g. "A" or "B").  When empty, self/other validation is skipped.
+#   TOPOLOGY_DIR defaults to /dev/disk/by-partsets.
 preflight_system_identity_partset_map() {
   local efimnt="${1:-/efi}"
+  local self_slot="${2:-}"
+  local topology_dir="${3:-/dev/disk/by-partsets}"
 
   local partsets_dir="$efimnt/SteamOS/partsets"
 
@@ -348,116 +472,166 @@ preflight_system_identity_partset_map() {
     die "PF-44: partset map directory missing: $partsets_dir"
   fi
 
-  # Determine the booted slot to identify self/other.
-  local booted_slot=""
-  if command -v steamos-bootconf &>/dev/null; then
-    booted_slot="$(steamos-bootconf this-image 2>/dev/null)" || booted_slot=""
-  fi
+  # --- Helper: resolve a PARTUUID to a device ---
+  _pf_si_resolve_partuuid() {
+    local uuid="$1"
+    local resolved
+    resolved="$(readlink -f "/dev/disk/by-partuuid/$uuid" 2>/dev/null)" || return 1
+    [[ -b "$resolved" ]] || return 1
+    echo "$resolved"
+  }
 
-  # If we couldn't determine the booted slot, still validate that entries
-  # that exist are valid — don't die for missing self/other if we can't
-  # determine which is which.
-  local has_error=0
+  # --- Helper: get the device identity (major:minor) for a slot/partition ---
+  _pf_si_slot_device_mm() {
+    local slot="$1" partition="$2"
+    local dev
+    dev="$(readlink -f "$topology_dir/$slot/$partition" 2>/dev/null)" || return 1
+    [[ -b "$dev" ]] || return 1
+    stat -c '%t:%T' "$dev" 2>/dev/null | {
+      read -r hex
+      local major_hex="${hex%%:*}" minor_hex="${hex##*:}"
+      printf '%d:%d' "$((16#${major_hex}))" "$((16#${minor_hex}))"
+    }
+  }
 
-  # Check slot entries (A, B): each should be a regular file with a valid
-  # PARTUUID that resolves through /dev/disk/by-partuuid.
-  local slot
+  # --- Helper: enumerate devices with a given PARTUUID and count them ---
+  _pf_si_partuuid_unique() {
+    local uuid="$1"
+    local count=0
+    local dev
+    for dev in /dev/sd? /dev/nvme?n?p? /dev/mmcblk?p? /dev/loop?; do
+      [[ -b "$dev" ]] || continue
+      local dev_uuid
+      dev_uuid="$(blkid -s PARTUUID -o value "$dev" 2>/dev/null)" || continue
+      if [[ "${dev_uuid,,}" == "${uuid,,}" ]]; then
+        count=$((count + 1))
+      fi
+    done
+    echo "$count"
+  }
+
+  # --- Parse slot files (A, B) ---
   for slot in A B; do
     local entry="$partsets_dir/$slot"
     if [[ ! -f "$entry" ]]; then
-      debug "PF-44: partset entry '$slot' not present at $entry (acceptable for single-slot)"
+      debug "PF-44: partset entry '$slot' not present (acceptable for single-slot)"
       continue
     fi
 
-    # Read the PARTUUID from the file (format: "rootfs <PARTUUID>" or just "<PARTUUID>").
-    local content
-    content="$(cat "$entry" 2>/dev/null)" || content=""
-    content="$(echo "$content" | tr -d '[:space:]')"
+    local parsed
+    parsed="$(_pf_si_parse_partset_file "$entry")" || die "PF-44: partset entry '$slot' is empty or invalid: $entry"
 
-    if [[ -z "$content" ]]; then
-      die "PF-44: partset entry '$slot' is empty: $entry"
-    fi
+    # Validate each role-PARTUUID pair.
+    local pair role uuid
+    while IFS= read -r pair; do
+      role="${pair%%=*}"
+      uuid="${pair#*=}"
 
-    # Handle both formats: "rootfs <uuid>" and plain "<uuid>".
-    local partuuid
-    if [[ "$content" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
-      partuuid="$content"
-    elif [[ "$content" =~ [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
-      partuuid="${BASH_REMATCH[0]}"
-    else
-      die "PF-44: partset entry '$slot' contains invalid PARTUUID: '$content' ($entry)"
-    fi
+      # Verify the PARTUUID resolves to a block device.
+      local resolved
+      if ! resolved="$(_pf_si_resolve_partuuid "$uuid")"; then
+        die "PF-44: partset '$slot' role '$role' PARTUUID '$uuid' does not resolve to a block device"
+      fi
 
-    # Verify the PARTUUID resolves to a real block device.
-    local resolved
-    resolved="$(readlink -f "/dev/disk/by-partuuid/$partuuid" 2>/dev/null)" || resolved=""
+      # Verify PARTUUID uniqueness (detect clones).
+      local count
+      count="$(_pf_si_partuuid_unique "$uuid")"
+      if [[ "$count" -gt 1 ]]; then
+        die "PF-44: ambiguous duplicate device -- $count devices share PARTUUID $uuid (slot=$slot role=$role)"
+      fi
 
-    if [[ -z "$resolved" ]]; then
-      die "PF-44: partset entry '$slot' PARTUUID '$partuuid' does not resolve to a block device: $entry"
-    fi
-
-    if [[ ! -b "$resolved" ]]; then
-      die "PF-44: partset entry '$slot' resolves to non-block-device: $resolved ($entry)"
-    fi
+      debug "PF-44: partset '$slot' role='$role' uuid=$uuid device=$resolved"
+    done <<< "$parsed"
   done
 
-  # Check self/other entries if we know the booted slot.
-  if [[ -n "$booted_slot" ]]; then
+  # --- Validate self entry ---
+  if [[ -n "$self_slot" ]]; then
+    local self_entry="$partsets_dir/self"
+    if [[ -f "$self_entry" ]]; then
+      local self_parsed
+      self_parsed="$(_pf_si_parse_partset_file "$self_entry")" \
+        || die "PF-44: partset 'self' is empty or invalid: $self_entry"
+
+      # Parse self's role mappings.
+      local -A self_roles=()
+      local pair
+      while IFS= read -r pair; do
+        local role="${pair%%=*}" uuid="${pair#*=}"
+        self_roles["$role"]="$uuid"
+      done <<< "$self_parsed"
+
+      # Compare against the expected slot's topology.
+      for role in rootfs efi var; do
+        local self_uuid="${self_roles[$role]:-}"
+        if [[ -z "$self_uuid" ]]; then
+          debug "PF-44: partset 'self' has no '$role' entry (may be incomplete)"
+          continue
+        fi
+
+        # Get the expected device's PARTUUID from topology.
+        local expected_dev
+        expected_dev="$(readlink -f "$topology_dir/$self_slot/$role" 2>/dev/null)" || expected_dev=""
+        if [[ -n "$expected_dev" && -b "$expected_dev" ]]; then
+          local expected_uuid
+          expected_uuid="$(blkid -s PARTUUID -o value "$expected_dev" 2>/dev/null)" || expected_uuid=""
+          if [[ -n "$expected_uuid" && "${self_uuid,,}" != "${expected_uuid,,}" ]]; then
+            die "PF-44: partset 'self' role '$role' ($self_uuid) does not match expected $self_slot/$role ($expected_uuid)"
+          fi
+        fi
+      done
+
+      debug "PF-44: partset 'self' matches expected slot $self_slot"
+    else
+      die "PF-44: partset 'self' entry missing: $self_entry"
+    fi
+  else
+    debug "PF-44: no self_slot provided -- skipping self validation"
+  fi
+
+  # --- Validate other entry ---
+  if [[ -n "$self_slot" ]]; then
     local other_slot
-    case "$booted_slot" in
+    case "$self_slot" in
       A) other_slot="B" ;;
       B) other_slot="A" ;;
-      *) debug "PF-44: booted slot is '$booted_slot' — skipping self/other validation"; return 0 ;;
+      *) other_slot="" ;;
     esac
 
-    local self_entry="$partsets_dir/self"
-    local other_entry="$partsets_dir/other"
+    if [[ -n "$other_slot" ]]; then
+      local other_entry="$partsets_dir/other"
+      if [[ -f "$other_entry" ]]; then
+        local other_parsed
+        other_parsed="$(_pf_si_parse_partset_file "$other_entry")" \
+          || die "PF-44: partset 'other' is empty or invalid: $other_entry"
 
-    if [[ -f "$self_entry" ]]; then
-      # Verify self maps to the booted slot's rootfs device.
-      local self_content
-      self_content="$(cat "$self_entry" 2>/dev/null)" || self_content=""
-      self_content="$(echo "$self_content" | tr -d '[:space:]')"
+        local -A other_roles=()
+        local pair
+        while IFS= read -r pair; do
+          local role="${pair%%=*}" uuid="${pair#*=}"
+          other_roles["$role"]="$uuid"
+        done <<< "$other_parsed"
 
-      local self_partuuid
-      if [[ "$self_content" =~ [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
-        self_partuuid="${BASH_REMATCH[0]}"
+        for role in rootfs efi var; do
+          local other_uuid="${other_roles[$role]:-}"
+          if [[ -z "$other_uuid" ]]; then
+            debug "PF-44: partset 'other' has no '$role' entry (may be incomplete)"
+            continue
+          fi
+
+          local expected_dev
+          expected_dev="$(readlink -f "$topology_dir/$other_slot/$role" 2>/dev/null)" || expected_dev=""
+          if [[ -n "$expected_dev" && -b "$expected_dev" ]]; then
+            local expected_uuid
+            expected_uuid="$(blkid -s PARTUUID -o value "$expected_dev" 2>/dev/null)" || expected_uuid=""
+            if [[ -n "$expected_uuid" && "${other_uuid,,}" != "${expected_uuid,,}" ]]; then
+              die "PF-44: partset 'other' role '$role' ($other_uuid) does not match expected $other_slot/$role ($expected_uuid)"
+            fi
+          fi
+        done
+
+        debug "PF-44: partset 'other' matches expected slot $other_slot"
       else
-        die "PF-44: partset entry 'self' contains invalid PARTUUID: '$self_content' ($self_entry)"
-      fi
-
-      # Compare with the booted slot's rootfs PARTUUID.
-      local expected_rootfs_dev
-      expected_rootfs_dev="$(readlink -f "/dev/disk/by-partsets/$booted_slot/rootfs" 2>/dev/null)" || expected_rootfs_dev=""
-      if [[ -n "$expected_rootfs_dev" && -b "$expected_rootfs_dev" ]]; then
-        local expected_partuuid
-        expected_partuuid="$(blkid -s PARTUUID -o value "$expected_rootfs_dev" 2>/dev/null)" || expected_partuuid=""
-        if [[ -n "$expected_partuuid" && "${self_partuuid,,}" != "${expected_partuuid,,}" ]]; then
-          die "PF-44: partset 'self' ($self_partuuid) does not match booted slot rootfs ($expected_partuuid): $self_entry"
-        fi
-      fi
-    fi
-
-    if [[ -f "$other_entry" ]]; then
-      local other_content
-      other_content="$(cat "$other_entry" 2>/dev/null)" || other_content=""
-      other_content="$(echo "$other_content" | tr -d '[:space:]')"
-
-      local other_partuuid
-      if [[ "$other_content" =~ [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
-        other_partuuid="${BASH_REMATCH[0]}"
-      else
-        die "PF-44: partset entry 'other' contains invalid PARTUUID: '$other_content' ($other_entry)"
-      fi
-
-      # Verify it resolves to a block device.
-      local other_resolved
-      other_resolved="$(readlink -f "/dev/disk/by-partuuid/$other_partuuid" 2>/dev/null)" || other_resolved=""
-      if [[ -z "$other_resolved" ]]; then
-        die "PF-44: partset 'other' PARTUUID '$other_partuuid' does not resolve: $other_entry"
-      fi
-      if [[ ! -b "$other_resolved" ]]; then
-        die "PF-44: partset 'other' resolves to non-block-device: $other_resolved ($other_entry)"
+        warn "PF-44: partset 'other' entry missing: $other_entry"
       fi
     fi
   fi
@@ -469,7 +643,7 @@ preflight_system_identity_partset_map() {
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-# preflight_system_identity_validate ROOTFS [EFIMNT] [EXPECTED_VARIANT]
+# preflight_system_identity_validate ROOTFS [EFIMNT] [EXPECTED_VARIANT] [SCENARIO] [TOPOLOGY_DIR] [SELF_SLOT] [ACCEPTED_VARIANTS]
 #   Run the full system identity validation sequence:
 #     PF-40  os-release declares supported SteamOS variant/architecture
 #     PF-41  Required partitions exist (rootfs/efi/var per slot + shared)
@@ -482,35 +656,50 @@ preflight_system_identity_partset_map() {
 #     ROOTFS           — mounted target root filesystem (for os-release checks)
 #     EFIMNT           — (optional) target EFI mount path (default: /efi)
 #     EXPECTED_VARIANT — (optional) expected os-release VARIANT_ID (e.g. "steamdeck")
+#     SCENARIO         — (optional) "build", "flashless", "recovery", or "live" (default)
+#     TOPOLOGY_DIR     — (optional) partition topology directory (default: /dev/disk/by-partsets)
+#     SELF_SLOT        — (optional) explicit slot label ("A" or "B") for self/other validation
+#     ACCEPTED_VARIANTS — (optional) space-separated list of accepted VARIANT_ID values
+#                         (e.g. "steamdeck steamdeck-oobe"); ignored when EXPECTED_VARIANT is set
 preflight_system_identity_validate() {
   local rootfs="${1:?preflight_system_identity_validate: missing rootfs path}"
   local efimnt="${2:-/efi}"
   local expected_variant="${3:-}"
+  local scenario="${4:-}"
+  local topology_dir="${5:-/dev/disk/by-partsets}"
+  local self_slot="${6:-}"
+  local accepted_variants="${7:-}"
 
-  debug "preflight_system_identity_validate: validating rootfs=$rootfs efimnt=$efimnt expected_variant=${expected_variant:-<none>}"
+  debug "preflight_system_identity_validate: validating rootfs=$rootfs efimnt=$efimnt expected_variant=${expected_variant:-<none>} scenario=${scenario:-live} topology_dir=$topology_dir"
 
   # PF-40: os-release declares supported SteamOS variant/architecture.
-  preflight_system_identity_os_release "$rootfs" "$expected_variant"
+  preflight_system_identity_os_release "$rootfs" "$expected_variant" "$accepted_variants"
 
   # PF-41: Required partitions exist (rootfs/efi/var per slot).
-  preflight_system_identity_topology_complete "$rootfs" "$efimnt"
+  preflight_system_identity_topology_complete "$rootfs" "$efimnt" "$scenario" "$topology_dir"
 
   # PF-42: PARTLABEL/partset/PARTUUID/device agree for each slot/partition.
+  local slots
+  case "$scenario" in
+    build) slots="A" ;;
+    *)     slots="A B" ;;
+  esac
+
   local slot partition
-  for slot in A B; do
+  for slot in $slots; do
     for partition in rootfs efi var; do
-      # Only check partitions that actually exist in by-partsets.
-      if [[ -L "/dev/disk/by-partsets/$slot/$partition" ]]; then
-        preflight_system_identity_partition_consistent "$slot" "$partition"
+      # Only check partitions that actually exist in the topology.
+      if [[ -L "$topology_dir/$slot/$partition" ]]; then
+        preflight_system_identity_partition_consistent "$slot" "$partition" "$topology_dir"
       fi
     done
   done
 
-  # PF-43: A and B don't resolve to same device.
-  preflight_system_identity_no_cross_slot_alias
+  # PF-43: No cross-slot aliasing.
+  preflight_system_identity_no_cross_slot_alias "$topology_dir"
 
   # PF-44: /efi/SteamOS/partsets/ entries valid.
-  preflight_system_identity_partset_map "$efimnt"
+  preflight_system_identity_partset_map "$efimnt" "$self_slot" "$topology_dir"
 
   debug "preflight_system_identity_validate: all system identity checks passed"
 }

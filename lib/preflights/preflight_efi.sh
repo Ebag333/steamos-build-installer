@@ -3,8 +3,9 @@
 # steamos-build-installer — lib/preflight_efi.sh
 # EFI device validation: ensures the target EFI partition is a valid FAT block
 # device, belongs to the correct slot, and is safe to mount and write.
-# Supports two ownership modes: temporary (function creates a private mount)
-# and existing (function reuses an already-mounted path).
+# Supports two ownership modes: temporary (function validates and mounts but
+# does NOT install cleanup traps — the caller owns the lifecycle) and
+# existing (function reuses an already-mounted path).
 # Called by the unified EFI state application mechanism.
 #
 # Requires: lib/common.sh (die, debug)
@@ -19,35 +20,39 @@ fi
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-# _canonicalize_efi_device EFI_DEVICE
+# _pf_efi_canonicalize_device EFI_DEVICE
 #   Resolve the EFI device path via `realpath` so symlinks such as
 #   /dev/disk/by-partsets/... are resolved to their canonical form.
 #   Dies if the input is empty or cannot be resolved.
-_canonicalize_efi_device() {
-  local device="${1:?_canonicalize_efi_device: missing device path}"
+_pf_efi_canonicalize_device() {
+  local device="${1:?_pf_efi_canonicalize_device: missing device path}"
 
   local resolved
   resolved="$(realpath "$device" 2>/dev/null)" \
-    || die "_canonicalize_efi_device: failed to resolve '$device'"
+    || die "_pf_efi_canonicalize_device: failed to resolve '$device'"
 
   [[ -n "$resolved" ]] \
-    || die "_canonicalize_efi_device: resolved path is empty for '$device'"
+    || die "_pf_efi_canonicalize_device: resolved path is empty for '$device'"
 
   echo "$resolved"
 }
 
-# _efi_dev_major_minor DEVICE
+# Backward-compatible alias — other libraries source this file and call
+# the old name.  Remove once all callers have been migrated.
+_canonicalize_efi_device() { _pf_efi_canonicalize_device "$@"; }
+
+# _pf_efi_device_major_minor DEVICE
 #   Return the major:minor number pair for a block device using `stat`.
 #   Dies if the device is not a block device or stat fails.
-_efi_dev_major_minor() {
-  local device="${1:?_efi_dev_major_minor: missing device path}"
+_pf_efi_device_major_minor() {
+  local device="${1:?_pf_efi_device_major_minor: missing device path}"
 
   [[ -b "$device" ]] \
-    || die "_efi_dev_major_minor: not a block device: $device"
+    || die "_pf_efi_device_major_minor: not a block device: $device"
 
   local dev_t
   dev_t="$(stat -c '%t:%T' "$device" 2>/dev/null)" \
-    || die "_efi_dev_major_minor: stat failed for '$device'"
+    || die "_pf_efi_device_major_minor: stat failed for '$device'"
 
   # stat prints hex; convert to decimal for reliable comparison.
   local major_hex minor_hex major_dec minor_dec
@@ -59,21 +64,44 @@ _efi_dev_major_minor() {
   echo "${major_dec}:${minor_dec}"
 }
 
-# _efi_mount_cleanup MOUNTPOINT
+# Backward-compatible alias — other libraries source this file and call
+# the old name.  Remove once all callers have been migrated.
+_efi_dev_major_minor() { _pf_efi_device_major_minor "$@"; }
+
+# _pf_efi_mount_cleanup MOUNTPOINT
 #   Cleanup function for traps.  Unmounts the given mountpoint and removes
 #   the directory if it was created by this library.
-_efi_mount_cleanup() {
-  local mountpoint="${1:?_efi_mount_cleanup: missing mountpoint}"
+#   Reports failure when lazy unmount is needed (files may not be flushed).
+_pf_efi_mount_cleanup() {
+  local mountpoint="${1:?_pf_efi_mount_cleanup: missing mountpoint}"
 
-  if mountpoint -q "$mountpoint" 2>/dev/null; then
-    umount "$mountpoint" 2>/dev/null || umount -l "$mountpoint" 2>/dev/null
+  if ! mountpoint -q "$mountpoint" 2>/dev/null; then
+    return 0  # Already unmounted
+  fi
+
+  if umount "$mountpoint" 2>/dev/null; then
+    debug "_pf_efi_mount_cleanup: successfully unmounted $mountpoint"
+  else
+    warn "_pf_efi_mount_cleanup: normal unmount failed for $mountpoint, attempting lazy unmount"
+    if umount -l "$mountpoint" 2>/dev/null; then
+      warn "_pf_efi_mount_cleanup: lazy unmount performed for $mountpoint -- flush and reference release not guaranteed"
+    else
+      warn "_pf_efi_mount_cleanup: FAILED to unmount $mountpoint (even lazy unmount failed)"
+      return 1
+    fi
   fi
 
   # Only remove directories we created (preflight-efi-* pattern).
   if [[ "$mountpoint" == /tmp/preflight-efi-* ]]; then
     rmdir "$mountpoint" 2>/dev/null || true
   fi
+
+  return 0
 }
+
+# Backward-compatible alias — other libraries source this file and call
+# the old name.  Remove once all callers have been migrated.
+_efi_mount_cleanup() { _pf_efi_mount_cleanup "$@"; }
 
 # ---------------------------------------------------------------------------
 # Preflight checks — independently callable
@@ -111,14 +139,21 @@ preflight_efi_filesystem_is_fat() {
   esac
 }
 
-# preflight_efi_matches_slot EFI_DEVICE SLOT_LABEL
+# preflight_efi_matches_slot EFI_DEVICE SLOT_LABEL [EXPECTED_DEVICE]
 #   PF-08: Verify the EFI device belongs to the target slot by comparing
-#   PARTUUID case-insensitively against the expected device identity.
-#   Comparison is done by major:minor of the resolved device, or by
-#   PARTUUID if the device cannot be stat'd (e.g. already removed).
+#   major:minor of the resolved device against the expected device.
+#   Identity is exclusively determined by major:minor — PARTUUID fallback
+#   is intentionally omitted because matching PARTUUID with differing
+#   major:minor signals a cloned/duplicate device, which is rejected.
+#   When a duplicate PARTUUID is found across visible devices, the check
+#   fails to prevent ambiguous identity.
+#   An optional third argument EXPECTED_DEVICE bypasses the
+#   /dev/disk/by-partsets lookup (for build fixtures where partsets may
+#   not exist).
 preflight_efi_matches_slot() {
   local device="${1:?preflight_efi_matches_slot: missing device path}"
   local slot="${2:?preflight_efi_matches_slot: missing slot label}"
+  local expected_dev="${3:-}"
 
   case "$slot" in
     A | B) ;;
@@ -127,34 +162,50 @@ preflight_efi_matches_slot() {
 
   # Resolve symlinks to get the canonical device.
   local canonical
-  canonical="$(_canonicalize_efi_device "$device")"
+  if ! canonical="$(_pf_efi_canonicalize_device "$device")"; then
+    die "PF-08: could not resolve EFI device: $device"
+  fi
 
-  # Resolve the expected device via the partset symlink.
-  local expected_dev
-  expected_dev="$(readlink -f "/dev/disk/by-partsets/$slot/efi" 2>/dev/null)" \
-    || die "PF-08: cannot resolve expected EFI device for slot $slot"
+  # Use explicit expected device if provided, otherwise resolve via partsets.
+  if [[ -z "$expected_dev" ]]; then
+    expected_dev="$(readlink -f "/dev/disk/by-partsets/$slot/efi" 2>/dev/null)" \
+      || die "PF-08: cannot resolve expected EFI device for slot $slot (no expected device provided)"
+  fi
 
   if [[ ! -b "$expected_dev" ]]; then
     die "PF-08: expected EFI device for slot $slot is not a block device: $expected_dev"
   fi
 
-  # Compare by major:minor (device identity), not by pathname.
+  # Compare by major:minor — this is the authoritative identity check.
   local actual_mm expected_mm
-  actual_mm="$(_efi_dev_major_minor "$canonical")"
-  expected_mm="$(_efi_dev_major_minor "$expected_dev")"
+  if ! actual_mm="$(_pf_efi_device_major_minor "$canonical")"; then
+    die "PF-08: could not determine device identity for $canonical"
+  fi
+  if ! expected_mm="$(_pf_efi_device_major_minor "$expected_dev")"; then
+    die "PF-08: could not determine device identity for $expected_dev"
+  fi
 
   if [[ "$actual_mm" != "$expected_mm" ]]; then
-    # Fallback: compare PARTUUIDs case-insensitively.
-    local actual_partuuid expected_partuuid
-    actual_partuuid="$(blkid -s PARTUUID -o value "$canonical" 2>/dev/null)" || actual_partuuid=""
-    expected_partuuid="$(blkid -s PARTUUID -o value "$expected_dev" 2>/dev/null)" || expected_partuuid=""
+    die "PF-08: EFI device does not belong to target slot $slot (major:minor $actual_mm != $expected_mm)"
+  fi
 
-    if [[ -z "$actual_partuuid" || -z "$expected_partuuid" ]]; then
-      die "PF-08: EFI device does not belong to target slot $slot (major:minor $actual_mm != $expected_mm; PARTUUID unavailable)"
-    fi
-
-    if [[ "${actual_partuuid,,}" != "${expected_partuuid,,}" ]]; then
-      die "PF-08: EFI device does not belong to target slot $slot (PARTUUID $actual_partuuid != $expected_partuuid)"
+  # Cross-check: enumerate all devices with this PARTUUID and ensure
+  # exactly one exists (the expected device). Detect cloned/duplicate devices.
+  local partuuid
+  partuuid="$(blkid -s PARTUUID -o value "$canonical" 2>/dev/null)" || partuuid=""
+  if [[ -n "$partuuid" ]]; then
+    local match_count=0
+    local dev
+    for dev in /dev/sd? /dev/nvme?n?p? /dev/mmcblk?p?; do
+      [[ -b "$dev" ]] || continue
+      local dev_uuid
+      dev_uuid="$(blkid -s PARTUUID -o value "$dev" 2>/dev/null)" || continue
+      if [[ "${dev_uuid,,}" == "${partuuid,,}" ]]; then
+        match_count=$((match_count + 1))
+      fi
+    done
+    if [[ "$match_count" -gt 1 ]]; then
+      die "PF-08: ambiguous duplicate device — $match_count devices share PARTUUID $partuuid (expected exactly 1)"
     fi
   fi
 
@@ -162,16 +213,39 @@ preflight_efi_matches_slot() {
 }
 
 # preflight_efi_mountpoint_safe EFIMNT
-#   PF-09: For temporary mount mode, verify the mountpoint is not already
-#   mounted and is empty.  Prevents stacking mounts or hiding files.
+#   PF-09: For temporary mount mode, verify the mountpoint is safe to use.
+#   - Rejects symlinks (mountpoint must be a real directory).
+#   - Creates the directory if it does not exist (single-level, not -p).
+#   - Verifies the directory is readable.
+#   - Rejects if already a mountpoint (prevents stacking).
+#   - Rejects if the directory is not empty (prevents hiding files).
 preflight_efi_mountpoint_safe() {
   local mountpoint="${1:?preflight_efi_mountpoint_safe: missing mountpoint}"
 
+  # Reject symlinks -- mountpoint must be a real directory.
+  if [[ -L "$mountpoint" ]]; then
+    die "PF-09: EFI mountpoint is a symlink (must be a real directory): $mountpoint"
+  fi
+
+  if [[ ! -d "$mountpoint" ]]; then
+    # Create the directory (single level, not -p to avoid unsafe parent creation).
+    mkdir "$mountpoint" \
+      || die "PF-09: could not create EFI mountpoint directory: $mountpoint"
+    debug "PF-09: created EFI mountpoint directory: $mountpoint"
+  fi
+
+  # Verify it's readable.
+  if [[ ! -r "$mountpoint" ]]; then
+    die "PF-09: EFI mountpoint is not readable: $mountpoint"
+  fi
+
+  # Verify not already a mountpoint.
   if mountpoint -q "$mountpoint" 2>/dev/null; then
     die "PF-09: refusing to stack or hide files with EFI mount (already a mountpoint): $mountpoint"
   fi
 
-  if [[ -d "$mountpoint" ]] && [[ -n "$(ls -A "$mountpoint" 2>/dev/null)" ]]; then
+  # Verify empty.
+  if [[ -n "$(ls -A "$mountpoint" 2>/dev/null)" ]]; then
     die "PF-09: refusing to stack or hide files with EFI mount (directory not empty): $mountpoint"
   fi
 
@@ -180,89 +254,131 @@ preflight_efi_mountpoint_safe() {
 
 # preflight_efi_not_mounted_elsewhere EFI_DEVICE
 #   PF-10: For temporary mount mode, verify the device is not already mounted.
+#   Uses MAJ:MIN comparison via findmnt to reliably detect mounts even for
+#   device aliases, device-mapper paths, and bind mounts.
 #   This prevents accidentally operating on a device that is in use.
 preflight_efi_not_mounted_elsewhere() {
   local device="${1:?preflight_efi_not_mounted_elsewhere: missing device path}"
 
   local canonical
-  canonical="$(_canonicalize_efi_device "$device")"
+  if ! canonical="$(_pf_efi_canonicalize_device "$device")"; then
+    die "PF-10: could not resolve EFI device: $device"
+  fi
+  [[ -n "$canonical" ]] || die "PF-10: empty canonical device for: $device"
 
-  local mounts
-  mounts="$(findmnt -rn -S "$canonical" 2>/dev/null)" || mounts=""
+  local dev_mm
+  if ! dev_mm="$(_pf_efi_device_major_minor "$canonical")"; then
+    die "PF-10: could not determine device identity: $canonical"
+  fi
+  [[ -n "$dev_mm" ]] || die "PF-10: empty device identity for: $canonical"
 
-  if [[ -n "$mounts" ]]; then
-    die "PF-10: EFI device is already mounted: $canonical"
+  # Check if ANY mount point has this device's major:minor.
+  local mounted_mm
+  mounted_mm="$(findmnt -nro MAJ:MIN -S "$canonical" 2>/dev/null | head -1)" || mounted_mm=""
+
+  if [[ -n "$mounted_mm" ]]; then
+    die "PF-10: EFI device is already mounted: $canonical (major:minor $mounted_mm)"
   fi
 
-  debug "PF-10: EFI device is not mounted elsewhere: $canonical"
+  debug "PF-10: EFI device is not mounted elsewhere: $canonical (major:minor $dev_mm)"
 }
 
 # preflight_efi_existing_mount_correct EFIMNT EFI_DEVICE
-#   PF-11: For existing mount mode, verify the backing device of the
-#   existing mount matches the expected EFI device by major:minor.
+#   PF-11: For existing mount mode, fully validate the existing mount:
+#   - Verifies the path is actually a mountpoint (mountpoint -q).
+#   - Retrieves MAJ:MIN, FSTYPE, and FSROOT via findmnt.
+#   - Requires FSTYPE to be FAT (vfat/fat/fat32).
+#   - Requires FSROOT to be / (prevents subdirectory bind mounts).
+#   - Verifies the backing device's major:minor matches the expected device.
 preflight_efi_existing_mount_correct() {
   local mountpoint="${1:?preflight_efi_existing_mount_correct: missing mountpoint}"
   local device="${2:?preflight_efi_existing_mount_correct: missing device path}"
 
-  local canonical_dev
-  canonical_dev="$(_canonicalize_efi_device "$device")"
+  # Verify it's actually a mountpoint.
+  if ! mountpoint -q "$mountpoint" 2>/dev/null; then
+    die "PF-11: path is not a mountpoint: $mountpoint"
+  fi
 
-  # Find the device backing the existing mount.
-  local backing_dev
-  backing_dev="$(findmnt -rn -o SOURCE "$mountpoint" 2>/dev/null | head -1)" || backing_dev=""
+  # Get mount properties via findmnt.
+  local mount_mm mount_fstype mount_fsroot
+  mount_mm="$(findmnt -nro MAJ:MIN -M "$mountpoint" 2>/dev/null | head -1)" || mount_mm=""
+  mount_fstype="$(findmnt -nro FSTYPE -M "$mountpoint" 2>/dev/null | head -1)" || mount_fstype=""
+  mount_fsroot="$(findmnt -nro FSROOT -M "$mountpoint" 2>/dev/null | head -1)" || mount_fsroot=""
 
-  if [[ -z "$backing_dev" ]]; then
+  if [[ -z "$mount_mm" ]]; then
     die "PF-11: cannot determine backing device for EFI mount: $mountpoint"
   fi
 
-  # Resolve the backing device to its canonical form.
-  local canonical_backing
-  canonical_backing="$(realpath "$backing_dev" 2>/dev/null)" || canonical_backing="$backing_dev"
+  # Validate FSTYPE.
+  case "$mount_fstype" in
+    vfat|fat|fat32) ;;
+    *) die "PF-11: EFI mount has unexpected filesystem type ($mount_fstype): $mountpoint" ;;
+  esac
 
-  # Compare by major:minor.
-  local mount_mm dev_mm
-  mount_mm="$(_efi_dev_major_minor "$canonical_backing")"
-  dev_mm="$(_efi_dev_major_minor "$canonical_dev")"
-
-  if [[ "$mount_mm" != "$dev_mm" ]]; then
-    die "PF-11: EFI mount does not match target device (mount=$canonical_backing major:minor=$mount_mm, device=$canonical_dev major:minor=$dev_mm)"
+  # Validate FSROOT is / (not a subdirectory bind mount).
+  if [[ "$mount_fsroot" != "/" ]]; then
+    die "PF-11: EFI mount has non-root FSROOT ($mount_fsroot) — possible subdirectory bind mount: $mountpoint"
   fi
 
-  debug "PF-11: EFI existing mount matches target device (major:minor $mount_mm)"
+  # Validate device identity by major:minor.
+  local canonical_dev dev_mm
+  if ! canonical_dev="$(_pf_efi_canonicalize_device "$device")"; then
+    die "PF-11: could not resolve EFI device: $device"
+  fi
+  [[ -n "$canonical_dev" ]] || die "PF-11: empty canonical device for: $device"
+
+  if ! dev_mm="$(_pf_efi_device_major_minor "$canonical_dev")"; then
+    die "PF-11: could not determine device identity: $canonical_dev"
+  fi
+  [[ -n "$dev_mm" ]] || die "PF-11: empty device identity for: $canonical_dev"
+
+  if [[ "$mount_mm" != "$dev_mm" ]]; then
+    die "PF-11: EFI mount does not match target device (mount major:minor=$mount_mm, device major:minor=$dev_mm)"
+  fi
+
+  debug "PF-11: EFI existing mount is correct (major:minor $mount_mm, fstype=$mount_fstype, fsroot=$mount_fsroot)"
 }
 
 # preflight_efi_existing_mount_writable EFIMNT
 #   PF-12: For existing mount mode, verify the mount is writable.
-#   Checks mount options for 'ro' flag via findmnt.
+#   - Requires mount options to be available.
+#   - Rejects 'ro' (read-only) flag.
+#   - Requires explicit 'rw' flag present (not just absence of 'ro').
 preflight_efi_existing_mount_writable() {
   local mountpoint="${1:?preflight_efi_existing_mount_writable: missing mountpoint}"
 
   local mount_opts
-  mount_opts="$(findmnt -rn -o OPTIONS "$mountpoint" 2>/dev/null)" || mount_opts=""
+  mount_opts="$(findmnt -nro OPTIONS "$mountpoint" 2>/dev/null)" || mount_opts=""
 
-  if [[ -n "$mount_opts" ]]; then
-    # Match 'ro' as a standalone comma-separated mount option (not a substring
-    # like 'rootfs' or 'proc').
-    if [[ ",$mount_opts," =~ ,ro, || "$mount_opts" == ro || "$mount_opts" =~ ^ro, || "$mount_opts" =~ ,ro$ ]]; then
-      die "PF-12: EFI mount is not writable (mounted read-only): $mountpoint"
-    fi
+  if [[ -z "$mount_opts" ]]; then
+    die "PF-12: cannot determine mount options for EFI mount: $mountpoint"
   fi
 
-  debug "PF-12: EFI existing mount is writable: $mountpoint"
+  # Check for explicit 'ro' (read-only).
+  if [[ ",$mount_opts," =~ ,ro, || "$mount_opts" == ro || "$mount_opts" =~ ^ro, || "$mount_opts" =~ ,ro$ ]]; then
+    die "PF-12: EFI mount is not writable (mounted read-only): $mountpoint"
+  fi
+
+  # Verify 'rw' is explicitly present (not just absence of 'ro').
+  if ! [[ ",$mount_opts," =~ ,rw, || "$mount_opts" == rw || "$mount_opts" =~ ^rw, || "$mount_opts" =~ ,rw$ ]]; then
+    die "PF-12: EFI mount options do not include 'rw' flag: $mountpoint (options: $mount_opts)"
+  fi
+
+  debug "PF-12: EFI existing mount is writable (options: $mount_opts)"
 }
 
 # preflight_efi_mountable EFI_DEVICE EFIMNT
-#   PF-13: Mount the EFI device at the given mountpoint.  Dies if mount fails.
-#   The caller (preflight_efi_validate_temporary) is responsible for installing
-#   the RETURN trap so that cleanup lasts until the orchestrator returns.
+#   PF-13: Mount the EFI device at the given mountpoint.  Dies if mount
+#   fails.  This function does NOT install any cleanup trap -- the mount
+#   lifecycle is owned by the caller (outer transaction).
+#   The mountpoint directory must already exist (created by PF-09 or the caller).
 preflight_efi_mountable() {
   local device="${1:?preflight_efi_mountable: missing device path}"
   local mountpoint="${2:?preflight_efi_mountable: missing mountpoint}"
 
-  # Ensure the mountpoint directory exists.
+  # Directory should already exist (created by PF-09 or the caller).
   if [[ ! -d "$mountpoint" ]]; then
-    mkdir -p "$mountpoint" \
-      || die "PF-13: could not create EFI mountpoint: $mountpoint"
+    die "PF-13: EFI mountpoint does not exist: $mountpoint"
   fi
 
   if ! mount -o rw "$device" "$mountpoint" 2>/dev/null; then
@@ -272,37 +388,40 @@ preflight_efi_mountable() {
   debug "PF-13: EFI device mounted: $device -> $mountpoint"
 }
 
-# preflight_efi_reject_corrupt EFI_DEVICE EFIMNT
+# preflight_efi_reject_corrupt EFI_DEVICE
 #   PF-14: Verify the device's partition metadata is consistent with a valid
 #   FAT EFI partition using blkid.  Does NOT mount the device (PF-13 will
 #   handle the actual mount and catch mount-time corruption).
+#   Does NOT require SEC_TYPE — real SteamOS EFI partitions may not report
+#   it.
 preflight_efi_reject_corrupt() {
   local device="${1:?preflight_efi_reject_corrupt: missing device path}"
-  local mountpoint="${2:?preflight_efi_reject_corrupt: missing mountpoint}"
 
-  # Verify SEC_TYPE is consistent with a genuine EFI System Partition.
-  # A corrupt or non-ESP partition may report TYPE=vfat but lack the
-  # correct SEC_TYPE, or blkid may fail entirely.
-  local sec_type
-  sec_type="$(blkid -s SEC_TYPE -o value "$device" 2>/dev/null)" || sec_type=""
+  # Validate partition metadata is consistent with a valid FAT EFI partition.
+  # Real SteamOS partitions may not report SEC_TYPE — do NOT require it.
 
-  if [[ -z "$sec_type" ]]; then
-    die "PF-14: EFI partition metadata is corrupt or missing (SEC_TYPE empty): $device"
+  local fstype
+  fstype="$(blkid -s TYPE -o value "$device" 2>/dev/null)" || fstype=""
+  case "$fstype" in
+    vfat|fat|fat32) ;;
+    *) die "PF-14: EFI partition has unexpected filesystem type (${fstype:-<unknown>}): $device" ;;
+  esac
+
+  # PARTUUID should be present for a real partition.
+  local partuuid
+  partuuid="$(blkid -s PARTUUID -o value "$device" 2>/dev/null)" || partuuid=""
+  if [[ -z "$partuuid" ]]; then
+    die "PF-14: EFI partition has no PARTUUID (may be corrupt or not a real partition): $device"
   fi
 
-  case "$sec_type" in
-    msfat | fat12 | fat16 | fat32)
-      debug "PF-14: EFI partition metadata is valid (SEC_TYPE=$sec_type): $device"
-      ;;
-    *)
-      die "PF-14: EFI partition metadata is corrupt or invalid (SEC_TYPE=$sec_type): $device"
-      ;;
-  esac
+  debug "PF-14: EFI partition metadata is valid (TYPE=$fstype, PARTUUID=$partuuid): $device"
 }
 
 # preflight_efi_accepts_writes EFI_DEVICE EFIMNT
 #   PF-15: Verify the mounted EFI filesystem accepts writes by creating
 #   and removing a temporary file.
+#   Note: if interrupted between mktemp and rm, the test file may remain.
+#   The caller's cleanup should handle removal of .preflight-writable-* files.
 preflight_efi_accepts_writes() {
   local device="${1:?preflight_efi_accepts_writes: missing device path}"
   local mountpoint="${2:?preflight_efi_accepts_writes: missing mountpoint}"
@@ -321,16 +440,19 @@ preflight_efi_accepts_writes() {
 # Orchestrators
 # ---------------------------------------------------------------------------
 
-# preflight_efi_validate_temporary EFI_DEVICE EFIMNT SLOT_LABEL
+# preflight_efi_validate_temporary EFI_DEVICE EFIMNT SLOT_LABEL [EXPECTED_DEVICE]
 #   Validate the EFI device for temporary mount mode.
-#   Creates and owns a private mount at EFIMNT.  The RETURN trap for
-#   cleanup is installed here (the orchestrator) so it fires when this
-#   function returns — not when the mountable helper returns.
-#   Caller must unset the RETURN trap after successful use.
+#   Mounts the device at EFIMNT and verifies it is writable.  Does NOT
+#   install any RETURN trap for cleanup — the caller (outer transaction)
+#   owns the mount lifecycle and must unmount when done.
+#   An optional fourth argument EXPECTED_DEVICE skips the /dev/disk/by-partsets
+#   lookup in the slot identity check (used in build fixtures where partsets
+#   may not exist).
 preflight_efi_validate_temporary() {
   local device="${1:?preflight_efi_validate_temporary: missing device path}"
   local mountpoint="${2:?preflight_efi_validate_temporary: missing mountpoint}"
   local slot="${3:?preflight_efi_validate_temporary: missing slot label}"
+  local expected_dev="${4:-}"
 
   debug "preflight_efi_validate_temporary: validating $device for slot $slot"
 
@@ -341,7 +463,11 @@ preflight_efi_validate_temporary() {
   preflight_efi_filesystem_is_fat "$device"
 
   # PF-08: Slot identity check.
-  preflight_efi_matches_slot "$device" "$slot"
+  if [[ -n "$expected_dev" ]]; then
+    preflight_efi_matches_slot "$device" "$slot" "$expected_dev"
+  else
+    preflight_efi_matches_slot "$device" "$slot"
+  fi
 
   # PF-09: Mountpoint safety check.
   preflight_efi_mountpoint_safe "$mountpoint"
@@ -350,14 +476,10 @@ preflight_efi_validate_temporary() {
   preflight_efi_not_mounted_elsewhere "$device"
 
   # PF-14: Reject corrupt partition (metadata probe — no mount).
-  preflight_efi_reject_corrupt "$device" "$mountpoint"
+  preflight_efi_reject_corrupt "$device"
 
   # PF-13: Mount the device.
   preflight_efi_mountable "$device" "$mountpoint"
-
-  # Install RETURN trap here in the orchestrator so cleanup persists
-  # until this function returns (covering the write test below).
-  trap "_efi_mount_cleanup '$mountpoint'" RETURN
 
   # PF-15: Write test.
   preflight_efi_accepts_writes "$device" "$mountpoint"
@@ -365,13 +487,16 @@ preflight_efi_validate_temporary() {
   debug "preflight_efi_validate_temporary: all checks passed for $device"
 }
 
-# preflight_efi_validate_existing EFIMNT EFI_DEVICE SLOT_LABEL
+# preflight_efi_validate_existing EFIMNT EFI_DEVICE SLOT_LABEL [EXPECTED_DEVICE]
 #   Validate an existing EFI mount for reuse.
 #   Verifies the mount is backed by the correct device and is writable.
+#   An optional fourth argument EXPECTED_DEVICE skips the
+#   /dev/disk/by-partsets lookup in the slot identity check.
 preflight_efi_validate_existing() {
   local mountpoint="${1:?preflight_efi_validate_existing: missing mountpoint}"
   local device="${2:?preflight_efi_validate_existing: missing device path}"
   local slot="${3:?preflight_efi_validate_existing: missing slot label}"
+  local expected_dev="${4:-}"
 
   debug "preflight_efi_validate_existing: validating existing mount $mountpoint for device $device (slot $slot)"
 
@@ -382,7 +507,11 @@ preflight_efi_validate_existing() {
   preflight_efi_filesystem_is_fat "$device"
 
   # PF-08: Slot identity check.
-  preflight_efi_matches_slot "$device" "$slot"
+  if [[ -n "$expected_dev" ]]; then
+    preflight_efi_matches_slot "$device" "$slot" "$expected_dev"
+  else
+    preflight_efi_matches_slot "$device" "$slot"
+  fi
 
   # PF-11: Existing mount is backed by the correct device.
   preflight_efi_existing_mount_correct "$mountpoint" "$device"

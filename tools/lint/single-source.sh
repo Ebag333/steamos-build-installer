@@ -6,10 +6,17 @@
 # Files in lib/ (except library-loader.sh itself) must not use `source`
 # to load other .sh libraries — they receive everything via the loader.
 #
+# Also enforces the BASH_SOURCE guard pattern for library files in lib/.
+# Library files must contain a guard that prevents accidental direct execution:
+#   if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then ... fi
+# This ensures libraries can only be used when sourced, not run as standalone
+# scripts.
+#
 # Exceptions (allowlisted):
 #   - lib/library-loader.sh  — the centralized loader itself
-#   - Entry points           — steamos-build.sh, lib/backend.sh, lib/repatch.sh
+#   - Entry points           — steamos-build.sh, lib/backend.sh, lib/repatch.sh, etc.
 #   - Build subsystem        — lib/build/** (has its own internal architecture)
+#   - Configs                — lib/configs/** (standalone build recipe scripts)
 #   - Optimizations          — lib/optimizations/entry.sh (dynamic module loading)
 #   - Config sourcing        — sourcing .conf files is always allowed
 #   - Inline ignore          — lines with "lint-ignore: single-source" are skipped
@@ -65,12 +72,18 @@ ALLOWED_ENTRYPOINTS=(
   "lib/backend.sh"
   "lib/repatch.sh"
   "lib/customization.sh"
+  "lib/atomupd-wrapper.sh"
+  "lib/update-wrapper.sh"
+  "lib/check-deps.sh"
+  "lib/scan-hardware.sh"
+  "lib/diagnostics/scan-hardware.sh"
   "test-aotofu-e2e.sh"
 )
 
 # Directories whose internal sourcing is self-contained
 ALLOWED_SUBSYSTEMS=(
   "lib/build"
+  "lib/configs"
   "lib/optimizations"
   "lib/pipelines"
 )
@@ -134,13 +147,57 @@ while IFS= read -r -d '' file; do
 done < <(find "$REPO_ROOT" -name '*.sh' -print0)
 
 # ---------------------------------------------------------------------------
+# BASH_SOURCE Guard Check
+# ---------------------------------------------------------------------------
+
+# Check that library files in lib/ have the BASH_SOURCE guard pattern.
+# This prevents accidental direct execution of sourced libraries.
+guard_pattern='if [[ "${BASH_SOURCE[0]}" == "${0}"'
+
+while IFS= read -r -d '' file; do
+  rel="${file#"$REPO_ROOT"/}"
+  
+  # Only check lib/ directory
+  [[ "$rel" == lib/* ]] || continue
+  
+  # Skip the loader itself
+  [[ "$rel" == "$LOADER" ]] && continue
+  
+  # Skip allowlisted entry points
+  is_entrypoint=0
+  for ep in "${ALLOWED_ENTRYPOINTS[@]}"; do
+    [[ "$rel" == "$ep" ]] && is_entrypoint=1 && break
+  done
+  [[ $is_entrypoint -eq 1 ]] && continue
+  
+  # Skip allowlisted subsystems
+  is_subsystem=0
+  for sub in "${ALLOWED_SUBSYSTEMS[@]}"; do
+    [[ "$rel" == "$sub"/* ]] && is_subsystem=1 && break
+  done
+  [[ $is_subsystem -eq 1 ]] && continue
+  
+  # Skip files with inline ignore
+  if head -n 20 "$file" | grep -q 'lint-ignore:[[:space:]]*single-source'; then
+    continue
+  fi
+  
+  # Check for guard pattern
+  if ! grep -qF "$guard_pattern" "$file"; then
+    echo "$rel:1: missing BASH_SOURCE guard — add 'if [[ \"\${BASH_SOURCE[0]}\" == \"\${0}\" ]]; then ... fi' to prevent direct execution"
+    violations=$((violations + 1))
+  fi
+done < <(find "$REPO_ROOT/lib" -name '*.sh' -print0)
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 
 if [[ $violations -gt 0 ]]; then
   echo ""
-  echo "FAIL: $violations source statement(s) found outside lib/library-loader.sh"
-  echo "Library sourcing must be centralized in lib/library-loader.sh."
+  echo "FAIL: $violations violation(s) found"
+  echo "- Source statements must be centralized in lib/library-loader.sh"
+  echo "- Library files in lib/ must have the BASH_SOURCE guard pattern"
   echo "To suppress a false positive, add:  # lint-ignore: single-source"
   exit 1
 fi
