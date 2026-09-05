@@ -284,7 +284,7 @@ preflight_resources_rauc_idle() {
   # Graceful skip for build scenarios where RAUC is not installed.
   if ! command -v rauc &>/dev/null; then
     case "$scenario" in
-      flashless|recovery|live)
+      flashless | recovery | live)
         die "PF-54c: rauc is required for '$scenario' scenario but not found on system"
         ;;
       *)
@@ -298,7 +298,7 @@ preflight_resources_rauc_idle() {
   local rauc_status
   if ! rauc_status="$(rauc status 2>/dev/null)"; then
     case "$scenario" in
-      flashless|recovery|live)
+      flashless | recovery | live)
         die "PF-54c: rauc status failed (D-Bus unavailable or rauc error) -- cannot verify system state for '$scenario' scenario"
         ;;
       *)
@@ -310,7 +310,7 @@ preflight_resources_rauc_idle() {
 
   if [[ -z "$rauc_status" ]]; then
     case "$scenario" in
-      flashless|recovery|live)
+      flashless | recovery | live)
         die "PF-54c: rauc status returned empty -- cannot verify system state for '$scenario' scenario"
         ;;
       *)
@@ -333,10 +333,10 @@ preflight_resources_rauc_idle() {
 
     # Check for active operations.
     case "$rauc_op" in
-      installing|installing-with-automatic-reboot|busy)
+      installing | installing-with-automatic-reboot | busy)
         die "PF-54c: RAUC has active operation ($rauc_op) -- cannot proceed"
         ;;
-      idle|"") ;;
+      idle | "") ;;
       *) debug "PF-54c: RAUC operation state: $rauc_op" ;;
     esac
 

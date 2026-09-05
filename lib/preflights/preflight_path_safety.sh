@@ -218,10 +218,10 @@ _pf_path_scan_transaction_artifacts() {
   if ! mapfile -d '' legacy_matches < <(find "$directory" \
     -maxdepth "$maxdepth" \
     \( \
-      -name '*.new' \
-      -o -name '*.bak' \
-      -o -name '*.tmp' \
-      -o -name '*.transaction-*' \
+    -name '*.new' \
+    -o -name '*.bak' \
+    -o -name '*.tmp' \
+    -o -name '*.transaction-*' \
     \) \
     -type f \
     -not -path "$directory/$_PREF_PATH_SAFETY_TXN_DIR/*" \
@@ -395,8 +395,7 @@ preflight_path_safety_validate_destinations() {
   local efi_dest
   for efi_dest in \
     "$efi_mount/EFI/steamos/grub.cfg" \
-    "$efi_mount/EFI/steamos/grubx64.efi" \
-    ; do
+    "$efi_mount/EFI/steamos/grubx64.efi"; do
     # For new files, validate the closest existing parent.
     local parent="$efi_dest"
     while [[ ! -e "$parent" && "$parent" != "$efi_mount" ]]; do
@@ -410,8 +409,7 @@ preflight_path_safety_validate_destinations() {
     local esp_dest
     for esp_dest in \
       "$esp_mount/SteamOS/partsets" \
-      "$esp_mount/SteamOS/conf" \
-      ; do
+      "$esp_mount/SteamOS/conf"; do
       if [[ -d "$esp_dest" ]]; then
         preflight_path_safety_destination_safe "$esp_dest" "$esp_mount" "ESP"
       fi

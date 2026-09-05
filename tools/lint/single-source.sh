@@ -156,32 +156,32 @@ guard_pattern='if [[ "${BASH_SOURCE[0]}" == "${0}"'
 
 while IFS= read -r -d '' file; do
   rel="${file#"$REPO_ROOT"/}"
-  
+
   # Only check lib/ directory
   [[ "$rel" == lib/* ]] || continue
-  
+
   # Skip the loader itself
   [[ "$rel" == "$LOADER" ]] && continue
-  
+
   # Skip allowlisted entry points
   is_entrypoint=0
   for ep in "${ALLOWED_ENTRYPOINTS[@]}"; do
     [[ "$rel" == "$ep" ]] && is_entrypoint=1 && break
   done
   [[ $is_entrypoint -eq 1 ]] && continue
-  
+
   # Skip allowlisted subsystems
   is_subsystem=0
   for sub in "${ALLOWED_SUBSYSTEMS[@]}"; do
     [[ "$rel" == "$sub"/* ]] && is_subsystem=1 && break
   done
   [[ $is_subsystem -eq 1 ]] && continue
-  
+
   # Skip files with inline ignore
   if head -n 20 "$file" | grep -q 'lint-ignore:[[:space:]]*single-source'; then
     continue
   fi
-  
+
   # Check for guard pattern
   if ! grep -qF "$guard_pattern" "$file"; then
     echo "$rel:1: missing BASH_SOURCE guard — add 'if [[ \"\${BASH_SOURCE[0]}\" == \"\${0}\" ]]; then ... fi' to prevent direct execution"

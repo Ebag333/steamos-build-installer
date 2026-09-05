@@ -66,7 +66,10 @@ validate_grub_structure() {
   local rc=0
 
   # ── 1. grub.cfg exists and is nonempty ───────────────────────────────────
-  test_harness_assert_file_exists "$grub_cfg" || { rc=1; return 1; }
+  test_harness_assert_file_exists "$grub_cfg" || {
+    rc=1
+    return 1
+  }
 
   if [[ ! -s "$grub_cfg" ]]; then
     echo "    ASSERTION FAILED: grub.cfg is empty: '$grub_cfg'" >&2
@@ -141,7 +144,7 @@ validate_grub_structure() {
     if [[ "$found_uuid" != "$expected_uuid" ]]; then
       stale_uuid_found=1
     fi
-  done < "$grub_cfg"
+  done <"$grub_cfg"
 
   # Now do the positive assertion: at least one search line must use expected_uuid
   local expected_uuid_count
@@ -185,7 +188,7 @@ validate_grub_structure() {
       fi
       test_harness_assert_file_exists "$full_kernel_path" || { rc=1; }
     fi
-  done <<< "$non_comment_content"
+  done <<<"$non_comment_content"
 
   # ── 7. Initramfs paths referenced by initrd entries exist in rootfs ──────
   # Extract initramfs paths from 'initrd /path/to/initramfs-...' lines.
@@ -198,7 +201,7 @@ validate_grub_structure() {
     if [[ -n "$initrd_line" ]]; then
       # Split on spaces — initrd can have multiple initrd paths
       local -a initrd_paths
-      read -ra initrd_paths <<< "$initrd_line"
+      read -ra initrd_paths <<<"$initrd_line"
       local initrd_path
       for initrd_path in "${initrd_paths[@]}"; do
         [[ -z "$initrd_path" ]] && continue
@@ -211,10 +214,13 @@ validate_grub_structure() {
         test_harness_assert_file_exists "$full_initrd_path" || { rc=1; }
       done
     fi
-  done <<< "$non_comment_content"
+  done <<<"$non_comment_content"
 
   # ── 8. grubx64.efi exists and is a valid PE binary (MZ header) ──────────
-  test_harness_assert_file_exists "$grubx64" || { rc=1; return $rc; }
+  test_harness_assert_file_exists "$grubx64" || {
+    rc=1
+    return $rc
+  }
 
   # Check MZ header (first two bytes must be 0x4D 0x5A = "MZ")
   local mz_header
@@ -346,7 +352,10 @@ validate_boot_paths() {
   local rc=0
 
   # ── 1. /boot directory exists and is a real directory ───────────────────
-  test_harness_assert_dir_exists "$boot_dir" || { rc=1; return 1; }
+  test_harness_assert_dir_exists "$boot_dir" || {
+    rc=1
+    return 1
+  }
 
   if [[ -L "$boot_dir" ]]; then
     echo "    ASSERTION FAILED: /boot is a symlink (escape risk): '$boot_dir'" >&2
@@ -455,17 +464,23 @@ validate_partsets() {
   local valid_roles="rootfs efi var"
 
   # ── 1. Partsets directory exists ───────────────────────────────────────
-  test_harness_assert_dir_exists "$partsets_dir" || { rc=1; return 1; }
+  test_harness_assert_dir_exists "$partsets_dir" || {
+    rc=1
+    return 1
+  }
 
   # Split expected partitions into an array
   local -a expected_parts
-  IFS=',' read -ra expected_parts <<< "$expected_partitions"
+  IFS=',' read -ra expected_parts <<<"$expected_partitions"
 
   for part in "${expected_parts[@]}"; do
     local partset_file="$partsets_dir/$part"
 
     # ── 2. Partset file exists ──────────────────────────────────────────
-    test_harness_assert_file_exists "$partset_file" || { rc=1; continue; }
+    test_harness_assert_file_exists "$partset_file" || {
+      rc=1
+      continue
+    }
 
     # ── 3. Partset file is not empty ────────────────────────────────────
     if [[ ! -s "$partset_file" ]]; then
@@ -487,7 +502,7 @@ validate_partsets() {
 
       # Check line has exactly two fields
       local role uuid
-      read -r role uuid _extra <<< "$line"
+      read -r role uuid _extra <<<"$line"
       if [[ -z "$role" || -z "$uuid" || -n "${_extra:-}" ]]; then
         echo "    ASSERTION FAILED: partset $part line $line_num has invalid format (expected 'role PARTUUID'): '$line'" >&2
         test_harness_fail "invalid partset line format in $part"
@@ -533,7 +548,7 @@ validate_partsets() {
       fi
       seen_uuids+=("$uuid")
 
-    done < "$partset_file"
+    done <"$partset_file"
   done
 
   return $rc
@@ -575,20 +590,26 @@ validate_bootconf() {
   local rc=0
 
   # ── 1. Conf directory exists ──────────────────────────────────────────
-  test_harness_assert_dir_exists "$conf_dir" || { rc=1; return 1; }
+  test_harness_assert_dir_exists "$conf_dir" || {
+    rc=1
+    return 1
+  }
 
   # Split expected files and required fields into arrays
   local -a conf_files
-  IFS=',' read -ra conf_files <<< "$expected_conf_files"
+  IFS=',' read -ra conf_files <<<"$expected_conf_files"
 
   local -a required_fields_arr
-  IFS=',' read -ra required_fields_arr <<< "$required_fields"
+  IFS=',' read -ra required_fields_arr <<<"$required_fields"
 
   for conf_file in "${conf_files[@]}"; do
     local conf_path="$conf_dir/$conf_file"
 
     # ── 2. Bootconf file exists ─────────────────────────────────────────
-    test_harness_assert_file_exists "$conf_path" || { rc=1; continue; }
+    test_harness_assert_file_exists "$conf_path" || {
+      rc=1
+      continue
+    }
 
     # ── 3. Bootconf file is not empty ───────────────────────────────────
     if [[ ! -s "$conf_path" ]]; then
@@ -693,7 +714,7 @@ validate_cross_artifact_consistency() {
         fi
         test_harness_assert_file_exists "$full_path" || { rc=1; }
       fi
-    done <<< "$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
+    done <<<"$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
   fi
 
   # ── 3. grubx64.efi binary contains EXPECTED_UUID ─────────────────────
@@ -719,13 +740,13 @@ validate_cross_artifact_consistency() {
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
       [[ -z "${line// /}" ]] && continue
       local role uuid
-      read -r role uuid _extra <<< "$line"
+      read -r role uuid _extra <<<"$line"
       if [[ -n "$uuid" ]] && ! [[ "$uuid" =~ $partuuid_pattern ]]; then
         echo "    ASSERTION FAILED: partset self has invalid PARTUUID: '$uuid' for role '$role'" >&2
         test_harness_fail "invalid PARTUUID in self partset"
         rc=1
       fi
-    done < "$self_partset"
+    done <"$self_partset"
   fi
 
   # ── 5. grub.cfg UUID is consistent with EFI binary UUID ───────────────
@@ -805,7 +826,7 @@ validate_transaction_phase() {
     local label="$2"
 
     if [[ ! -d "$scan_dir" ]]; then
-      return 0  # Non-existent dir is not an error
+      return 0 # Non-existent dir is not an error
     fi
 
     local -a found_artifacts=()

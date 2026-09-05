@@ -46,7 +46,7 @@ derive_uuid() {
 
   # Set variant bits (10xx) at nibble 16
   local variant_nibble
-  variant_nibble="$(printf '%x' $(( (0x${raw:16:1} & 0x3) | 0x8 )))"
+  variant_nibble="$(printf '%x' $(((0x${raw:16:1} & 0x3) | 0x8)))"
   raw="${raw:0:16}${variant_nibble}${raw:17}"
 
   echo "${raw:0:8}-${raw:8:4}-${raw:12:4}-${raw:16:4}-${raw:20:12}"
@@ -69,7 +69,7 @@ derive_partuuid() {
   raw="${raw:0:12}4${raw:13}"
 
   local variant_nibble
-  variant_nibble="$(printf '%x' $(( (0x${raw:16:1} & 0x3) | 0x8 )))"
+  variant_nibble="$(printf '%x' $(((0x${raw:16:1} & 0x3) | 0x8)))"
   raw="${raw:0:16}${variant_nibble}${raw:17}"
 
   echo "${raw:0:8}-${raw:8:4}-${raw:12:4}-${raw:16:4}-${raw:20:12}"
@@ -87,7 +87,7 @@ populate_mock_grub_cfg() {
   local rootfs_uuid="${2:?populate_mock_grub_cfg: missing rootfs_uuid}"
   local kernel_version="${3:-6.1.52-neptune-61}"
 
-  cat > "$grub_cfg" <<GRUB_CFG_EOF
+  cat >"$grub_cfg" <<GRUB_CFG_EOF
 # Auto-generated mock grub.cfg for testing
 set default=0
 set timeout=3
@@ -142,7 +142,7 @@ populate_mock_grubx64_efi() {
   mkdir -p "$efi_dir"
 
   # Create a 512-byte zero-filled file, then poke in the headers.
-  dd if=/dev/zero bs=512 count=1 2>/dev/null > "$efi_path"
+  dd if=/dev/zero bs=512 count=1 2>/dev/null >"$efi_path"
 
   # Write individual bytes via printf + dd
   # MZ header
@@ -214,16 +214,16 @@ create_mock_efi() {
   partuuid_esp="$(derive_partuuid "$ns" "esp")"
 
   # Slot A partset
-  echo "rootfs $(derive_partuuid "$ns" "rootfs-A")" > "$efi_dir/SteamOS/partsets/A"
-  echo "efi ${partuuid_a}" >> "$efi_dir/SteamOS/partsets/A"
-  echo "var $(derive_partuuid "$ns" "var-A")" >> "$efi_dir/SteamOS/partsets/A"
+  echo "rootfs $(derive_partuuid "$ns" "rootfs-A")" >"$efi_dir/SteamOS/partsets/A"
+  echo "efi ${partuuid_a}" >>"$efi_dir/SteamOS/partsets/A"
+  echo "var $(derive_partuuid "$ns" "var-A")" >>"$efi_dir/SteamOS/partsets/A"
 
   # Slot B partset (only if multi-slot)
   if [[ "$slot_count" -ge 2 ]]; then
     partuuid_b="$(derive_partuuid "$ns" "efi-B")"
-    echo "rootfs $(derive_partuuid "$ns" "rootfs-B")" > "$efi_dir/SteamOS/partsets/B"
-    echo "efi ${partuuid_b}" >> "$efi_dir/SteamOS/partsets/B"
-    echo "var $(derive_partuuid "$ns" "var-B")" >> "$efi_dir/SteamOS/partsets/B"
+    echo "rootfs $(derive_partuuid "$ns" "rootfs-B")" >"$efi_dir/SteamOS/partsets/B"
+    echo "efi ${partuuid_b}" >>"$efi_dir/SteamOS/partsets/B"
+    echo "var $(derive_partuuid "$ns" "var-B")" >>"$efi_dir/SteamOS/partsets/B"
   fi
 }
 
@@ -242,7 +242,7 @@ create_mock_esp() {
   mkdir -p "$esp_dir/SteamOS/conf"
 
   # Generate A.conf (always present)
-  cat > "$esp_dir/SteamOS/conf/A.conf" <<BOOTCONF_A_EOF
+  cat >"$esp_dir/SteamOS/conf/A.conf" <<BOOTCONF_A_EOF
 # Bootconf for slot A (mock)
 title=SteamOS (slot A)
 image-invalid=0
@@ -251,7 +251,7 @@ BOOTCONF_A_EOF
 
   # Generate B.conf (only for multi-slot)
   if [[ "$slot_count" -ge 2 ]]; then
-    cat > "$esp_dir/SteamOS/conf/B.conf" <<BOOTCONF_B_EOF
+    cat >"$esp_dir/SteamOS/conf/B.conf" <<BOOTCONF_B_EOF
 # Bootconf for slot B (mock)
 title=SteamOS (slot B)
 image-invalid=1
@@ -294,7 +294,7 @@ create_mock_topology() {
   var_a_partuuid="$(derive_partuuid "$ns" "var-A")"
   var_b_partuuid="$(derive_partuuid "$ns" "var-B")"
 
-  cat > "$metadata_dir/topology.json" <<TOPOLOGY_EOF
+  cat >"$metadata_dir/topology.json" <<TOPOLOGY_EOF
 {
   "scenario": "${scenario}",
   "current_slot": "${current_slot}",
@@ -349,7 +349,7 @@ create_mock_topology() {
 TOPOLOGY_EOF
 
   # Generate artifact manifest (lists real target paths inside EFI)
-  cat > "$metadata_dir/artifact-manifest.json" <<MANIFEST_EOF
+  cat >"$metadata_dir/artifact-manifest.json" <<MANIFEST_EOF
 {
   "efi_artifacts": [
     "EFI/steamos/grub.cfg",
@@ -388,19 +388,19 @@ create_mock_rootfs() {
 
   # Kernel - nonempty regular file
   dd if=/dev/urandom bs=1024 count=32 \
-     of="$rootfs_dir/boot/vmlinuz-${kernel_version}" 2>/dev/null
+    of="$rootfs_dir/boot/vmlinuz-${kernel_version}" 2>/dev/null
 
   # Initramfs - nonempty regular file
   dd if=/dev/urandom bs=1024 count=64 \
-     of="$rootfs_dir/boot/initramfs-${kernel_version}.img" 2>/dev/null
+    of="$rootfs_dir/boot/initramfs-${kernel_version}.img" 2>/dev/null
 
   # AMD microcode initrd
   dd if=/dev/urandom bs=1024 count=16 \
-     of="$rootfs_dir/boot/amd-ucode.img" 2>/dev/null
+    of="$rootfs_dir/boot/amd-ucode.img" 2>/dev/null
 
   # GRUB persistent defaults
   mkdir -p "$rootfs_dir/etc/default"
-  cat > "$rootfs_dir/etc/default/grub" <<GRUB_DEFAULT_EOF
+  cat >"$rootfs_dir/etc/default/grub" <<GRUB_DEFAULT_EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
 GRUB_CMDLINE_LINUX_DEFAULT=""
@@ -409,7 +409,7 @@ GRUB_DISABLE_UUID=true
 GRUB_DEFAULT_EOF
 
   # SteamOS GRUB defaults (persistent parameter storage)
-  cat > "$rootfs_dir/etc/default/grub-steamos" <<STEAMOS_GRUB_EOF
+  cat >"$rootfs_dir/etc/default/grub-steamos" <<STEAMOS_GRUB_EOF
 # SteamOS-specific GRUB configuration
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_CMDLINE_LINUX=""
@@ -417,7 +417,7 @@ STEAMOS_GRUB_EOF
 
   # Atomic-update keep-list directory
   mkdir -p "$rootfs_dir/etc/atomic-update.conf.d"
-  cat > "$rootfs_dir/etc/atomic-update.conf.d/keep-list.conf" <<KEEPLIST_EOF
+  cat >"$rootfs_dir/etc/atomic-update.conf.d/keep-list.conf" <<KEEPLIST_EOF
 # Files to preserve across atomic updates
 /boot/vmlinuz-*
 /boot/initramfs-*
@@ -429,7 +429,7 @@ KEEPLIST_EOF
   # os-release
   mkdir -p "$rootfs_dir/etc"
   mkdir -p "$rootfs_dir/usr/lib"
-  cat > "$rootfs_dir/usr/lib/os-release" <<OSRELEASE_EOF
+  cat >"$rootfs_dir/usr/lib/os-release" <<OSRELEASE_EOF
 NAME="SteamOS"
 VERSION="3.6.22"
 ID=steamos
@@ -472,7 +472,7 @@ create_mock_partset_semantics() {
   other_var_uuid="$(derive_partuuid "$ns" "var-${other_slot}")"
 
   # self = target slot's rootfs + efi + var
-  cat > "$efi_dir/SteamOS/partsets/self" <<SELF_EOF
+  cat >"$efi_dir/SteamOS/partsets/self" <<SELF_EOF
 rootfs ${target_rootfs_uuid}
 efi ${target_partuuid}
 var ${target_var_uuid}
@@ -481,7 +481,7 @@ SELF_EOF
   # For single-slot Build fixtures, other may be absent or empty
   if [[ "$slot_count" -ge 2 ]]; then
     # other = opposing slot's rootfs + efi + var
-    cat > "$efi_dir/SteamOS/partsets/other" <<OTHER_EOF
+    cat >"$efi_dir/SteamOS/partsets/other" <<OTHER_EOF
 rootfs ${other_rootfs_uuid}
 efi ${other_partuuid}
 var ${other_var_uuid}
@@ -499,7 +499,7 @@ OTHER_EOF
     var_a_uuid="$(derive_partuuid "$ns" "var-A")"
     var_b_uuid="$(derive_partuuid "$ns" "var-B")"
 
-    cat > "$efi_dir/SteamOS/partsets/all" <<ALL_EOF
+    cat >"$efi_dir/SteamOS/partsets/all" <<ALL_EOF
 rootfs ${rootfs_a_uuid}
 efi ${efi_a_uuid}
 var ${var_a_uuid}
@@ -515,7 +515,7 @@ ALL_EOF
     efi_a_uuid="$(derive_partuuid "$ns" "efi-A")"
     var_a_uuid="$(derive_partuuid "$ns" "var-A")"
 
-    cat > "$efi_dir/SteamOS/partsets/all" <<ALL_SINGLE_EOF
+    cat >"$efi_dir/SteamOS/partsets/all" <<ALL_SINGLE_EOF
 rootfs ${rootfs_a_uuid}
 efi ${efi_a_uuid}
 var ${var_a_uuid}
@@ -524,7 +524,7 @@ ALL_SINGLE_EOF
   fi
 
   # shared = esp only
-  cat > "$efi_dir/SteamOS/partsets/shared" <<SHARED_EOF
+  cat >"$efi_dir/SteamOS/partsets/shared" <<SHARED_EOF
 rootfs ${esp_partuuid}
 SHARED_EOF
 }
@@ -592,7 +592,7 @@ create_mock_boot_fixture() {
   create_mock_topology "$base_dir/metadata" "$ns" "$scenario" "$current_slot" "$target_slot"
 
   # Emit fixture context for test harness consumption
-  cat > "$base_dir/metadata/fixture-context.json" <<CONTEXT_EOF
+  cat >"$base_dir/metadata/fixture-context.json" <<CONTEXT_EOF
 {
   "scenario": "${scenario}",
   "current_slot": "${current_slot}",

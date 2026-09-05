@@ -49,13 +49,20 @@ test_b01_all_artifacts_pass_semantic_validation() {
   test_harness_begin_test "B-01: Happy path — all generated artifacts pass semantic validation"
 
   # Setup build fixture
-  build_scenario_setup || { test_harness_fail "build_scenario_setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "build_scenario_setup failed"
+    return
+  }
 
   # Register cleanup
   test_harness_register_cleanup build_scenario_teardown
 
   # Apply EFI state
-  simulate_efi_state_apply || { test_harness_fail "simulate_efi_state_apply failed"; build_scenario_teardown; return; }
+  simulate_efi_state_apply || {
+    test_harness_fail "simulate_efi_state_apply failed"
+    build_scenario_teardown
+    return
+  }
 
   local rc=0
 
@@ -86,15 +93,25 @@ test_b01_all_artifacts_pass_semantic_validation() {
 test_b02_efi_binary_generated_correctly() {
   test_harness_begin_test "B-02: EFI binary generated correctly"
 
-  build_scenario_setup || { test_harness_fail "build_scenario_setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "build_scenario_setup failed"
+    return
+  }
   test_harness_register_cleanup build_scenario_teardown
 
-  simulate_efi_state_apply || { test_harness_fail "simulate_efi_state_apply failed"; build_scenario_teardown; return; }
+  simulate_efi_state_apply || {
+    test_harness_fail "simulate_efi_state_apply failed"
+    build_scenario_teardown
+    return
+  }
 
   local grubx64="$BUILD_EFI_DIR/EFI/steamos/grubx64.efi"
 
   # Verify the file exists
-  test_harness_assert_file_exists "$grubx64" || { build_scenario_teardown; return; }
+  test_harness_assert_file_exists "$grubx64" || {
+    build_scenario_teardown
+    return
+  }
 
   # Verify it is nonempty
   local file_size
@@ -108,7 +125,10 @@ test_b02_efi_binary_generated_correctly() {
   # Verify valid PE (MZ header)
   local mz_header
   mz_header="$(dd if="$grubx64" bs=1 count=2 2>/dev/null | od -A n -t x1 | tr -d ' ')"
-  test_harness_assert_eq "$mz_header" "4d5a" || { build_scenario_teardown; return; }
+  test_harness_assert_eq "$mz_header" "4d5a" || {
+    build_scenario_teardown
+    return
+  }
 
   # Verify it contains the target UUID
   local uuid_pattern='[0-9a-fA-F]\{8\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{12\}'
@@ -121,7 +141,10 @@ test_b02_efi_binary_generated_correctly() {
     return
   fi
 
-  test_harness_assert_eq "$embedded_uuid" "$BUILD_TARGET_UUID" || { build_scenario_teardown; return; }
+  test_harness_assert_eq "$embedded_uuid" "$BUILD_TARGET_UUID" || {
+    build_scenario_teardown
+    return
+  }
 
   build_scenario_teardown
   test_harness_pass
@@ -137,15 +160,25 @@ test_b02_efi_binary_generated_correctly() {
 test_b03_grub_configuration_generated_correctly() {
   test_harness_begin_test "B-03: GRUB configuration generated correctly"
 
-  build_scenario_setup || { test_harness_fail "build_scenario_setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "build_scenario_setup failed"
+    return
+  }
   test_harness_register_cleanup build_scenario_teardown
 
-  simulate_efi_state_apply || { test_harness_fail "simulate_efi_state_apply failed"; build_scenario_teardown; return; }
+  simulate_efi_state_apply || {
+    test_harness_fail "simulate_efi_state_apply failed"
+    build_scenario_teardown
+    return
+  }
 
   local grub_cfg="$BUILD_EFI_DIR/EFI/steamos/grub.cfg"
 
   # Verify grub.cfg exists
-  test_harness_assert_file_exists "$grub_cfg" || { build_scenario_teardown; return; }
+  test_harness_assert_file_exists "$grub_cfg" || {
+    build_scenario_teardown
+    return
+  }
 
   # Verify entries use target UUID (search --fs-uuid lines reference target)
   local expected_uuid_count
@@ -205,10 +238,17 @@ test_b03_grub_configuration_generated_correctly() {
 test_b04_partsets_contain_target_identities() {
   test_harness_begin_test "B-04: Partsets contain target identities"
 
-  build_scenario_setup || { test_harness_fail "build_scenario_setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "build_scenario_setup failed"
+    return
+  }
   test_harness_register_cleanup build_scenario_teardown
 
-  simulate_efi_state_apply || { test_harness_fail "simulate_efi_state_apply failed"; build_scenario_teardown; return; }
+  simulate_efi_state_apply || {
+    test_harness_fail "simulate_efi_state_apply failed"
+    build_scenario_teardown
+    return
+  }
 
   local partsets_dir="$BUILD_EFI_DIR/SteamOS/partsets"
   local rc=0
@@ -230,7 +270,10 @@ test_b04_partsets_contain_target_identities() {
     local partset_file="$partsets_dir/$partset_name"
 
     # Verify file exists
-    test_harness_assert_file_exists "$partset_file" || { rc=1; continue; }
+    test_harness_assert_file_exists "$partset_file" || {
+      rc=1
+      continue
+    }
 
     # Verify it is a regular file (not a symlink)
     if [[ -L "$partset_file" ]]; then
@@ -254,13 +297,13 @@ test_b04_partsets_contain_target_identities() {
       [[ -z "${line// /}" ]] && continue
 
       local role uuid
-      read -r role uuid _extra <<< "$line"
+      read -r role uuid _extra <<<"$line"
       if [[ -n "$uuid" ]] && ! [[ "$uuid" =~ $partuuid_pattern ]]; then
         echo "    ASSERTION FAILED: partset '$partset_name' has invalid PARTUUID: '$uuid'" >&2
         test_harness_fail "invalid PARTUUID format in partset '$partset_name'"
         rc=1
       fi
-    done < "$partset_file"
+    done <"$partset_file"
   done
 
   # Verify "self" partset contains the exact target PARTUUIDs
@@ -271,13 +314,13 @@ test_b04_partsets_contain_target_identities() {
       [[ -z "${line// /}" ]] && continue
 
       local role uuid
-      read -r role uuid _extra <<< "$line"
+      read -r role uuid _extra <<<"$line"
       case "$role" in
         rootfs) [[ "$uuid" == "$expected_rootfs_partuuid" ]] && has_rootfs=1 ;;
-        efi)    [[ "$uuid" == "$expected_efi_partuuid" ]] && has_efi=1 ;;
-        var)    [[ "$uuid" == "$expected_var_partuuid" ]] && has_var=1 ;;
+        efi) [[ "$uuid" == "$expected_efi_partuuid" ]] && has_efi=1 ;;
+        var) [[ "$uuid" == "$expected_var_partuuid" ]] && has_var=1 ;;
       esac
-    done < "$partsets_dir/self"
+    done <"$partsets_dir/self"
 
     if [[ "$has_rootfs" -ne 1 ]]; then
       echo "    ASSERTION FAILED: self partset missing rootfs PARTUUID '$expected_rootfs_partuuid'" >&2
@@ -305,14 +348,14 @@ test_b04_partsets_contain_target_identities() {
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
       [[ -z "${line// /}" ]] && continue
       local role uuid
-      read -r role uuid _extra <<< "$line"
+      read -r role uuid _extra <<<"$line"
       if [[ "$role" == "rootfs" && "$uuid" == "$expected_rootfs_partuuid" ]]; then
         all_has_rootfs_a=1
       fi
       if [[ "$uuid" == "$expected_esp_partuuid" ]]; then
         all_has_esp=1
       fi
-    done < "$partsets_dir/all"
+    done <"$partsets_dir/all"
 
     if [[ "$all_has_rootfs_a" -ne 1 ]]; then
       echo "    ASSERTION FAILED: all partset missing rootfs-A PARTUUID" >&2
@@ -346,17 +389,27 @@ test_b04_partsets_contain_target_identities() {
 test_b05_slot_a_bootconf_created() {
   test_harness_begin_test "B-05: Slot-A bootconf created"
 
-  build_scenario_setup || { test_harness_fail "build_scenario_setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "build_scenario_setup failed"
+    return
+  }
   test_harness_register_cleanup build_scenario_teardown
 
-  simulate_efi_state_apply || { test_harness_fail "simulate_efi_state_apply failed"; build_scenario_teardown; return; }
+  simulate_efi_state_apply || {
+    test_harness_fail "simulate_efi_state_apply failed"
+    build_scenario_teardown
+    return
+  }
 
   local conf_dir="$BUILD_ESP_DIR/SteamOS/conf"
   local a_conf="$conf_dir/A.conf"
   local rc=0
 
   # Verify A.conf exists
-  test_harness_assert_file_exists "$a_conf" || { build_scenario_teardown; return; }
+  test_harness_assert_file_exists "$a_conf" || {
+    build_scenario_teardown
+    return
+  }
 
   # Verify A.conf is a regular file (not a symlink)
   if [[ -L "$a_conf" ]]; then
@@ -390,7 +443,7 @@ test_b05_slot_a_bootconf_created() {
       parse_error=1
       break
     fi
-  done <<< "$content"
+  done <<<"$content"
 
   if [[ "$parse_error" -ne 0 ]]; then
     build_scenario_teardown

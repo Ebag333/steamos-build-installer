@@ -92,16 +92,20 @@ flash_preflight() {
   set +e # diagnostic function — don't die on individual command failures
 
   IMG_BYTES="$(stat -c '%s' "$img")" || {
-    echo "Cannot determine image size: $img" >&2; return 1
+    echo "Cannot determine image size: $img" >&2
+    return 1
   }
   TARGET_BYTES="$(blockdev --getsize64 "$target")" || {
-    echo "Cannot determine target size: $target" >&2; return 1
+    echo "Cannot determine target size: $target" >&2
+    return 1
   }
   [[ -n "$IMG_BYTES" && "$IMG_BYTES" =~ ^[0-9]+$ ]] || {
-    echo "Invalid image size from stat" >&2; return 1
+    echo "Invalid image size from stat" >&2
+    return 1
   }
   [[ -n "$TARGET_BYTES" && "$TARGET_BYTES" =~ ^[0-9]+$ ]] || {
-    echo "Invalid target size from blockdev" >&2; return 1
+    echo "Invalid target size from blockdev" >&2
+    return 1
   }
 
   local img_human target_human

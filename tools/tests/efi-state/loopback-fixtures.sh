@@ -270,10 +270,10 @@ create_loopback_image() {
   local part
   for part in "${partitions[@]}"; do
     case "$part" in
-      esp)        total_size_mb=$((total_size_mb + LOOPBACK_ESP_SIZE_MB)) ;;
-      efi-*)      total_size_mb=$((total_size_mb + LOOPBACK_EFI_SIZE_MB)) ;;
-      rootfs-*)   total_size_mb=$((total_size_mb + LOOPBACK_ROOTFS_SIZE_MB)) ;;
-      var-*)      total_size_mb=$((total_size_mb + LOOPBACK_VAR_SIZE_MB)) ;;
+      esp) total_size_mb=$((total_size_mb + LOOPBACK_ESP_SIZE_MB)) ;;
+      efi-*) total_size_mb=$((total_size_mb + LOOPBACK_EFI_SIZE_MB)) ;;
+      rootfs-*) total_size_mb=$((total_size_mb + LOOPBACK_ROOTFS_SIZE_MB)) ;;
+      var-*) total_size_mb=$((total_size_mb + LOOPBACK_VAR_SIZE_MB)) ;;
     esac
   done
   # Add GPT overhead (2 MiB for primary + backup GPT headers)
@@ -290,7 +290,7 @@ create_loopback_image() {
 
   # Build sfdisk script to partition the image
   local sfdisk_script=""
-  local offset_sectors=2048  # Start after 1 MiB (GPT header area)
+  local offset_sectors=2048 # Start after 1 MiB (GPT header area)
   local part_num=1
 
   for part in "${partitions[@]}"; do
@@ -301,23 +301,23 @@ create_loopback_image() {
     case "$part" in
       esp)
         size_mb=$LOOPBACK_ESP_SIZE_MB
-        part_type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B"  # EFI System Partition
+        part_type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B" # EFI System Partition
         ;;
       efi-*)
         size_mb=$LOOPBACK_EFI_SIZE_MB
-        part_type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B"  # EFI System Partition
+        part_type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B" # EFI System Partition
         ;;
       rootfs-*)
         size_mb=$LOOPBACK_ROOTFS_SIZE_MB
-        part_type="933AC7E1-2EB4-4F13-B844-0E14E2AEF915"  # Linux filesystem
+        part_type="933AC7E1-2EB4-4F13-B844-0E14E2AEF915" # Linux filesystem
         ;;
       var-*)
         size_mb=$LOOPBACK_VAR_SIZE_MB
-        part_type="933AC7E1-2EB4-4F13-B844-0E14E2AEF915"  # Linux filesystem
+        part_type="933AC7E1-2EB4-4F13-B844-0E14E2AEF915" # Linux filesystem
         ;;
     esac
 
-    local size_sectors=$(( (size_mb * 1024 * 1024) / LOOPBACK_SECTOR_SIZE ))
+    local size_sectors=$(((size_mb * 1024 * 1024) / LOOPBACK_SECTOR_SIZE))
     local end_sectors=$((offset_sectors + size_sectors - 1))
 
     # Generate deterministic PARTUUID for sfdisk
@@ -483,7 +483,7 @@ format_loopback_partitions() {
   local -a partitions=()
   case "$topology_type" in
     single-slot) partitions=(esp efi-A rootfs-A var-A) ;;
-    dual-slot)   partitions=(esp efi-A rootfs-A var-A efi-B rootfs-B var-B) ;;
+    dual-slot) partitions=(esp efi-A rootfs-A var-A efi-B rootfs-B var-B) ;;
     *)
       echo "ERROR: format_loopback_partitions: unknown topology: $topology_type" >&2
       return 1
@@ -572,7 +572,7 @@ mount_loopback_partitions() {
   local -a partitions=()
   case "$topology_type" in
     single-slot) partitions=(esp efi-A rootfs-A var-A) ;;
-    dual-slot)   partitions=(esp efi-A rootfs-A var-A efi-B rootfs-B var-B) ;;
+    dual-slot) partitions=(esp efi-A rootfs-A var-A efi-B rootfs-B var-B) ;;
     *)
       echo "ERROR: mount_loopback_partitions: unknown topology: $topology_type" >&2
       return 1
@@ -624,8 +624,8 @@ mount_loopback_partitions() {
 
   # For var-A and var-B, if rootfs is also mounted, create symlinks
   # so that rootfs/var resolves to the var partition mount
-  if mountpoint -q "$mount_base/rootfs-A" 2>/dev/null && \
-     mountpoint -q "$mount_base/var-A" 2>/dev/null; then
+  if mountpoint -q "$mount_base/rootfs-A" 2>/dev/null \
+    && mountpoint -q "$mount_base/var-A" 2>/dev/null; then
     # Bind-mount var-A into rootfs-A/var
     if ! mount --bind "$mount_base/var-A" "$mount_base/rootfs-A/var" 2>/dev/null; then
       echo "WARNING: mount_loopback_partitions: bind mount var-A into rootfs-A/var failed" >&2
@@ -635,8 +635,8 @@ mount_loopback_partitions() {
   fi
 
   if [[ "$topology_type" == "dual-slot" ]]; then
-    if mountpoint -q "$mount_base/rootfs-B" 2>/dev/null && \
-       mountpoint -q "$mount_base/var-B" 2>/dev/null; then
+    if mountpoint -q "$mount_base/rootfs-B" 2>/dev/null \
+      && mountpoint -q "$mount_base/var-B" 2>/dev/null; then
       if ! mount --bind "$mount_base/var-B" "$mount_base/rootfs-B/var" 2>/dev/null; then
         echo "WARNING: mount_loopback_partitions: bind mount var-B into rootfs-B/var failed" >&2
       else
@@ -691,7 +691,10 @@ unmount_loopback_partitions() {
 
   local target
   for target in "${bind_targets[@]}"; do
-    umount "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || { rc=1; true; }
+    umount "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || {
+      rc=1
+      true
+    }
   done
 
   # Now unmount regular mounts in reverse order
@@ -719,7 +722,10 @@ unmount_loopback_partitions() {
   fi
 
   for target in "${regular_mounts[@]}"; do
-    umount "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || { rc=1; true; }
+    umount "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || {
+      rc=1
+      true
+    }
   done
 
   # Clear the mount point registry
@@ -762,7 +768,7 @@ populate_loopback_esp() {
   mkdir -p "$conf_dir"
 
   # Create A.conf (always present)
-  cat > "$conf_dir/A.conf" <<BOOTCONF_A_EOF
+  cat >"$conf_dir/A.conf" <<BOOTCONF_A_EOF
 # Bootconf for slot A
 title=SteamOS (slot A)
 image-invalid=0
@@ -771,7 +777,7 @@ BOOTCONF_A_EOF
 
   # Create B.conf (only for dual-slot)
   if [[ "$topology_type" == "dual-slot" ]]; then
-    cat > "$conf_dir/B.conf" <<BOOTCONF_B_EOF
+    cat >"$conf_dir/B.conf" <<BOOTCONF_B_EOF
 # Bootconf for slot B
 title=SteamOS (slot B)
 image-invalid=1
@@ -835,7 +841,7 @@ populate_loopback_efi() {
   local -a slot_list=()
   case "$topology_type" in
     single-slot) slot_list=(A) ;;
-    dual-slot)   slot_list=(A B) ;;
+    dual-slot) slot_list=(A B) ;;
   esac
 
   # Per-slot partsets (A and/or B)
@@ -846,7 +852,7 @@ populate_loopback_efi() {
     efi_partuuid="$(generate_deterministic_partuuid "$test_id" "efi-${s}")"
     var_partuuid="$(generate_deterministic_partuuid "$test_id" "var-${s}")"
 
-    cat > "$efi_dir/SteamOS/partsets/$s" <<PARTSET_SLOT_EOF
+    cat >"$efi_dir/SteamOS/partsets/$s" <<PARTSET_SLOT_EOF
 rootfs ${rootfs_partuuid}
 efi ${efi_partuuid}
 var ${var_partuuid}
@@ -950,7 +956,7 @@ create_loopback_fixture() {
   if [[ -z "$target_slot" ]]; then
     case "$topology_type" in
       single-slot) target_slot="A" ;;
-      dual-slot)   target_slot="B" ;;
+      dual-slot) target_slot="B" ;;
     esac
   fi
 

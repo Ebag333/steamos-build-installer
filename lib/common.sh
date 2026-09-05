@@ -367,7 +367,7 @@ ensure_project_persisted() {
 #   Run curl with retry on transient failures (network errors, HTTP 5xx).
 curl_retry() {
   local attempts="${1:?curl_retry: missing attempt count}"
-  if ! [[ "$attempts" =~ ^[0-9]+$ ]] || (( attempts < 1 )); then
+  if ! [[ "$attempts" =~ ^[0-9]+$ ]] || ((attempts < 1)); then
     warn "curl_retry: attempts must be a positive integer (got: $attempts)"
     return 1
   fi

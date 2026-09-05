@@ -1160,16 +1160,16 @@ _json_escape() {
   s="${s//$'\f'/\\f}"
   # Remaining control characters (U+0000–U+001F) as \u00XX
   local i c
-  for (( i=0; i<${#s}; i++ )); do
+  for ((i = 0; i < ${#s}; i++)); do
     c="${s:$i:1}"
     # Check if character is a control character (ASCII < 0x20) that we
     # haven't already escaped. printf %d gives the decimal codepoint.
     local ord
     printf -v ord '%d' "'$c" 2>/dev/null || ord=0
-    if (( ord >= 0 && ord < 32 )); then
-      s="${s:0:$i}$(printf '\\u%04x' "$ord")${s:$((i+1))}"
+    if ((ord >= 0 && ord < 32)); then
+      s="${s:0:$i}$(printf '\\u%04x' "$ord")${s:$((i + 1))}"
       # skip past the 6-char escape we just inserted
-      (( i += 5 ))
+      ((i += 5))
     fi
   done
   printf '%s' "$s"

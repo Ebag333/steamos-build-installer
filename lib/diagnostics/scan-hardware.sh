@@ -90,7 +90,7 @@ while IFS="" read -r line; do
 
   echo
 
-done <<< "$lspci_output"
+done <<<"$lspci_output"
 
 if [[ $found -eq 0 && $probe_failed -eq 0 ]]; then
   echo "All PCI devices have drivers loaded."

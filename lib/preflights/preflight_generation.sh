@@ -409,9 +409,9 @@ preflight_generation_source_artifacts() {
 
   # List files that should not be blindly copied (deployment-specific)
   local nonportable_patterns=(
-    "*/grub.cfg"        # Generated per-deployment
-    "*/grubx64.efi"     # Contains rootfs UUID
-    "*/partsets/*"      # Device-specific
+    "*/grub.cfg"    # Generated per-deployment
+    "*/grubx64.efi" # Contains rootfs UUID
+    "*/partsets/*"  # Device-specific
   )
 
   # Check for files matching non-portable patterns
@@ -422,7 +422,7 @@ preflight_generation_source_artifacts() {
       debug "PF-24: source contains non-portable artifacts (will not be copied):"
       while IFS= read -r match; do
         debug "  $match"
-      done <<< "$matches"
+      done <<<"$matches"
     fi
   done
 

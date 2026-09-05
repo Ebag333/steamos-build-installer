@@ -118,12 +118,12 @@ test_l03_no_chroot_operations() {
 
   # Record pre-apply state of /proc, /sys, /dev inside rootfs
   local proc_before="" sys_before="" dev_before=""
-  [[ -d "$LIVE_ROOTFS_DIR/proc" ]] && \
-    proc_before="$(find "$LIVE_ROOTFS_DIR/proc" -maxdepth 1 2>/dev/null | sort)"
-  [[ -d "$LIVE_ROOTFS_DIR/sys" ]] && \
-    sys_before="$(find "$LIVE_ROOTFS_DIR/sys" -maxdepth 1 2>/dev/null | sort)"
-  [[ -d "$LIVE_ROOTFS_DIR/dev" ]] && \
-    dev_before="$(find "$LIVE_ROOTFS_DIR/dev" -maxdepth 1 2>/dev/null | sort)"
+  [[ -d "$LIVE_ROOTFS_DIR/proc" ]] \
+    && proc_before="$(find "$LIVE_ROOTFS_DIR/proc" -maxdepth 1 2>/dev/null | sort)"
+  [[ -d "$LIVE_ROOTFS_DIR/sys" ]] \
+    && sys_before="$(find "$LIVE_ROOTFS_DIR/sys" -maxdepth 1 2>/dev/null | sort)"
+  [[ -d "$LIVE_ROOTFS_DIR/dev" ]] \
+    && dev_before="$(find "$LIVE_ROOTFS_DIR/dev" -maxdepth 1 2>/dev/null | sort)"
 
   # Apply live state
   if ! simulate_live_apply; then
@@ -141,8 +141,8 @@ test_l03_no_chroot_operations() {
 
   # Verify /proc did not gain entries after apply
   local proc_after=""
-  [[ -d "$LIVE_ROOTFS_DIR/proc" ]] && \
-    proc_after="$(find "$LIVE_ROOTFS_DIR/proc" -maxdepth 1 2>/dev/null | sort)"
+  [[ -d "$LIVE_ROOTFS_DIR/proc" ]] \
+    && proc_after="$(find "$LIVE_ROOTFS_DIR/proc" -maxdepth 1 2>/dev/null | sort)"
   if [[ -n "$proc_before" && -n "$proc_after" && "$proc_after" != "$proc_before" ]]; then
     echo "    L-03: /proc changed during apply" >&2
     test_harness_fail "L-03: /proc was modified during live apply"
@@ -152,8 +152,8 @@ test_l03_no_chroot_operations() {
 
   # Verify /sys did not gain entries after apply
   local sys_after=""
-  [[ -d "$LIVE_ROOTFS_DIR/sys" ]] && \
-    sys_after="$(find "$LIVE_ROOTFS_DIR/sys" -maxdepth 1 2>/dev/null | sort)"
+  [[ -d "$LIVE_ROOTFS_DIR/sys" ]] \
+    && sys_after="$(find "$LIVE_ROOTFS_DIR/sys" -maxdepth 1 2>/dev/null | sort)"
   if [[ -n "$sys_before" && -n "$sys_after" && "$sys_after" != "$sys_before" ]]; then
     echo "    L-03: /sys changed during apply" >&2
     test_harness_fail "L-03: /sys was modified during live apply"
@@ -163,8 +163,8 @@ test_l03_no_chroot_operations() {
 
   # Verify /dev did not gain entries after apply
   local dev_after=""
-  [[ -d "$LIVE_ROOTFS_DIR/dev" ]] && \
-    dev_after="$(find "$LIVE_ROOTFS_DIR/dev" -maxdepth 1 2>/dev/null | sort)"
+  [[ -d "$LIVE_ROOTFS_DIR/dev" ]] \
+    && dev_after="$(find "$LIVE_ROOTFS_DIR/dev" -maxdepth 1 2>/dev/null | sort)"
   if [[ -n "$dev_before" && -n "$dev_after" && "$dev_after" != "$dev_before" ]]; then
     echo "    L-03: /dev changed during apply" >&2
     test_harness_fail "L-03: /dev was modified during live apply"

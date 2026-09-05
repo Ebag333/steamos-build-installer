@@ -197,33 +197,33 @@ _recovery_snapshot_slot_a() {
   # Snapshot A-slot EFI grub.cfg
   local grub_a="$RECOVERY_EFI_DIR/EFI/steamos/grub.cfg"
   if [[ -f "$grub_a" ]]; then
-    md5sum "$grub_a" | awk '{print $1, "efi-grub"}' > "$checksum_file"
+    md5sum "$grub_a" | awk '{print $1, "efi-grub"}' >"$checksum_file"
   else
-    echo "MISSING efi-grub" > "$checksum_file"
+    echo "MISSING efi-grub" >"$checksum_file"
   fi
 
   # Snapshot A-slot EFI grubx64.efi
   local efi_a="$RECOVERY_EFI_DIR/EFI/steamos/grubx64.efi"
   if [[ -f "$efi_a" ]]; then
-    md5sum "$efi_a" | awk '{print $1, "efi-grubx64"}' >> "$checksum_file"
+    md5sum "$efi_a" | awk '{print $1, "efi-grubx64"}' >>"$checksum_file"
   else
-    echo "MISSING efi-grubx64" >> "$checksum_file"
+    echo "MISSING efi-grubx64" >>"$checksum_file"
   fi
 
   # Snapshot A-slot partset
   local partset_a="$RECOVERY_EFI_DIR/SteamOS/partsets/A"
   if [[ -f "$partset_a" ]]; then
-    md5sum "$partset_a" | awk '{print $1, "partset-A"}' >> "$checksum_file"
+    md5sum "$partset_a" | awk '{print $1, "partset-A"}' >>"$checksum_file"
   else
-    echo "MISSING partset-A" >> "$checksum_file"
+    echo "MISSING partset-A" >>"$checksum_file"
   fi
 
   # Snapshot A-slot bootconf
   local conf_a="$RECOVERY_ESP_DIR/SteamOS/conf/A.conf"
   if [[ -f "$conf_a" ]]; then
-    md5sum "$conf_a" | awk '{print $1, "bootconf-A"}' >> "$checksum_file"
+    md5sum "$conf_a" | awk '{print $1, "bootconf-A"}' >>"$checksum_file"
   else
-    echo "MISSING bootconf-A" >> "$checksum_file"
+    echo "MISSING bootconf-A" >>"$checksum_file"
   fi
 
   _RECOVERY_SLOT_A_CHECKSUMS="$checksum_file"
@@ -331,7 +331,7 @@ _recovery_update_partsets() {
   target_var_partuuid="$(derive_partuuid "$RECOVERY_NAMESPACE" "var-${RECOVERY_TARGET_SLOT}")"
 
   # Update self partset (target = slot B)
-  cat > "$partsets_dir/self" <<SELF_EOF
+  cat >"$partsets_dir/self" <<SELF_EOF
 rootfs ${target_rootfs_partuuid}
 efi ${target_efi_partuuid}
 var ${target_var_partuuid}
@@ -350,7 +350,7 @@ SELF_EOF
   var_b_partuuid="$(derive_partuuid "$RECOVERY_NAMESPACE" "var-B")"
   esp_partuuid="$(derive_partuuid "$RECOVERY_NAMESPACE" "esp")"
 
-  cat > "$partsets_dir/all" <<ALL_EOF
+  cat >"$partsets_dir/all" <<ALL_EOF
 rootfs ${rootfs_a_partuuid}
 efi ${efi_a_partuuid}
 var ${var_a_partuuid}
@@ -361,7 +361,7 @@ rootfs ${esp_partuuid}
 ALL_EOF
 
   # Update shared partset (esp only)
-  cat > "$partsets_dir/shared" <<SHARED_EOF
+  cat >"$partsets_dir/shared" <<SHARED_EOF
 rootfs ${esp_partuuid}
 SHARED_EOF
 
@@ -378,7 +378,7 @@ _recovery_update_bootconf() {
   fi
 
   # Update B.conf (target slot): mark image-valid, reset boot-attempts
-  cat > "$conf_dir/B.conf" <<BOOTCONF_B_EOF
+  cat >"$conf_dir/B.conf" <<BOOTCONF_B_EOF
 # Bootconf for slot B (mock)
 title=SteamOS (slot B)
 image-invalid=0
@@ -542,7 +542,7 @@ simulate_recovery_update_grub_fallback() {
 
   local shim_path="$bin_dir/update-grub"
 
-  cat > "$shim_path" <<SHIM_EOF
+  cat >"$shim_path" <<SHIM_EOF
 #!/bin/bash
 # Recovery update-grub failure shim for testing rollback behavior
 echo "SHIM: intercepted update-grub (recovery fallback test)" >&2
@@ -615,7 +615,7 @@ simulate_recovery_failure_and_rollback() {
       rootfs_b_partuuid="$(derive_partuuid "$ns" "rootfs-B")"
       efi_b_partuuid="$(derive_partuuid "$ns" "efi-B")"
       var_b_partuuid="$(derive_partuuid "$ns" "var-B")"
-      cat > "$RECOVERY_EFI_DIR/SteamOS/partsets/B" <<B_PARTSET_ROLLBACK
+      cat >"$RECOVERY_EFI_DIR/SteamOS/partsets/B" <<B_PARTSET_ROLLBACK
 rootfs ${rootfs_b_partuuid}
 efi ${efi_b_partuuid}
 var ${var_b_partuuid}
@@ -628,7 +628,7 @@ B_PARTSET_ROLLBACK
       _recovery_update_bootconf "$RECOVERY_ESP_DIR" || true
       # Rollback: restore B.conf to initial fixture state.
       # grub.cfg and partset B are already correct.
-      cat > "$RECOVERY_ESP_DIR/SteamOS/conf/B.conf" <<B_CONF_ROLLBACK
+      cat >"$RECOVERY_ESP_DIR/SteamOS/conf/B.conf" <<B_CONF_ROLLBACK
 # Bootconf for slot B (mock)
 title=SteamOS (slot B)
 image-invalid=1
@@ -641,7 +641,7 @@ B_CONF_ROLLBACK
       # grub.cfg, partsets, and grubx64.efi were regenerated with the
       # same target UUID, so they are already in the correct initial state.
       simulate_recovery_apply || true
-      cat > "$RECOVERY_ESP_DIR/SteamOS/conf/B.conf" <<B_CONF_ROLLBACK2
+      cat >"$RECOVERY_ESP_DIR/SteamOS/conf/B.conf" <<B_CONF_ROLLBACK2
 # Bootconf for slot B (mock)
 title=SteamOS (slot B)
 image-invalid=1
@@ -652,7 +652,7 @@ B_CONF_ROLLBACK2
       # Apply everything, then full rollback.
       # Same as binary: only B.conf actually changed.
       simulate_recovery_apply || true
-      cat > "$RECOVERY_ESP_DIR/SteamOS/conf/B.conf" <<B_CONF_ROLLBACK3
+      cat >"$RECOVERY_ESP_DIR/SteamOS/conf/B.conf" <<B_CONF_ROLLBACK3
 # Bootconf for slot B (mock)
 title=SteamOS (slot B)
 image-invalid=1
@@ -898,7 +898,7 @@ verify_filesystem_flushed() {
 
     # Verify file is readable and non-corrupt by checking wc -c > 0
     local size
-    size="$(wc -c < "$file" 2>/dev/null || echo 0)"
+    size="$(wc -c <"$file" 2>/dev/null || echo 0)"
     if [[ "$size" -eq 0 ]]; then
       echo "ERROR: verify_filesystem_flushed: unreadable file: $file" >&2
       rc=1

@@ -328,7 +328,7 @@ test_f05_target_grub_config_valid() {
         echo "    ASSERTION FAILED: kernel path referenced in grub.cfg does not exist: $full_kernel_path" >&2
       }
     fi
-  done <<< "$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
+  done <<<"$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
 
   # --- Verify required params exactly once per linux line ---
   local has_duplicate=0
@@ -341,12 +341,12 @@ test_f05_target_grub_config_valid() {
       params_portion="$(printf '%s' "$line" | sed 's/^[[:space:]]*linux[[:space:]]\+[^[:space:]]\+[[:space:]]*//')"
       if [[ -n "$params_portion" ]]; then
         local -a tokens=()
-        read -ra tokens <<< "$params_portion"
+        read -ra tokens <<<"$params_portion"
         local -A token_counts=()
         local token
         for token in "${tokens[@]}"; do
           [[ -z "$token" ]] && continue
-          token_counts["$token"]=$(( ${token_counts["$token"]:-0} + 1 ))
+          token_counts["$token"]=$((${token_counts["$token"]:-0} + 1))
         done
         for token in "${!token_counts[@]}"; do
           if [[ "${token_counts[$token]}" -gt 1 ]]; then
@@ -356,7 +356,7 @@ test_f05_target_grub_config_valid() {
         done
       fi
     fi
-  done <<< "$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
+  done <<<"$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
 
   if [[ "$has_duplicate" -ne 0 ]]; then
     test_harness_fail "F-05: grub.cfg has duplicate required params in linux entries"
@@ -423,9 +423,9 @@ test_f08_valid_target_efi_preserved() {
   local sentinel_steamos="$efi_dir/EFI/steamos/sentinel-steamos.grub"
   local sentinel_self="$efi_dir/SteamOS/partsets/sentinel-self"
 
-  echo "$sentinel_content" > "$sentinel_default"
-  echo "$sentinel_content" > "$sentinel_steamos"
-  echo "$sentinel_content" > "$sentinel_self"
+  echo "$sentinel_content" >"$sentinel_default"
+  echo "$sentinel_content" >"$sentinel_steamos"
+  echo "$sentinel_content" >"$sentinel_self"
 
   # Apply flashless state
   if ! simulate_flashless_apply; then
@@ -582,7 +582,7 @@ test_f12_on_disk_partsets_independently_verified() {
     [[ -z "${line// /}" ]] && continue
 
     local role uuid
-    read -r role uuid _extra <<< "$line"
+    read -r role uuid _extra <<<"$line"
     if [[ -z "$role" || -z "$uuid" ]]; then
       echo "    ASSERTION FAILED: self partset line $line_num invalid format: '$line'" >&2
       test_harness_fail "F-12: invalid self partset line format"
@@ -593,7 +593,7 @@ test_f12_on_disk_partsets_independently_verified() {
       echo "    ASSERTION FAILED: self partset line $line_num has extra fields: '$line'" >&2
       test_harness_fail "F-12: extra fields in self partset line"
     fi
-  done < "$partsets_dir/self"
+  done <"$partsets_dir/self"
 
   # Verify self references B PARTUUIDs
   test_harness_assert_contains "$self_content" "$self_rootfs_partuuid" || {
@@ -654,12 +654,12 @@ test_f12_on_disk_partsets_independently_verified() {
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
       [[ -z "${line// /}" ]] && continue
       local role uuid
-      read -r role uuid _extra <<< "$line"
+      read -r role uuid _extra <<<"$line"
       if [[ -n "$uuid" ]] && ! [[ "$uuid" =~ $uuid_pattern ]]; then
         echo "    ASSERTION FAILED: invalid PARTUUID format in $partset_file: '$uuid'" >&2
         format_ok=0
       fi
-    done < "$partset_file"
+    done <"$partset_file"
   done
 
   if [[ "$format_ok" -eq 0 ]]; then

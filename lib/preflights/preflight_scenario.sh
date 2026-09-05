@@ -219,7 +219,7 @@ _pf_is_device_mounted() {
   local device="$1"
   local mounted_info="$2"
 
-  [[ -b "$device" ]] || return 2  # cannot determine
+  [[ -b "$device" ]] || return 2 # cannot determine
 
   local device_mm
   device_mm="$(_pf_get_major_minor "$device" 2>/dev/null)" || return 2
@@ -239,9 +239,9 @@ _pf_is_device_mounted() {
       echo "$tgt"
       return 0
     fi
-  done <<< "$mounted_info"
+  done <<<"$mounted_info"
 
-  return 1  # not mounted
+  return 1 # not mounted
 }
 
 # ---------------------------------------------------------------------------
@@ -398,7 +398,8 @@ preflight_build_efi_target_unambiguous() {
 
   # --- Verify no "efi-B" partition exists on the same loop image ---
   # Walk all partitions of LOOP_DEV and check labels.
-  local _old_nullglob; _old_nullglob=$(shopt -p nullglob 2>/dev/null)
+  local _old_nullglob
+  _old_nullglob=$(shopt -p nullglob 2>/dev/null)
   shopt -s nullglob
   local partition
   for partition in /dev/disk/by-partsets/*/efi; do
@@ -641,8 +642,8 @@ preflight_flashless_target_is_standby() {
 
       case "$dev_name" in
         rootfs) target_dev="${declared_rootfs:-}" ;;
-        efi)    target_dev="${declared_efi:-}" ;;
-        var)    target_dev="${declared_var:-}" ;;
+        efi) target_dev="${declared_efi:-}" ;;
+        var) target_dev="${declared_var:-}" ;;
       esac
 
       if [[ -n "$target_dev" && -b "$target_dev" ]]; then
@@ -877,7 +878,7 @@ preflight_flashless_target_verity_not_active() {
           die "PF-31b: target $label ($device) shares major:minor with active dm device: $dm_dev ($dm_mm)"
         fi
       fi
-    done <<< "$dm_info"
+    done <<<"$dm_info"
   }
 
   _pf_check_dm_active "$rootfs_dev" "rootfs"
@@ -1412,7 +1413,7 @@ _pf_is_device_mounted_at() {
   local device="${2:?_pf_is_device_mounted_at: missing device path}"
   local mounted_info="${3:-}"
 
-  [[ -b "$device" ]] || return 2  # cannot determine
+  [[ -b "$device" ]] || return 2 # cannot determine
 
   local device_mm
   device_mm="$(_pf_get_major_minor "$device" 2>/dev/null)" || return 2
@@ -1432,11 +1433,11 @@ _pf_is_device_mounted_at() {
     src_mm="$(_pf_get_major_minor "$src" 2>/dev/null)" || continue
 
     if [[ "$device_mm" == "$src_mm" ]]; then
-      return 0  # device is mounted at mount_point
+      return 0 # device is mounted at mount_point
     fi
-  done <<< "$mounted_info"
+  done <<<"$mounted_info"
 
-  return 1  # device is not mounted at mount_point
+  return 1 # device is not mounted at mount_point
 }
 
 # preflight_live_identity_sources_agree()

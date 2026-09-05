@@ -60,7 +60,7 @@ _pf_chroot_validate_mount() {
 
   # Parse findmnt output (space-separated fields)
   local actual_mm actual_fstype actual_opts actual_fsroot
-  read -r actual_mm actual_fstype actual_opts actual_fsroot <<< "$findmnt_out"
+  read -r actual_mm actual_fstype actual_opts actual_fsroot <<<"$findmnt_out"
 
   if [[ -z "$actual_mm" ]]; then
     die "PF: $label ($mountpoint): could not determine MAJ:MIN for $full_path"

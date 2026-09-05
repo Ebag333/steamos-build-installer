@@ -61,7 +61,7 @@ generate_deterministic_uuid() {
   # Inject v4 version nibble (4 at position 12) and variant bits (10 at
   # position 16) to conform to RFC 4122.
   local v4_body
-  v4_body="${body:0:8}-${body:8:4}-4${body:13:3}-$(printf '%x' $(( (16#${body:16:1} & 0x3) | 0x8 )))${body:17:3}-${body:20:12}"
+  v4_body="${body:0:8}-${body:8:4}-4${body:13:3}-$(printf '%x' $(((16#${body:16:1} & 0x3) | 0x8)))${body:17:3}-${body:20:12}"
 
   printf '%s' "$v4_body"
 }
@@ -106,7 +106,7 @@ create_topology_json() {
   local -a partitions
   case "$topology_type" in
     single-slot) partitions=("${_TOPOLOGY_SINGLE_SLOT_PARTITIONS[@]}") ;;
-    dual-slot)   partitions=("${_TOPOLOGY_DUAL_SLOT_PARTITIONS[@]}") ;;
+    dual-slot) partitions=("${_TOPOLOGY_DUAL_SLOT_PARTITIONS[@]}") ;;
     *)
       echo "create_topology_json: unknown topology type: $topology_type" >&2
       return 1
@@ -200,14 +200,14 @@ parse_topology_json() {
     # NOTE: we cannot use ${line//[^}]/} because } is special in bash
     # glob patterns inside parameter expansion, so we count manually.
     local line_open=0 line_close=0 bi char
-    for (( bi=0; bi<${#line}; bi++ )); do
+    for ((bi = 0; bi < ${#line}; bi++)); do
       char="${line:$bi:1}"
       case "$char" in
         '{') line_open=$((line_open + 1)) ;;
         '}') line_close=$((line_close + 1)) ;;
       esac
     done
-    depth=$(( depth + line_open - line_close ))
+    depth=$((depth + line_open - line_close))
     if [[ "$depth" -le 0 ]]; then
       break
     fi

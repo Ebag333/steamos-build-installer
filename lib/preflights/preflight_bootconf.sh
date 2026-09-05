@@ -41,7 +41,7 @@ _pf_bootconf_conf_path() {
   local slot="$2"
 
   case "$slot" in
-    A|B) ;;
+    A | B) ;;
     *) return 1 ;;
   esac
 
@@ -63,7 +63,7 @@ _pf_bootconf_resolve_current_slot() {
     || return 1
 
   case "$slot" in
-    A|B) ;;
+    A | B) ;;
     *) return 1 ;;
   esac
 
@@ -107,7 +107,7 @@ _pf_bootconf_tool_validates() {
   local slot="${3:?_pf_bootconf_tool_validates: missing slot label}"
 
   case "$slot" in
-    A|B) ;;
+    A | B) ;;
     *) return 1 ;;
   esac
 
@@ -115,10 +115,10 @@ _pf_bootconf_tool_validates() {
   # The --no-create flag ensures we don't create a new config.
   # --get title verifies the tool can parse at least one field.
   if steamos-bootconf \
-       --conf-dir "$conf_dir" \
-       --efi-dir "$efi_mount" \
-       --image "$slot" \
-       config --no-create --get title &>/dev/null; then
+    --conf-dir "$conf_dir" \
+    --efi-dir "$efi_mount" \
+    --image "$slot" \
+    config --no-create --get title &>/dev/null; then
     return 0
   fi
 
@@ -261,7 +261,7 @@ preflight_bootconf_reset_policy() {
       fi
       debug "PF-57: replace mode for slot $slot — booted-slot check passed"
       ;;
-    update|preserve)
+    update | preserve)
       if [[ ! -f "$conf_file" ]]; then
         die "PF-57: $mode mode requires an existing config for slot $slot ($conf_file does not exist)"
       fi
@@ -344,7 +344,7 @@ preflight_bootconf_current_health() {
   # For mutating operations on or near the current slot, this is fatal
   # unless repair_override is active.
   case "$operation_mode" in
-    replace|update|preserve)
+    replace | update | preserve)
       if [[ -n "$repair_override" ]]; then
         warn "PF-58: $missing_msg — repair override active, proceeding with caution for $operation_mode"
         return 0
@@ -377,7 +377,7 @@ preflight_bootconf_secure_boot_compat() {
   local sb_policy="${1:-auto}"
 
   case "$sb_policy" in
-    disabled|unsupported)
+    disabled | unsupported)
       debug "PF-59: Secure Boot policy is '$sb_policy' — skipping check"
       return 0
       ;;
@@ -476,7 +476,7 @@ preflight_bootconf_validate() {
 
   # --- Validate slot label ---
   case "$slot" in
-    A|B) ;;
+    A | B) ;;
     *) die "PF-57: invalid slot label: $slot" ;;
   esac
 
@@ -488,20 +488,20 @@ preflight_bootconf_validate() {
 
   # --- Validate scenario (if provided) ---
   case "$scenario" in
-    ""|build|flashless|recovery|live) ;;
+    "" | build | flashless | recovery | live) ;;
     *) die "preflight_bootconf_validate: invalid scenario: '$scenario'" ;;
   esac
 
   # --- Validate secure boot policy (if provided) ---
   case "$sb_policy" in
-    disabled|signing-required|unsupported|auto) ;;
+    disabled | signing-required | unsupported | auto) ;;
     *) die "preflight_bootconf_validate: invalid secure boot policy: '$sb_policy'" ;;
   esac
 
   # --- Resolve conf directory ---
   if [[ ! -d "$conf_dir" ]]; then
     case "$mode" in
-      create-only|replace)
+      create-only | replace)
         debug "preflight_bootconf_validate: conf directory $conf_dir does not exist — will be created by operation"
         ;;
       *)
@@ -516,7 +516,7 @@ preflight_bootconf_validate() {
       # Issue #5: For live/flashless/recovery scenarios, failing to resolve
       # the current slot is fatal — we cannot safely proceed without it.
       case "$scenario" in
-        flashless|recovery|live)
+        flashless | recovery | live)
           die "preflight_bootconf_validate: could not resolve current booted slot in '$scenario' scenario — cannot proceed"
           ;;
         *)

@@ -213,55 +213,55 @@ _live_snapshot_slot_b() {
   # but B's partset and bootconf should remain unchanged)
   local partset_b="$LIVE_EFI_DIR/SteamOS/partsets/B"
   if [[ -f "$partset_b" ]]; then
-    md5sum "$partset_b" | awk '{print $1, "partset-B"}' > "$checksum_file"
+    md5sum "$partset_b" | awk '{print $1, "partset-B"}' >"$checksum_file"
   else
-    echo "MISSING partset-B" > "$checksum_file"
+    echo "MISSING partset-B" >"$checksum_file"
   fi
 
   # Snapshot B-slot EFI partset semantic views
   local partset_other="$LIVE_EFI_DIR/SteamOS/partsets/other"
   if [[ -f "$partset_other" ]]; then
-    md5sum "$partset_other" | awk '{print $1, "partset-other"}' >> "$checksum_file"
+    md5sum "$partset_other" | awk '{print $1, "partset-other"}' >>"$checksum_file"
   else
-    echo "MISSING partset-other" >> "$checksum_file"
+    echo "MISSING partset-other" >>"$checksum_file"
   fi
 
   local partset_all="$LIVE_EFI_DIR/SteamOS/partsets/all"
   if [[ -f "$partset_all" ]]; then
-    md5sum "$partset_all" | awk '{print $1, "partset-all"}' >> "$checksum_file"
+    md5sum "$partset_all" | awk '{print $1, "partset-all"}' >>"$checksum_file"
   else
-    echo "MISSING partset-all" >> "$checksum_file"
+    echo "MISSING partset-all" >>"$checksum_file"
   fi
 
   local partset_shared="$LIVE_EFI_DIR/SteamOS/partsets/shared"
   if [[ -f "$partset_shared" ]]; then
-    md5sum "$partset_shared" | awk '{print $1, "partset-shared"}' >> "$checksum_file"
+    md5sum "$partset_shared" | awk '{print $1, "partset-shared"}' >>"$checksum_file"
   else
-    echo "MISSING partset-shared" >> "$checksum_file"
+    echo "MISSING partset-shared" >>"$checksum_file"
   fi
 
   # Snapshot B-slot bootconf
   local conf_b="$LIVE_ESP_DIR/SteamOS/conf/B.conf"
   if [[ -f "$conf_b" ]]; then
-    md5sum "$conf_b" | awk '{print $1, "bootconf-B"}' >> "$checksum_file"
+    md5sum "$conf_b" | awk '{print $1, "bootconf-B"}' >>"$checksum_file"
   else
-    echo "MISSING bootconf-B" >> "$checksum_file"
+    echo "MISSING bootconf-B" >>"$checksum_file"
   fi
 
   # Snapshot shared EFI grub.cfg (used by both slots)
   local grub_cfg="$LIVE_EFI_DIR/EFI/steamos/grub.cfg"
   if [[ -f "$grub_cfg" ]]; then
-    md5sum "$grub_cfg" | awk '{print $1, "efi-grub"}' >> "$checksum_file"
+    md5sum "$grub_cfg" | awk '{print $1, "efi-grub"}' >>"$checksum_file"
   else
-    echo "MISSING efi-grub" >> "$checksum_file"
+    echo "MISSING efi-grub" >>"$checksum_file"
   fi
 
   # Snapshot shared EFI grubx64.efi
   local grubx64="$LIVE_EFI_DIR/EFI/steamos/grubx64.efi"
   if [[ -f "$grubx64" ]]; then
-    md5sum "$grubx64" | awk '{print $1, "efi-grubx64"}' >> "$checksum_file"
+    md5sum "$grubx64" | awk '{print $1, "efi-grubx64"}' >>"$checksum_file"
   else
-    echo "MISSING efi-grubx64" >> "$checksum_file"
+    echo "MISSING efi-grubx64" >>"$checksum_file"
   fi
 
   _LIVE_SLOT_B_CHECKSUMS="$checksum_file"
@@ -278,10 +278,10 @@ _live_record_readonly_state() {
   # In a live fixture, we simulate steamos-readonly state via a marker file.
   local rootfs_ro="$LIVE_FIXTURE_DIR/.steamos-readonly"
   if [[ -f "$rootfs_ro" ]]; then
-    cat "$rootfs_ro" > "$state_file"
+    cat "$rootfs_ro" >"$state_file"
   else
     # Default: read-only is enabled (normal live state)
-    echo "readonly=1" > "$state_file"
+    echo "readonly=1" >"$state_file"
   fi
 
   _LIVE_READONLY_STATE_FILE="$state_file"
@@ -371,7 +371,7 @@ _live_patch_defaults() {
 
   # Mark read-only as disabled for the duration of the apply
   local ro_state="$LIVE_FIXTURE_DIR/.steamos-readonly"
-  echo "readonly=0" > "$ro_state"
+  echo "readonly=0" >"$ro_state"
 
   return 0
 }
@@ -461,7 +461,7 @@ _live_flush() {
 
   # Re-enable read-only state
   local ro_state="$LIVE_FIXTURE_DIR/.steamos-readonly"
-  echo "readonly=1" > "$ro_state"
+  echo "readonly=1" >"$ro_state"
 
   return 0
 }
@@ -497,7 +497,7 @@ simulate_live_update_grub_failure() {
 
   local shim_path="$bin_dir/update-grub"
 
-  cat > "$shim_path" <<'SHIM_EOF'
+  cat >"$shim_path" <<'SHIM_EOF'
 #!/bin/bash
 # Live update-grub failure shim for testing error handling
 echo "SHIM: intercepted update-grub (live failure test)" >&2
@@ -933,7 +933,7 @@ verify_no_duplicate_params() {
 
     # Tokenize: split on whitespace
     local -a tokens=()
-    read -ra tokens <<< "$params_portion"
+    read -ra tokens <<<"$params_portion"
 
     # If specific params were requested, only check those
     if [[ ${#params[@]} -gt 0 ]]; then
@@ -955,7 +955,7 @@ verify_no_duplicate_params() {
     local token
     for token in "${tokens[@]}"; do
       [[ -z "$token" ]] && continue
-      token_counts["$token"]=$(( ${token_counts["$token"]:-0} + 1 ))
+      token_counts["$token"]=$((${token_counts["$token"]:-0} + 1))
     done
 
     for token in "${!token_counts[@]}"; do
@@ -964,7 +964,7 @@ verify_no_duplicate_params() {
         rc=1
       fi
     done
-  done < "$grub_cfg"
+  done <"$grub_cfg"
 
   return $rc
 }
@@ -1026,12 +1026,12 @@ verify_keep_list_exact_once() {
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
     [[ -z "${line// /}" ]] && continue
     keep_list_entries+=("$line")
-  done < "$keep_list"
+  done <"$keep_list"
 
   # 2. Check for duplicates (each entry should appear exactly once)
   local -A entry_counts=()
   for entry in "${keep_list_entries[@]}"; do
-    entry_counts["$entry"]=$(( ${entry_counts["$entry"]:-0} + 1 ))
+    entry_counts["$entry"]=$((${entry_counts["$entry"]:-0} + 1))
   done
 
   for entry in "${!entry_counts[@]}"; do

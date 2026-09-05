@@ -501,7 +501,7 @@ _pf_fs_active_verity_devices() {
       if [[ -n "$data_dev_mm" && -n "$rootfs_mm" && "$data_dev_mm" == "$rootfs_mm" ]]; then
         echo "$dm_dev"
       fi
-    done <<< "$all_dm_devs"
+    done <<<"$all_dm_devs"
     return 0
   fi
 
@@ -556,7 +556,10 @@ _pf_fs_compute_sha256() {
 
   local hash
   hash="$(sha256sum "$file_path" 2>/dev/null)" \
-    || { echo "_pf_fs_compute_sha256: failed to compute hash for $file_path" >&2; return 1; }
+    || {
+      echo "_pf_fs_compute_sha256: failed to compute hash for $file_path" >&2
+      return 1
+    }
 
   # sha256sum outputs "hash  filename" — extract the hash.
   echo "$hash" | awk '{print $1}'
@@ -623,7 +626,7 @@ _pf_fs_parse_hash_file() {
 
     echo "$hash"
     return 0
-  done < "$hash_file"
+  done <"$hash_file"
 
   die "_pf_fs_parse_hash_file: hash file contains no valid hash: $hash_file"
 }
@@ -661,8 +664,8 @@ pf_fs_check_rootfs_device_identity() {
   fi
 
   # Resolve to an absolute /dev/* path (handles dm-N, UUID, PARTUUID, bare names).
-  actual_source="$(_pf_fs_resolve_findmnt_source "$actual_source")" || \
-    die "PF-59: rootfs source '$actual_source' could not be resolved to a block device"
+  actual_source="$(_pf_fs_resolve_findmnt_source "$actual_source")" \
+    || die "PF-59: rootfs source '$actual_source' could not be resolved to a block device"
 
   if [[ ! -b "$actual_source" ]]; then
     die "PF-59: rootfs source $actual_source is not a block device"
@@ -770,8 +773,8 @@ pf_fs_check_verity_inactive() {
     # Verify that the rootfs is mounted from the expected device.
     local actual_rootfs_dev
     actual_rootfs_dev="$(findmnt -n -o SOURCE "$rootfs" 2>/dev/null)" || actual_rootfs_dev=""
-    actual_rootfs_dev="$(_pf_fs_resolve_findmnt_source "$actual_rootfs_dev")" || \
-      actual_rootfs_dev=""
+    actual_rootfs_dev="$(_pf_fs_resolve_findmnt_source "$actual_rootfs_dev")" \
+      || actual_rootfs_dev=""
 
     if [[ -n "$actual_rootfs_dev" ]]; then
       local rootfs_match
@@ -794,7 +797,7 @@ pf_fs_check_verity_inactive() {
         verity_found=1
         break
       fi
-    done <<< "$verity_devices"
+    done <<<"$verity_devices"
 
     if ((verity_found == 0)); then
       # The expected verity device is not among the active devices — not a conflict.
@@ -841,7 +844,7 @@ pf_fs_check_verity_policy_defined() {
   # Validate VERITY_POLICY if provided.
   if [[ -n "$verity_policy" ]]; then
     case "$verity_policy" in
-      regenerate|disable|leave-invalid|not-applicable)
+      regenerate | disable | leave-invalid | not-applicable)
         debug "PF-62: VERITY_POLICY '$verity_policy' is valid"
         ;;
       *)
@@ -991,10 +994,10 @@ _pf_fs_extract_kernel_version() {
   local version_suffix=""
 
   case "$kernel_name" in
-    vmlinuz-*)  version_suffix="${kernel_name#vmlinuz-}" ;;
-    vmlinux-*)  version_suffix="${kernel_name#vmlinux-}" ;;
-    bzImage-*)  version_suffix="${kernel_name#bzImage-}" ;;
-    *)          version_suffix="" ;;
+    vmlinuz-*) version_suffix="${kernel_name#vmlinuz-}" ;;
+    vmlinux-*) version_suffix="${kernel_name#vmlinux-}" ;;
+    bzImage-*) version_suffix="${kernel_name#bzImage-}" ;;
+    *) version_suffix="" ;;
   esac
 
   echo "$version_suffix"
@@ -1018,10 +1021,10 @@ _pf_fs_extract_initrd_version() {
 
   # Strip the prefix.
   case "$initrd_name" in
-    initramfs-*)  version_suffix="${initrd_name#initramfs-}" ;;
+    initramfs-*) version_suffix="${initrd_name#initramfs-}" ;;
     initrd.img-*) version_suffix="${initrd_name#initrd.img-}" ;;
-    initrd-*)     version_suffix="${initrd_name#initrd-}" ;;
-    *)            version_suffix="" ;;
+    initrd-*) version_suffix="${initrd_name#initrd-}" ;;
+    *) version_suffix="" ;;
   esac
 
   # Strip trailing compression extensions.
@@ -1253,10 +1256,10 @@ preflight_filesystem_state_validate() {
   local rootfs_modified_bool="false"
   if [[ -n "$rootfs_modified" ]]; then
     case "${rootfs_modified,,}" in
-      true|1|yes)
+      true | 1 | yes)
         rootfs_modified_bool="true"
         ;;
-      false|0|no)
+      false | 0 | no)
         rootfs_modified_bool="false"
         ;;
       *)
@@ -1269,7 +1272,7 @@ preflight_filesystem_state_validate() {
   if [[ "$rootfs_modified_bool" == "true" ]]; then
     if [[ -n "$verity_policy" ]]; then
       case "$verity_policy" in
-        regenerate|disable|leave-invalid)
+        regenerate | disable | leave-invalid)
           debug "preflight_filesystem_state_validate: ROOTFS_MODIFIED=true with applicable policy '$verity_policy'"
           ;;
         not-applicable)

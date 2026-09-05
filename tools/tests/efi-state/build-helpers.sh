@@ -235,7 +235,7 @@ _simulate_create_partsets() {
   efi_a_partuuid="$(derive_partuuid "$BUILD_NAMESPACE" "efi-A")"
   var_a_partuuid="$(derive_partuuid "$BUILD_NAMESPACE" "var-A")"
 
-  cat > "$partsets_dir/self" <<SELF_EOF
+  cat >"$partsets_dir/self" <<SELF_EOF
 rootfs ${rootfs_a_partuuid}
 efi ${efi_a_partuuid}
 var ${var_a_partuuid}
@@ -245,7 +245,7 @@ SELF_EOF
   local esp_partuuid
   esp_partuuid="$(derive_partuuid "$BUILD_NAMESPACE" "esp")"
 
-  cat > "$partsets_dir/all" <<ALL_EOF
+  cat >"$partsets_dir/all" <<ALL_EOF
 rootfs ${rootfs_a_partuuid}
 efi ${efi_a_partuuid}
 var ${var_a_partuuid}
@@ -253,7 +253,7 @@ rootfs ${esp_partuuid}
 ALL_EOF
 
   # Create/update shared partset (esp only)
-  cat > "$partsets_dir/shared" <<SHARED_EOF
+  cat >"$partsets_dir/shared" <<SHARED_EOF
 rootfs ${esp_partuuid}
 SHARED_EOF
 
@@ -270,7 +270,7 @@ _simulate_create_bootconf() {
   fi
 
   # Create/update A.conf (target slot)
-  cat > "$conf_dir/A.conf" <<BOOTCONF_A_EOF
+  cat >"$conf_dir/A.conf" <<BOOTCONF_A_EOF
 # Bootconf for slot A (build scenario)
 title=SteamOS (slot A)
 image-invalid=0
@@ -325,9 +325,12 @@ simulate_grub_param_add() {
     # Check if parameter is already present on any linux line (whole-token match)
     local _found=0 _line
     while IFS= read -r _line; do
-      [[ " ${_line%%#*} " == *" ${param} "* ]] && { _found=1; break; }
+      [[ " ${_line%%#*} " == *" ${param} "* ]] && {
+        _found=1
+        break
+      }
     done < <(grep 'linux' "$grub_cfg" 2>/dev/null)
-    [[ "$_found" -eq 1 ]] && continue  # Already present, skip (idempotent)
+    [[ "$_found" -eq 1 ]] && continue # Already present, skip (idempotent)
 
     # Add parameter to all linux lines
     # Use sed to append parameter to lines starting with 'linux'
@@ -391,7 +394,7 @@ simulate_grub_param_add_idempotent() {
     # Count occurrences on linux lines (whole-token match)
     local count=0 _line
     while IFS= read -r _line; do
-      [[ " ${_line%%#*} " == *" ${param} "* ]] && (( count++ ))
+      [[ " ${_line%%#*} " == *" ${param} "* ]] && ((count++))
     done < <(grep 'linux' "$grub_cfg" 2>/dev/null)
     if [[ "$count" -gt 1 ]]; then
       echo "ERROR: simulate_grub_param_add_idempotent: duplicate parameter '$param' found ($count occurrences)" >&2
@@ -434,7 +437,7 @@ simulate_build_failure() {
 
   local shim_path="$bin_dir/$command_name"
 
-  cat > "$shim_path" <<SHIM_EOF
+  cat >"$shim_path" <<SHIM_EOF
 #!/bin/bash
 # Build failure shim for testing error handling
 echo "SHIM: intercepted $command_name" >&2
@@ -505,7 +508,7 @@ verify_host_isolation_before() {
 
     # Extract strings that look like host paths (absolute paths)
     strings "$file" 2>/dev/null | grep -oE '^/[a-z0-9_-]+(/[a-z0-9._-]+)*' || true
-  done | sort -u > "$snapshot_file"
+  done | sort -u >"$snapshot_file"
 
   _HOST_SNAPSHOT_BEFORE="$snapshot_file"
   return 0
@@ -537,7 +540,7 @@ verify_host_isolation_after() {
     [[ "$skip" -eq 1 ]] && continue
 
     strings "$file" 2>/dev/null | grep -oE '^/[a-z0-9_-]+(/[a-z0-9._-]+)*' || true
-  done | sort -u > "$snapshot_file"
+  done | sort -u >"$snapshot_file"
 
   _HOST_SNAPSHOT_AFTER="$snapshot_file"
 
@@ -614,10 +617,10 @@ verify_preserved_files_before() {
     local full_path="$base_dir/$rel_path"
     if [[ -f "$full_path" ]]; then
       # Store checksum and file path
-      md5sum "$full_path" | awk -v rp="$rel_path" '{print $1, rp}' >> "$checksum_file"
+      md5sum "$full_path" | awk -v rp="$rel_path" '{print $1, rp}' >>"$checksum_file"
     else
       # File doesn't exist yet - store empty marker
-      echo "MISSING $rel_path" >> "$checksum_file"
+      echo "MISSING $rel_path" >>"$checksum_file"
     fi
   done
 
@@ -800,28 +803,28 @@ inject_stale_transaction() {
   local steamos_dir="$efi_dir/EFI/steamos"
   if [[ -d "$steamos_dir" ]]; then
     # Atomic-replace staging file
-    echo "# STALE: grub.cfg.new (atomic-replace staging)" > "$steamos_dir/grub.cfg.new"
+    echo "# STALE: grub.cfg.new (atomic-replace staging)" >"$steamos_dir/grub.cfg.new"
 
     # Backup of replaced file
-    echo "# STALE: grub.cfg.bak (backup)" > "$steamos_dir/grub.cfg.bak"
+    echo "# STALE: grub.cfg.bak (backup)" >"$steamos_dir/grub.cfg.bak"
 
     # Temporary work file
-    echo "# STALE: grub.cfg.tmp (temporary)" > "$steamos_dir/grub.cfg.tmp"
+    echo "# STALE: grub.cfg.tmp (temporary)" >"$steamos_dir/grub.cfg.tmp"
   fi
 
   # Create stale partset files
   local partsets_dir="$efi_dir/SteamOS/partsets"
   if [[ -d "$partsets_dir" ]]; then
-    echo "# STALE: partset A.new" > "$partsets_dir/A.new"
-    echo "# STALE: partset A.bak" > "$partsets_dir/A.bak"
+    echo "# STALE: partset A.new" >"$partsets_dir/A.new"
+    echo "# STALE: partset A.bak" >"$partsets_dir/A.bak"
   fi
 
   # Create stale files in ESP directory if provided
   if [[ -n "$esp_dir" && -d "$esp_dir" ]]; then
     local esp_conf_dir="$esp_dir/SteamOS/conf"
     if [[ -d "$esp_conf_dir" ]]; then
-      echo "# STALE: bootconf.new" > "$esp_conf_dir/A.conf.new"
-      echo "# STALE: bootconf.bak" > "$esp_conf_dir/A.conf.bak"
+      echo "# STALE: bootconf.new" >"$esp_conf_dir/A.conf.new"
+      echo "# STALE: bootconf.bak" >"$esp_conf_dir/A.conf.bak"
     fi
   fi
 
@@ -864,15 +867,15 @@ create_sentinel_files() {
   fi
 
   # Create sentinel files
-  echo "$marker_content" > "$steamos_dir/sentinel-default.grub"
-  echo "$marker_content" > "$steamos_dir/sentinel-steamos.grub"
+  echo "$marker_content" >"$steamos_dir/sentinel-default.grub"
+  echo "$marker_content" >"$steamos_dir/sentinel-steamos.grub"
 
   local partsets_dir="$efi_dir/SteamOS/partsets"
   if [[ ! -d "$partsets_dir" ]]; then
     mkdir -p "$partsets_dir"
   fi
 
-  echo "$marker_content" > "$partsets_dir/sentinel-self"
+  echo "$marker_content" >"$partsets_dir/sentinel-self"
 
   return 0
 }

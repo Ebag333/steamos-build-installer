@@ -248,7 +248,7 @@ test_f09_formatting_fallback_constrained() {
   # for both slots). The invalid FAT marker simulates that the target
   # partition needs formatting.
   local invalid_fat_marker="$FLASHLESS_FIXTURE_DIR/.invalid-fat"
-  echo "invalid-fat-efi-B" > "$invalid_fat_marker"
+  echo "invalid-fat-efi-B" >"$invalid_fat_marker"
 
   # Simulate format authorization: the installer asks "is it OK to format?"
   # In the test, we authorize by providing the marker.
@@ -550,7 +550,7 @@ test_f13_btrfs_property_restored() {
   # Inject a failure during the write phase (truncate grub.cfg)
   local grub_cfg="$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg"
   if [[ -f "$grub_cfg" ]]; then
-    : > "$grub_cfg"  # Truncate to simulate failure
+    : >"$grub_cfg" # Truncate to simulate failure
   fi
 
   # Restore btrfs ro even on failure path

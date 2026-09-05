@@ -156,8 +156,8 @@ preflight_esp_is_fat_and_writable() {
   fi
 
   # 7. Write test — write + remove in subshell for guaranteed cleanup
-  if ! ( test_file="$(mktemp "$mountpoint/.preflight-esp-writable-XXXXXX")" \
-    && rm -f "$test_file" ) 2>/dev/null; then
+  if ! (test_file="$(mktemp "$mountpoint/.preflight-esp-writable-XXXXXX")" \
+    && rm -f "$test_file") 2>/dev/null; then
     die "PF-38: ESP filesystem is not writable at $mountpoint: $canonical"
   fi
 

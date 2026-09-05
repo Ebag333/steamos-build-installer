@@ -126,7 +126,7 @@ _simulate_apply_persistent_defaults() {
     else
       echo "$line"
     fi
-  done < "$grub_steamos" > "$tmp"
+  done <"$grub_steamos" >"$tmp"
   mv "$tmp" "$grub_steamos"
 
   return 0
@@ -151,7 +151,7 @@ _simulate_ensure_keep_list() {
     local entry
     for entry in "${REQUIRED_KEEP_FILES[@]}"; do
       if ! grep -qxF "$entry" "$keep_file" 2>/dev/null; then
-        echo "$entry" >> "$keep_file"
+        echo "$entry" >>"$keep_file"
       fi
     done
   else
@@ -161,7 +161,7 @@ _simulate_ensure_keep_list() {
       for entry in "${REQUIRED_KEEP_FILES[@]}"; do
         echo "$entry"
       done
-    } > "$keep_file"
+    } >"$keep_file"
   fi
 
   return 0
@@ -221,7 +221,7 @@ _create_function_temp_mountpoints() {
   local mount_tmp
   mount_tmp="$(mktemp "${TMPDIR:-/tmp}/mounts-XXXXXX")"
   for mp in "${FUNCTION_CHROOT_MOUNTS[@]}"; do
-    echo "$rootfs_dir/$mp" >> "$mount_tmp"
+    echo "$rootfs_dir/$mp" >>"$mount_tmp"
   done
   echo "$mount_tmp"
 }
@@ -257,7 +257,7 @@ _create_caller_owned_mounts() {
   mkdir -p "$rootfs_dir/home"
 
   # Create a marker file to prove they existed before build
-  echo "caller-owned" > "$rootfs_dir/.caller-mounts-existed"
+  echo "caller-owned" >"$rootfs_dir/.caller-mounts-existed"
   return 0
 }
 
@@ -275,7 +275,7 @@ _snapshot_mountpoints() {
 
   # Find all directories under rootfs that could be mountpoints
   find "$rootfs_dir" -mindepth 1 -maxdepth 2 -type d -printf '%P\n' 2>/dev/null \
-    | sort > "$snap"
+    | sort >"$snap"
 
   echo "$snap"
 }
@@ -338,7 +338,10 @@ test_b06_persistent_defaults_patched() {
   test_harness_begin_test "B-06: Persistent defaults patched"
 
   # Setup
-  build_scenario_setup || { test_harness_fail "setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "setup failed"
+    return
+  }
 
   local grub_steamos="$BUILD_ROOTFS_DIR/etc/default/grub-steamos"
   local grub_default="$BUILD_ROOTFS_DIR/etc/default/grub"
@@ -411,7 +414,10 @@ test_b07_keeplist_populated() {
   test_harness_begin_test "B-07: Atomic-update keep-list populated"
 
   # Setup
-  build_scenario_setup || { test_harness_fail "setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "setup failed"
+    return
+  }
 
   # Apply EFI state
   if ! _simulate_full_build_apply "$BUILD_ROOTFS_DIR" "$BUILD_EFI_DIR" "$BUILD_ESP_DIR"; then
@@ -492,7 +498,10 @@ test_b08_function_mounts_cleaned() {
   test_harness_begin_test "B-08: Function-owned mounts cleaned"
 
   # Setup
-  build_scenario_setup || { test_harness_fail "setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "setup failed"
+    return
+  }
 
   # Create caller-owned mounts (simulating pre-existing mounts)
   _create_caller_owned_mounts "$BUILD_ROOTFS_DIR"
@@ -567,7 +576,7 @@ test_b08_function_mounts_cleaned() {
     if [[ "$is_function_mount" -eq 0 ]]; then
       unexpected="${unexpected:+$unexpected }$entry"
     fi
-  done <<< "$new_entries"
+  done <<<"$new_entries"
 
   if [[ -n "$unexpected" ]]; then
     test_harness_fail "unexpected new mountpoints appeared: $unexpected"
@@ -592,7 +601,10 @@ test_b09_chroot_mounts_cleaned() {
   test_harness_begin_test "B-09: Function-owned chroot mounts cleaned"
 
   # Setup
-  build_scenario_setup || { test_harness_fail "setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "setup failed"
+    return
+  }
 
   # Create the chroot mountpoint directories
   local mp
@@ -674,7 +686,10 @@ test_b10_build_failure_cleanup() {
   test_harness_begin_test "B-10: Runtime GRUB failure cleans up"
 
   # Setup
-  build_scenario_setup || { test_harness_fail "setup failed"; return; }
+  build_scenario_setup || {
+    test_harness_fail "setup failed"
+    return
+  }
 
   # Record pre-failure state of EFI directory for rollback verification
   local grub_cfg_before

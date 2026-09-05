@@ -255,7 +255,7 @@ install_self_into_target() {
     umount -l "$mnt" 2>/dev/null || true
     # Wait briefly for lazy unmount to release the mount point, then clean up
     local _retries=0
-    while (( _retries < 5 )); do
+    while ((_retries < 5)); do
       rmdir "$mnt" 2>/dev/null && break
       sleep 1
       _retries=$((_retries + 1))

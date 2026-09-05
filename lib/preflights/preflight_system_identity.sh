@@ -54,7 +54,7 @@ _pf_si_read_os_release() {
 
   case "$canonical_os_release" in
     "$canonical_rootfs"/*) ;;
-    *) return 1 ;;  # Escaped the rootfs boundary
+    *) return 1 ;; # Escaped the rootfs boundary
   esac
 
   # os-release fields are KEY=VALUE; strip quotes from values.
@@ -214,7 +214,7 @@ preflight_system_identity_os_release() {
 
   # Parse ID_LIKE into an array (no glob expansion, controlled splitting).
   local id_like_tokens
-  read -ra id_like_tokens <<< "$id_like"
+  read -ra id_like_tokens <<<"$id_like"
 
   local found_arch=0
   local token
@@ -263,7 +263,7 @@ preflight_system_identity_os_release() {
     if [[ -n "$variant_id" ]]; then
       local found=0
       local av
-      read -ra av_tokens <<< "$accepted_variants"
+      read -ra av_tokens <<<"$accepted_variants"
       for av in "${av_tokens[@]}"; do
         if [[ "${variant_id,,}" == "${av,,}" ]]; then
           found=1
@@ -316,8 +316,8 @@ preflight_system_identity_topology_complete() {
   # Determine required slots based on scenario.
   local slots
   case "$scenario" in
-    build) slots="A" ;;  # Build is A-only
-    *)     slots="A B" ;;  # All others require both slots
+    build) slots="A" ;; # Build is A-only
+    *) slots="A B" ;;   # All others require both slots
   esac
 
   # Check each required partition exists and resolves to a block device.
@@ -427,7 +427,7 @@ preflight_system_identity_no_cross_slot_alias() {
       # Check for major:minor collision with any previously seen device.
       if [[ -n "$mm" ]]; then
         local i
-        for ((i=0; i<${#all_mm[@]}; i++)); do
+        for ((i = 0; i < ${#all_mm[@]}; i++)); do
           if [[ "${all_mm[$i]}" == "$mm" ]]; then
             die "PF-43: duplicate device identity — $label shares major:minor $mm with ${all_labels[$i]}"
           fi
@@ -437,7 +437,7 @@ preflight_system_identity_no_cross_slot_alias() {
       # Check for PARTUUID collision with any previously seen device.
       if [[ -n "$uuid" ]]; then
         local i
-        for ((i=0; i<${#all_uuid[@]}; i++)); do
+        for ((i = 0; i < ${#all_uuid[@]}; i++)); do
           if [[ "${all_uuid[$i],,}" == "${uuid,,}" ]]; then
             die "PF-43: duplicate PARTUUID — $label shares PARTUUID $uuid with ${all_labels[$i]}"
           fi
@@ -541,7 +541,7 @@ preflight_system_identity_partset_map() {
       fi
 
       debug "PF-44: partset '$slot' role='$role' uuid=$uuid device=$resolved"
-    done <<< "$parsed"
+    done <<<"$parsed"
   done
 
   # --- Validate self entry ---
@@ -558,7 +558,7 @@ preflight_system_identity_partset_map() {
       while IFS= read -r pair; do
         local role="${pair%%=*}" uuid="${pair#*=}"
         self_roles["$role"]="$uuid"
-      done <<< "$self_parsed"
+      done <<<"$self_parsed"
 
       # Compare against the expected slot's topology.
       for role in rootfs efi var; do
@@ -609,7 +609,7 @@ preflight_system_identity_partset_map() {
         while IFS= read -r pair; do
           local role="${pair%%=*}" uuid="${pair#*=}"
           other_roles["$role"]="$uuid"
-        done <<< "$other_parsed"
+        done <<<"$other_parsed"
 
         for role in rootfs efi var; do
           local other_uuid="${other_roles[$role]:-}"
@@ -682,7 +682,7 @@ preflight_system_identity_validate() {
   local slots
   case "$scenario" in
     build) slots="A" ;;
-    *)     slots="A B" ;;
+    *) slots="A B" ;;
   esac
 
   local slot partition

@@ -128,7 +128,7 @@ test_l01_current_slot_happy_path() {
         has_duplicate=1
       fi
     fi
-  done <<< "$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
+  done <<<"$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
 
   if [[ "$has_duplicate" -ne 0 ]]; then
     test_harness_fail "L-01: grub.cfg has duplicate required params in linux entries"
@@ -258,7 +258,7 @@ test_l06_update_grub_runs_directly() {
 
   local tracker_file="$LIVE_FIXTURE_DIR/.update-grub-called"
 
-  cat > "$shim_dir/update-grub" <<SHIM_EOF
+  cat >"$shim_dir/update-grub" <<SHIM_EOF
 #!/bin/bash
 # Tracking shim: records that update-grub was called
 echo "\$\$" > "$tracker_file"
@@ -334,7 +334,7 @@ test_l07_authoritative_config_patch() {
         local params_portion
         params_portion="$(printf '%s' "$line" | sed 's/^[[:space:]]*linux[[:space:]]\+[^[:space:]]\+[[:space:]]*//')"
         local -a tokens=()
-        read -ra tokens <<< "$params_portion"
+        read -ra tokens <<<"$params_portion"
 
         # Count occurrences of this param as a whole token
         local param_count=0
@@ -352,7 +352,7 @@ test_l07_authoritative_config_patch() {
           rc=1
         fi
       fi
-    done <<< "$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
+    done <<<"$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
   done
 
   if [[ "$rc" -ne 0 ]]; then

@@ -258,7 +258,7 @@ test_r05_target_grub_config_regenerated() {
         echo "    ASSERTION FAILED: kernel path referenced in grub.cfg does not exist: $full_kernel_path" >&2
       }
     fi
-  done <<< "$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
+  done <<<"$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
 
   # --- Verify required params exactly once per entry ---
   # Required params: ro (and root=UUID=... which is built into the linux line).
@@ -281,7 +281,7 @@ test_r05_target_grub_config_regenerated() {
         has_duplicate=1
       fi
     fi
-  done <<< "$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
+  done <<<"$(grep -v '^\s*#' "$grub_cfg" | grep '^\s*linux ')"
 
   if [[ "$has_duplicate" -ne 0 ]]; then
     test_harness_fail "R-05: grub.cfg has duplicate required params in linux entries"
@@ -417,12 +417,12 @@ test_r06_target_partsets_regenerated() {
       [[ "$line" =~ ^[[:space:]]*# ]] && continue
       [[ -z "${line// /}" ]] && continue
       local role uuid
-      read -r role uuid _extra <<< "$line"
+      read -r role uuid _extra <<<"$line"
       if [[ -n "$uuid" ]] && ! [[ "$uuid" =~ $uuid_pattern ]]; then
         echo "    ASSERTION FAILED: invalid PARTUUID format in $partset_file: '$uuid'" >&2
         format_ok=0
       fi
-    done < "$partset_file"
+    done <"$partset_file"
   done
 
   if [[ "$format_ok" -eq 0 ]]; then

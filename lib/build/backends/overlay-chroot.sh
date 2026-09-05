@@ -524,11 +524,11 @@ _build_overlay_diagnostics() {
     if [[ -n "$diag_pc_str" ]]; then
       # Strip all double quotes, then read whitespace-separated tokens into array
       local cleaned_pc="${diag_pc_str//\"/}"
-      read -ra diag_pc_files <<< "$cleaned_pc"
+      read -ra diag_pc_files <<<"$cleaned_pc"
     fi
     if [[ -n "$diag_pkgs_str" ]]; then
       local cleaned_pkgs="${diag_pkgs_str//\"/}"
-      read -ra diag_pkgs <<< "$cleaned_pkgs"
+      read -ra diag_pkgs <<<"$cleaned_pkgs"
     fi
   fi
 

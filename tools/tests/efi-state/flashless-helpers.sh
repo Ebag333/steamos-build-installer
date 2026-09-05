@@ -228,33 +228,33 @@ _flashless_snapshot_slot_a() {
   # Snapshot A-slot EFI grub.cfg
   local grub_a="$FLASHLESS_EFI_DIR/EFI/steamos/grub.cfg"
   if [[ -f "$grub_a" ]]; then
-    md5sum "$grub_a" | awk '{print $1, "efi-grub"}' > "$checksum_file"
+    md5sum "$grub_a" | awk '{print $1, "efi-grub"}' >"$checksum_file"
   else
-    echo "MISSING efi-grub" > "$checksum_file"
+    echo "MISSING efi-grub" >"$checksum_file"
   fi
 
   # Snapshot A-slot EFI grubx64.efi
   local efi_a="$FLASHLESS_EFI_DIR/EFI/steamos/grubx64.efi"
   if [[ -f "$efi_a" ]]; then
-    md5sum "$efi_a" | awk '{print $1, "efi-grubx64"}' >> "$checksum_file"
+    md5sum "$efi_a" | awk '{print $1, "efi-grubx64"}' >>"$checksum_file"
   else
-    echo "MISSING efi-grubx64" >> "$checksum_file"
+    echo "MISSING efi-grubx64" >>"$checksum_file"
   fi
 
   # Snapshot A-slot partset
   local partset_a="$FLASHLESS_EFI_DIR/SteamOS/partsets/A"
   if [[ -f "$partset_a" ]]; then
-    md5sum "$partset_a" | awk '{print $1, "partset-A"}' >> "$checksum_file"
+    md5sum "$partset_a" | awk '{print $1, "partset-A"}' >>"$checksum_file"
   else
-    echo "MISSING partset-A" >> "$checksum_file"
+    echo "MISSING partset-A" >>"$checksum_file"
   fi
 
   # Snapshot A-slot bootconf
   local conf_a="$FLASHLESS_ESP_DIR/SteamOS/conf/A.conf"
   if [[ -f "$conf_a" ]]; then
-    md5sum "$conf_a" | awk '{print $1, "bootconf-A"}' >> "$checksum_file"
+    md5sum "$conf_a" | awk '{print $1, "bootconf-A"}' >>"$checksum_file"
   else
-    echo "MISSING bootconf-A" >> "$checksum_file"
+    echo "MISSING bootconf-A" >>"$checksum_file"
   fi
 
   _FLASHLESS_SLOT_A_CHECKSUMS="$checksum_file"
@@ -273,7 +273,7 @@ _flashless_record_btrfs_ro_state() {
   #   3. Restore ro after completion
   #
   # Record initial state: ro is enabled (normal state).
-  echo "ro=1" > "$state_file"
+  echo "ro=1" >"$state_file"
 
   _FLASHLESS_BTRFS_RO_STATE_FILE="$state_file"
 }
@@ -289,9 +289,9 @@ _flashless_record_activation_state() {
   #   1. Stage B.conf (image-invalid=1) during write
   #   2. Validate B slot
   #   3. Only then set image-invalid=0 and mark active
-  echo "active-slot=A" > "$state_file"
-  echo "b-image-invalid=1" >> "$state_file"
-  echo "b-valid=0" >> "$state_file"
+  echo "active-slot=A" >"$state_file"
+  echo "b-image-invalid=1" >>"$state_file"
+  echo "b-valid=0" >>"$state_file"
 
   _FLASHLESS_ACTIVATION_STATE_FILE="$state_file"
 }
@@ -388,7 +388,7 @@ simulate_flashless_apply() {
 _flashless_clear_btrfs_ro() {
   # In the flashless scenario, clear btrfs ro before writing to target slot.
   local ro_state="$FLASHLESS_FIXTURE_DIR/.btrfs-ro"
-  echo "ro=0" > "$ro_state"
+  echo "ro=0" >"$ro_state"
   return 0
 }
 
@@ -398,7 +398,7 @@ _flashless_clear_btrfs_ro() {
 _flashless_restore_btrfs_ro() {
   # Restore btrfs ro to read-only after completing writes to target slot.
   local ro_state="$FLASHLESS_FIXTURE_DIR/.btrfs-ro"
-  echo "ro=1" > "$ro_state"
+  echo "ro=1" >"$ro_state"
   return 0
 }
 
@@ -457,17 +457,17 @@ _flashless_write_efi_artifacts() {
   # Create kernel and initramfs if they don't exist
   if [[ ! -f "$rootfs_dir/boot/vmlinuz-${kernel_version}" ]]; then
     dd if=/dev/urandom bs=1024 count=32 \
-       of="$rootfs_dir/boot/vmlinuz-${kernel_version}" 2>/dev/null
+      of="$rootfs_dir/boot/vmlinuz-${kernel_version}" 2>/dev/null
   fi
 
   if [[ ! -f "$rootfs_dir/boot/initramfs-${kernel_version}.img" ]]; then
     dd if=/dev/urandom bs=1024 count=64 \
-       of="$rootfs_dir/boot/initramfs-${kernel_version}.img" 2>/dev/null
+      of="$rootfs_dir/boot/initramfs-${kernel_version}.img" 2>/dev/null
   fi
 
   if [[ ! -f "$rootfs_dir/boot/amd-ucode.img" ]]; then
     dd if=/dev/urandom bs=1024 count=16 \
-       of="$rootfs_dir/boot/amd-ucode.img" 2>/dev/null
+      of="$rootfs_dir/boot/amd-ucode.img" 2>/dev/null
   fi
 
   return 0
@@ -582,7 +582,7 @@ _flashless_rebuild_partsets() {
   target_var_partuuid="$(derive_partuuid "$FLASHLESS_NAMESPACE" "var-${FLASHLESS_TARGET_SLOT}")"
 
   # Update self partset (target = slot B)
-  cat > "$partsets_dir/self" <<SELF_EOF
+  cat >"$partsets_dir/self" <<SELF_EOF
 rootfs ${target_rootfs_partuuid}
 efi ${target_efi_partuuid}
 var ${target_var_partuuid}
@@ -601,7 +601,7 @@ SELF_EOF
   var_b_partuuid="$(derive_partuuid "$FLASHLESS_NAMESPACE" "var-B")"
   esp_partuuid="$(derive_partuuid "$FLASHLESS_NAMESPACE" "esp")"
 
-  cat > "$partsets_dir/all" <<ALL_EOF
+  cat >"$partsets_dir/all" <<ALL_EOF
 rootfs ${rootfs_a_partuuid}
 efi ${efi_a_partuuid}
 var ${var_a_partuuid}
@@ -612,7 +612,7 @@ rootfs ${esp_partuuid}
 ALL_EOF
 
   # Update shared partset (esp only)
-  cat > "$partsets_dir/shared" <<SHARED_EOF
+  cat >"$partsets_dir/shared" <<SHARED_EOF
 rootfs ${esp_partuuid}
 SHARED_EOF
 
@@ -630,7 +630,7 @@ _flashless_stage_bootconf() {
 
   # Stage B.conf with image-invalid=1 (NOT yet activated)
   # This is the "staging" state — the image is written but not yet valid
-  cat > "$conf_dir/B.conf" <<BOOTCONF_B_EOF
+  cat >"$conf_dir/B.conf" <<BOOTCONF_B_EOF
 # Bootconf for slot B (flashless staging state)
 title=SteamOS (slot B)
 image-invalid=1
@@ -689,9 +689,9 @@ simulate_flashless_activate() {
   # 4. Simulate rauc status mark-active B
   # In the mock fixture, we record the activation state
   if [[ -f "$_FLASHLESS_ACTIVATION_STATE_FILE" ]]; then
-    echo "active-slot=B" > "$_FLASHLESS_ACTIVATION_STATE_FILE"
-    echo "b-image-invalid=0" >> "$_FLASHLESS_ACTIVATION_STATE_FILE"
-    echo "b-valid=1" >> "$_FLASHLESS_ACTIVATION_STATE_FILE"
+    echo "active-slot=B" >"$_FLASHLESS_ACTIVATION_STATE_FILE"
+    echo "b-image-invalid=0" >>"$_FLASHLESS_ACTIVATION_STATE_FILE"
+    echo "b-valid=1" >>"$_FLASHLESS_ACTIVATION_STATE_FILE"
   fi
 
   return 0
@@ -727,7 +727,7 @@ simulate_flashless_validation_failure() {
       # Corrupt grub.cfg by truncating it
       local grub_cfg="$efi_dir/EFI/steamos/grub.cfg"
       if [[ -f "$grub_cfg" ]]; then
-        : > "$grub_cfg"  # Truncate to empty
+        : >"$grub_cfg" # Truncate to empty
       fi
       ;;
     binary)
@@ -741,7 +741,7 @@ simulate_flashless_validation_failure() {
       # Corrupt self partset by emptying it
       local partset_self="$efi_dir/SteamOS/partsets/self"
       if [[ -f "$partset_self" ]]; then
-        : > "$partset_self"  # Truncate to empty
+        : >"$partset_self" # Truncate to empty
       fi
       ;;
     bootconf)
@@ -1153,7 +1153,7 @@ verify_target_grub_config() {
         rc=1
       fi
     fi
-  done < "$grub_cfg"
+  done <"$grub_cfg"
 
   # 3. Kernel params appear once per linux line (no duplicates)
   while IFS= read -r line; do
@@ -1170,12 +1170,12 @@ verify_target_grub_config() {
 
     # Tokenize and check for duplicates
     local -a tokens=()
-    read -ra tokens <<< "$params_portion"
+    read -ra tokens <<<"$params_portion"
     local -A token_counts=()
     local token
     for token in "${tokens[@]}"; do
       [[ -z "$token" ]] && continue
-      token_counts["$token"]=$(( ${token_counts["$token"]:-0} + 1 ))
+      token_counts["$token"]=$((${token_counts["$token"]:-0} + 1))
     done
 
     for token in "${!token_counts[@]}"; do
@@ -1184,7 +1184,7 @@ verify_target_grub_config() {
         rc=1
       fi
     done
-  done < "$grub_cfg"
+  done <"$grub_cfg"
 
   return $rc
 }

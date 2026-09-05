@@ -347,7 +347,7 @@ test_r03c_missing_tool_caught() {
     # by creating a failing shim that exits with an error indicating
     # "tool not found".
     local fail_shim="$restricted_bin/update-grub-missing"
-    cat > "$fail_shim" <<'MISSING_EOF'
+    cat >"$fail_shim" <<'MISSING_EOF'
 #!/bin/bash
 echo "ERROR: update-grub not found in PATH (preflight check)" >&2
 exit 1
@@ -455,7 +455,7 @@ test_r07_persistent_defaults_reconciled() {
     params="$(printf '%s' "$line" | sed -n 's/^[[:space:]]*linux[[:space:]]\+[^ ]*[[:space:]]*//p')"
     if [[ -n "$params" ]]; then
       local -a tokens
-      read -ra tokens <<< "$params"
+      read -ra tokens <<<"$params"
       local -A seen=()
       local token
       for token in "${tokens[@]}"; do
@@ -466,7 +466,7 @@ test_r07_persistent_defaults_reconciled() {
         seen["$token"]=1
       done
     fi
-  done < "$grub_cfg"
+  done <"$grub_cfg"
 
   if [[ "$has_duplicates" -ne 0 ]]; then
     test_harness_fail "R-07: duplicate kernel parameters found in grub.cfg"
@@ -905,7 +905,7 @@ test_r12_repatch_idempotency() {
     params="$(printf '%s' "$line" | sed -n 's/^[[:space:]]*linux[[:space:]]\+[^ ]*[[:space:]]*//p')"
     if [[ -n "$params" ]]; then
       local -a tokens
-      read -ra tokens <<< "$params"
+      read -ra tokens <<<"$params"
       local -A seen=()
       local token
       for token in "${tokens[@]}"; do
@@ -916,7 +916,7 @@ test_r12_repatch_idempotency() {
         seen["$token"]=1
       done
     fi
-  done < "$grub_cfg"
+  done <"$grub_cfg"
 
   if [[ "$has_duplicates" -ne 0 ]]; then
     test_harness_fail "R-12: duplicate kernel parameters found after second apply"

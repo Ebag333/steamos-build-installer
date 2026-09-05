@@ -76,7 +76,7 @@ _pf_efi_mount_cleanup() {
   local mountpoint="${1:?_pf_efi_mount_cleanup: missing mountpoint}"
 
   if ! mountpoint -q "$mountpoint" 2>/dev/null; then
-    return 0  # Already unmounted
+    return 0 # Already unmounted
   fi
 
   if umount "$mountpoint" 2>/dev/null; then
@@ -248,7 +248,7 @@ preflight_efi_mountpoint_safe() {
   # preflight_efi_accepts_writes run before checking emptiness.
   local stale
   for stale in "$mountpoint"/.preflight-writable-*; do
-    [[ -e "$stale" ]] || continue  # glob matched nothing
+    [[ -e "$stale" ]] || continue # glob matched nothing
     debug "PF-09: removing stale preflight test file: $stale"
     rm -f "$stale" 2>/dev/null \
       || die "PF-09: cannot remove stale preflight test file: $stale"
@@ -325,7 +325,7 @@ preflight_efi_existing_mount_correct() {
 
   # Validate FSTYPE.
   case "$mount_fstype" in
-    vfat|fat|fat32) ;;
+    vfat | fat | fat32) ;;
     *) die "PF-11: EFI mount has unexpected filesystem type ($mount_fstype): $mountpoint" ;;
   esac
 
@@ -417,7 +417,7 @@ preflight_efi_reject_corrupt() {
   local fstype
   fstype="$(blkid -s TYPE -o value "$device" 2>/dev/null)" || fstype=""
   case "$fstype" in
-    vfat|fat|fat32) ;;
+    vfat | fat | fat32) ;;
     *) die "PF-14: EFI partition has unexpected filesystem type (${fstype:-<unknown>}): $device" ;;
   esac
 
