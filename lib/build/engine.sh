@@ -49,12 +49,8 @@ _build_resolve_dep() {
   _DEP_VERSION="" _DEP_SOURCE="" _DEP_CLASS=""
 
   # Check if it's in the target image (Valve repos)
-  local dbpath=""
-  if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
-    dbpath="$root/usr/lib/holo/pacmandb"
-  elif [[ -d "$root/var/lib/pacman" ]]; then
-    dbpath="$root/var/lib/pacman"
-  fi
+  local dbpath
+  dbpath="$(resolve_pacman_dbpath "$root")" || dbpath=""
 
   if [[ -n "$dbpath" ]]; then
     local ver
@@ -562,8 +558,10 @@ build_profile_from_root() {
 
   # Detect glibc version
   local glibc_ver=""
-  if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
-    glibc_ver="$(pacman -Q --dbpath "$root/usr/lib/holo/pacmandb" glibc 2>/dev/null | awk '{print $2}' || true)"
+  local _glibc_dbpath
+  _glibc_dbpath="$(resolve_pacman_dbpath "$root")" || _glibc_dbpath=""
+  if [[ -n "$_glibc_dbpath" ]]; then
+    glibc_ver="$(pacman -Q --dbpath "$_glibc_dbpath" glibc 2>/dev/null | awk '{print $2}' || true)"
   fi
 
   # Generate pacman.conf for the profile
@@ -845,11 +843,8 @@ _build_record_package_versions() {
   local recipe_conf="${3:-}"
 
   local dbpath=""
-  if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
-    dbpath="$root/usr/lib/holo/pacmandb"
-  elif [[ -d "$root/var/lib/pacman" ]]; then
-    dbpath="$root/var/lib/pacman"
-  else
+  dbpath="$(resolve_pacman_dbpath "$root")" || dbpath=""
+  if [[ -z "$dbpath" ]]; then
     warn "No pacman database found in $root"
     touch "$output"
     return 0

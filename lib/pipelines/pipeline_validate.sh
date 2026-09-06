@@ -168,6 +168,13 @@ _validate_all() {
 
   # Hardware packages (all entries from hw-packages.conf)
   _validate_all_hw_packages "$root"
+
+  # NVIDIA GSP firmware and Vulkan ICD
+  _validate_nvidia_gsp_firmware "$root"
+  _validate_nvidia_vulkan_icd "$root"
+
+  # Logitech HID source bundle
+  _validate_hid_source_bundle "$root"
 }
 
 # ---------------------------------------------------------------------------
@@ -187,6 +194,22 @@ _validate_update_branch() {
   else
     _validate_info "update-branch" "expected $expected, got ${actual:-<unknown>}" "$expected" "$actual"
   fi
+
+  # Also check manifest.json (primary update-manifest location)
+  local _manifest_paths=("$root/usr/lib/steamos/manifest.json" "$root/usr/lib64/steamos/manifest.json")
+  for _manifest in "${_manifest_paths[@]}"; do
+    if [[ -f "$_manifest" ]]; then
+      local _manifest_branch
+      _manifest_branch="$(grep -oP '"default_update_branch"\s*:\s*"\K[^"]+' "$_manifest" 2>/dev/null || true)"
+      if [[ -n "$_manifest_branch" ]]; then
+        if [[ "$_manifest_branch" == "$expected" ]]; then
+          _validate_pass "config/update-branch-manifest" "" "manifest.json branch" "$_manifest_branch"
+        else
+          _validate_fail "config/update-branch-manifest" "manifest.json branch is '$_manifest_branch', expected '$expected'"
+        fi
+      fi
+    fi
+  done
 }
 
 _validate_default_session() {
@@ -226,6 +249,22 @@ _validate_target_variant() {
   else
     _validate_info "target-variant" "expected $expected, got ${actual:-<unknown>}" "$expected" "$actual"
   fi
+
+  # Also check manifest.json (primary update-manifest location)
+  local _manifest_paths=("$root/usr/lib/steamos/manifest.json" "$root/usr/lib64/steamos/manifest.json")
+  for _manifest in "${_manifest_paths[@]}"; do
+    if [[ -f "$_manifest" ]]; then
+      local _manifest_variant
+      _manifest_variant="$(grep -oP '"variant"\s*:\s*"\K[^"]+' "$_manifest" 2>/dev/null || true)"
+      if [[ -n "$_manifest_variant" ]]; then
+        if [[ "$_manifest_variant" == "$expected" ]]; then
+          _validate_pass "config/variant-manifest" "" "manifest.json variant" "$_manifest_variant"
+        else
+          _validate_fail "config/variant-manifest" "manifest.json variant is '$_manifest_variant', expected '$expected'"
+        fi
+      fi
+    fi
+  done
 }
 
 _validate_update_mode() {
@@ -784,6 +823,78 @@ _validate_nvidia_modprobe() {
   fi
 }
 
+# ── 10. NVIDIA GSP firmware ────────────────────────────────────────────
+_validate_nvidia_gsp_firmware() {
+  local root="${1:-/}"
+
+  if ! nvidia_is_selected; then
+    _validate_skip "hw/nvidia/gsp-firmware" "nvidia not selected"
+    return
+  fi
+
+  local nvidia_fw_dir="$root/usr/lib/firmware/nvidia"
+  local gsp_files
+  gsp_files="$(compgen -G "$nvidia_fw_dir/*/gsp_*.bin" 2>/dev/null)" || gsp_files=""
+
+  if [[ -n "$gsp_files" ]]; then
+    local count
+    count="$(echo "$gsp_files" | wc -l)"
+    _validate_pass "hw/nvidia/gsp-firmware" "" "gsp firmware" "${count} file(s)"
+  else
+    _validate_fail "hw/nvidia/gsp-firmware" "GSP firmware not found in $nvidia_fw_dir"
+  fi
+}
+
+# ── 11. NVIDIA Vulkan ICD ─────────────────────────────────────────────
+_validate_nvidia_vulkan_icd() {
+  local root="${1:-/}"
+
+  if ! nvidia_is_selected; then
+    _validate_skip "hw/nvidia/vulkan-icd" "nvidia not selected"
+    return
+  fi
+
+  local icd_path="$root/usr/share/vulkan/icd.d/nvidia_icd.json"
+
+  if [[ -f "$icd_path" ]]; then
+    _validate_pass "hw/nvidia/vulkan-icd" "" "nvidia_icd.json" "present"
+  else
+    _validate_fail "hw/nvidia/vulkan-icd" "nvidia_icd.json not found at $icd_path"
+  fi
+}
+
+# ── 12. Logitech HID source bundle ────────────────────────────────────
+_validate_hid_source_bundle() {
+  local root="${1:-/}"
+
+  if [[ " ${HW_SUPPORT_ITEMS:-} " != *" logitech-hid "* ]]; then
+    _validate_skip "hw/logitech-hid/source-bundle" "logitech-hid not selected"
+    return
+  fi
+
+  local bundle_dir="$root/home/.steamos-build/bundles/hid"
+  local required_files=(
+    "hid-logitech-dj.c"
+    "hid-logitech-hidpp.c"
+    "hid-ids.h"
+    "usbhid/usbhid.h"
+    "Makefile"
+  )
+
+  local missing=()
+  for f in "${required_files[@]}"; do
+    if [[ ! -f "$bundle_dir/$f" ]]; then
+      missing+=("$f")
+    fi
+  done
+
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    _validate_pass "hw/logitech-hid/source-bundle" "" "HID source bundle" "${#required_files[@]} file(s)"
+  else
+    _validate_fail "hw/logitech-hid/source-bundle" "missing: ${missing[*]}"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Validation Helpers — Hardware Packages
 # ---------------------------------------------------------------------------
@@ -822,7 +933,9 @@ _query_installed_version() {
   if [[ "$root" == "/" ]]; then
     pacman -Q "$pkg" 2>/dev/null | awk '{print $2}'
   else
-    pacman -Q --dbpath "$root/usr/lib/holo/pacmandb" "$pkg" 2>/dev/null | awk '{print $2}'
+    local _qv_dbpath
+    _qv_dbpath="$(resolve_pacman_dbpath "$root")" || _qv_dbpath="$root/var/lib/pacman"
+    pacman -Q --dbpath "$_qv_dbpath" "$pkg" 2>/dev/null | awk '{print $2}'
   fi
 }
 
@@ -914,7 +1027,7 @@ _validate_is_selected() {
 
   # System config items are always selected
   case "$item" in
-    update-branch* | default-session* | target-variant* | update-mode* | pacman-repo* | base-os-mode* | rootfs-size* | machine-id*) return 0 ;;
+    update-branch* | config/update-branch-manifest | default-session* | target-variant* | config/variant-manifest | update-mode* | pacman-repo* | base-os-mode* | rootfs-size* | machine-id*) return 0 ;;
     kernel/*) return 0 ;;
     nvidia/*) return 0 ;;
   esac

@@ -48,8 +48,10 @@ steamos_get_kernel_version() {
 
   # Try from the installed kernel package
   local kernel_pkg=""
-  if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
-    kernel_pkg="$(pacman -Q --dbpath "$root/usr/lib/holo/pacmandb" 2>/dev/null | grep '^linux-neptune' | sort -V | tail -1 | awk '{print $2}' || true)"
+  local _kernel_dbpath
+  _kernel_dbpath="$(resolve_pacman_dbpath "$root")" || _kernel_dbpath=""
+  if [[ -n "$_kernel_dbpath" ]]; then
+    kernel_pkg="$(pacman -Q --dbpath "$_kernel_dbpath" 2>/dev/null | grep '^linux-neptune' | sort -V | tail -1 | awk '{print $2}' || true)"
   fi
 
   if [[ -n "$kernel_pkg" ]]; then

@@ -384,15 +384,15 @@ setup_mount_partitions() {
   log "Mounting rootfs ($ROOTPART) → $MNT"
   mount -o compress-force=zstd:3 "$ROOTPART" "$MNT" \
     || die "Failed to mount rootfs: $ROOTPART → $MNT"
-  track_mount "$MNT"
+  cleanup_track_mount "$MNT"
   log "Mounting efi ($EFIPART) → $EFIMNT"
   mount "$EFIPART" "$EFIMNT" \
     || die "Failed to mount EFI partition: $EFIPART → $EFIMNT"
-  track_mount "$EFIMNT"
+  cleanup_track_mount "$EFIMNT"
   log "Mounting home ($HOMEPART) → $HOMEMNT"
   mount "$HOMEPART" "$HOMEMNT" \
     || die "Failed to mount home partition: $HOMEPART → $HOMEMNT"
-  track_mount "$HOMEMNT"
+  cleanup_track_mount "$HOMEMNT"
 
   log "Rootfs mount options: $(findmnt -no OPTIONS "$MNT")"
 

@@ -283,7 +283,7 @@ check_arch_glibc_compat() {
 
   # Read glibc from the pristine image package database, not from the overlay.
   img_glibc="$(
-    pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" glibc 2>/dev/null \
+    pacman -Q --dbpath "$(resolve_pacman_dbpath "$MNT")" glibc 2>/dev/null \
       | awk 'NR == 1 { print $2 }' \
       | grep -oE '[0-9]+\.[0-9]+' \
       | head -1
@@ -466,13 +466,15 @@ _install_arch_hw_manifest() {
   log "Pacman database:"
   _run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true"
   if _is_install_chroot; then
+    local _chroot_dbpath
+    _chroot_dbpath="$(resolve_pacman_dbpath "$MERGED")" && _chroot_dbpath="${_chroot_dbpath#"$MERGED"}" || _chroot_dbpath="/usr/lib/holo/pacmandb"
     log "NVIDIA local DB entries:"
-    _run_in_root "ls -ld /usr/lib/holo/pacmandb/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true"
+    _run_in_root "ls -ld ${_chroot_dbpath}/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true"
     # Check for damaged records (missing desc files).
     # shellcheck disable=SC2016 # Variables expand inside the chroot, not here.
     _run_in_root '
       bad=0
-      for d in /usr/lib/holo/pacmandb/local/*; do
+      for d in '"${_chroot_dbpath}"'/local/*; do
         [[ -d "$d" ]] || continue
         if [[ ! -f "$d/desc" ]]; then
           echo "MISSING desc: $d"
@@ -630,13 +632,15 @@ _install_arch_hw_manifest_batch() {
   log "Pacman database:"
   _run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true"
   if _is_install_chroot; then
+    local _chroot_dbpath
+    _chroot_dbpath="$(resolve_pacman_dbpath "$MERGED")" && _chroot_dbpath="${_chroot_dbpath#"$MERGED"}" || _chroot_dbpath="/usr/lib/holo/pacmandb"
     log "NVIDIA local DB entries:"
-    _run_in_root "ls -ld /usr/lib/holo/pacmandb/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true"
+    _run_in_root "ls -ld ${_chroot_dbpath}/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true"
     # Check for damaged records (missing desc files).
     # shellcheck disable=SC2016 # Variables expand inside the chroot, not here.
     _run_in_root '
       bad=0
-      for d in /usr/lib/holo/pacmandb/local/*; do
+      for d in '"${_chroot_dbpath}"'/local/*; do
         [[ -d "$d" ]] || continue
         if [[ ! -f "$d/desc" ]]; then
           echo "MISSING desc: $d"
@@ -662,6 +666,10 @@ _install_arch_hw_manifest_batch() {
   ((needs_umount)) && umount "$MERGED$arch_pkgdir_chroot" 2>/dev/null
   rm -rf "$arch_pkgdir_host"
 }
+
+# ---------------------------------------------------------------------------
+# Batch Helpers (unified manifest)
+# ---------------------------------------------------------------------------
 
 # Install pacman packages from pre-collected arrays (unified source).
 # All packages come from the image's configured repos — no separate Arch config.
@@ -769,13 +777,15 @@ _install_pacman_hw_batch() {
     debug "Pacman database:"
     _run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true" >&2
     if _is_install_chroot; then
+      local _chroot_dbpath
+      _chroot_dbpath="$(resolve_pacman_dbpath "$MERGED")" && _chroot_dbpath="${_chroot_dbpath#"$MERGED"}" || _chroot_dbpath="/usr/lib/holo/pacmandb"
       debug "NVIDIA local DB entries:"
-      _run_in_root "ls -ld /usr/lib/holo/pacmandb/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true" >&2
+      _run_in_root "ls -ld ${_chroot_dbpath}/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true" >&2
       # Check for damaged records (missing desc files).
       # shellcheck disable=SC2016 # Variables expand inside the chroot, not here.
       _run_in_root '
         bad=0
-        for d in /usr/lib/holo/pacmandb/local/*; do
+        for d in '"${_chroot_dbpath}"'/local/*; do
           [[ -d "$d" ]] || continue
           if [[ ! -f "$d/desc" ]]; then
             echo "MISSING desc: $d"

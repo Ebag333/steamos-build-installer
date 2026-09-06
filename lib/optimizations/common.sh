@@ -411,4 +411,3 @@ warn() { # lint-ignore: no-shadow
     printf '[optimizations] WARNING: %s\n' "$*" >&2
   fi
 }
-

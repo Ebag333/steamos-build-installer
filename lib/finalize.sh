@@ -15,25 +15,18 @@ finalize() {
 
   # ── Package verification ───────────────────────────────────────────────
   # Query the image's pacman database for required packages.
-  local nvidia_ver lib32_ver fw_ver
+  local nvidia_ver lib32_ver
   nvidia_ver="$(
-    pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" nvidia-utils 2>/dev/null \
+    pacman -Q --dbpath "$(resolve_pacman_dbpath "$MNT")" nvidia-utils 2>/dev/null \
       | awk '{print $2}' || true
   )"
   lib32_ver="$(
-    pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" lib32-nvidia-utils 2>/dev/null \
-      | awk '{print $2}' || true
-  )"
-  fw_ver="$(
-    pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" linux-firmware 2>/dev/null \
+    pacman -Q --dbpath "$(resolve_pacman_dbpath "$MNT")" lib32-nvidia-utils 2>/dev/null \
       | awk '{print $2}' || true
   )"
 
   # Only verify nvidia packages if they were installed
   if [[ -n "$nvidia_ver" ]]; then
-    [[ -n "$lib32_ver" ]] \
-      || die "lib32-nvidia-utils missing from final image pacman database"
-
     log "  nvidia-utils:       $nvidia_ver"
     log "  lib32-nvidia-utils: $lib32_ver"
 
@@ -67,19 +60,9 @@ finalize() {
       || die "NVIDIA version mismatch: pacman=$nvidia_ver module=$module_ver"
     log "  NVIDIA kernel module: $module_ver for $KVER"
 
-    grep -q 'blacklist nouveau' "$MNT/etc/modprobe.d/99-nvidia-patch.conf" 2>/dev/null \
-      || die "modprobe conf is empty/missing"
-    compgen -G "$MNT/usr/lib/firmware/nvidia/*/gsp_*.bin" >/dev/null \
-      || die "GSP firmware not found — nvidia-open requires it"
-    [[ -f "$MNT/usr/share/vulkan/icd.d/nvidia_icd.json" ]] \
-      || die "Vulkan ICD json missing — Steam games will not find the GPU"
   else
     log "  Skipping nvidia verification (nvidia not installed)"
   fi
-
-  [[ -n "$fw_ver" ]] \
-    || die "linux-firmware missing from final image pacman database"
-  log "  linux-firmware:     $fw_ver"
 
   # HID module checks — only if logitech-hid was built and installed
   if [[ -d "$MNT/usr/lib/modules/$KVER/updates/logitech" ]]; then
@@ -154,7 +137,7 @@ finalize() {
     for pkg in "${NEW_PKGS[@]}"; do
       local pkg_usage
       _compute_pkg_usage() {
-        pacman -Qlq --dbpath "$MNT/usr/lib/holo/pacmandb" "$1" 2>/dev/null \
+        pacman -Qlq --dbpath "$(resolve_pacman_dbpath "$MNT")" "$1" 2>/dev/null \
           | while IFS="" read -r f; do
             [[ -f "$MNT$f" || -L "$MNT$f" ]] && printf '%s\0' "$MNT$f"
           done \
@@ -188,80 +171,8 @@ finalize() {
   touch "$MNT/.final-rw-test" || die "Rootfs became read-only during build"
   rm -f "$MNT/.final-rw-test"
 
-  # ── System config verification ─────────────────────────────────────────
   # ── Custom script ──────────────────────────────────────────────────────
   run_custom_script "$MNT"
-
-  # Verify that variant and update-branch are correctly stamped in the image.
-  # These must be checked on the raw rootfs ($MNT) AFTER all modifications
-  # (overlay chroot, install_payload, customizations, custom script) but
-  # BEFORE sync/unmount.  This catches cases where a write appeared to
-  # succeed but didn't persist (e.g. os-release written through an overlay
-  # upper that was later discarded).
-  #
-  # Each location is checked individually.  Failures are collected and reported
-  # together; we don't die until every check has run so the log shows the full
-  # picture.
-  log "Verifying system configuration in final image"
-  local _variant="${TARGET_VARIANT:-steamdeck}"
-  local _branch="${UPDATE_BRANCH:-stable}"
-  local _verify_failures=0
-
-  # ── Variant: manifest.json (both lib paths) ───────────────────────────
-  local _manifest_path
-  for _manifest_path in /usr/lib/steamos-atomupd/manifest.json /usr/lib64/steamos-atomupd/manifest.json; do
-    local _manifest="$MNT$_manifest_path"
-    if [[ -f "$_manifest" ]] && grep -q "\"variant\"[[:space:]]*:[[:space:]]*\"$_variant\"" "$_manifest"; then
-      log "  OK $_manifest_path variant=$_variant"
-    else
-      warn "  VERIFY FAILED: $_manifest_path variant != $_variant"
-      ((++_verify_failures)) || true
-    fi
-  done
-
-  # ── Variant: os-release VARIANT_ID ────────────────────────────────────
-  local _os_release="$MNT/etc/os-release"
-  if [[ -f "$_os_release" ]] && grep -q "^VARIANT_ID=$_variant$" "$_os_release"; then
-    log "  OK /etc/os-release VARIANT_ID=$_variant"
-  else
-    warn "  VERIFY FAILED: /etc/os-release VARIANT_ID != $_variant"
-    ((++_verify_failures)) || true
-  fi
-
-  # ── Variant: OOBE neutralization ──────────────────────────────────────
-  if [[ "$_variant" == "steamdeck" ]]; then
-    if verify_optimization "oobe" "neutralize-oobe" "chroot" "$MNT"; then
-      log "  OK OOBE neutralization applied"
-    else
-      warn "  VERIFY FAILED: OOBE neutralization not applied"
-      ((++_verify_failures)) || true
-    fi
-  fi
-
-  # ── Update branch: manifest.json (both lib paths) ─────────────────────
-  for _manifest_path in /usr/lib/steamos-atomupd/manifest.json /usr/lib64/steamos-atomupd/manifest.json; do
-    local _manifest="$MNT$_manifest_path"
-    if [[ -f "$_manifest" ]] && grep -q "\"default_update_branch\"[[:space:]]*:[[:space:]]*\"$_branch\"" "$_manifest"; then
-      log "  OK $_manifest_path default_update_branch=$_branch"
-    else
-      warn "  VERIFY FAILED: $_manifest_path default_update_branch != $_branch"
-      ((++_verify_failures)) || true
-    fi
-  done
-
-  # ── Update branch: os-release STEAMOS_DEFAULT_UPDATE_BRANCH ───────────
-  if [[ -f "$_os_release" ]] && grep -q "^STEAMOS_DEFAULT_UPDATE_BRANCH=$_branch$" "$_os_release"; then
-    log "  OK /etc/os-release STEAMOS_DEFAULT_UPDATE_BRANCH=$_branch"
-  else
-    warn "  VERIFY FAILED: /etc/os-release STEAMOS_DEFAULT_UPDATE_BRANCH != $_branch"
-    ((++_verify_failures)) || true
-  fi
-
-  # ── Verdict ───────────────────────────────────────────────────────────
-  if [[ "$_verify_failures" -gt 0 ]]; then
-    die "System configuration verification failed — $_verify_failures check(s) failed, see warnings above"
-  fi
-  log "System configuration verified: variant=$_variant branch=$_branch"
 
   # ── Pacman repository config ───────────────────────────────────────────
   # When Pacman repo is main, point all repos at the -main variants

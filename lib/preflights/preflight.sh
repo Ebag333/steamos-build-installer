@@ -135,15 +135,10 @@ _preflight_build() {
 
   debug "_preflight_build: rootfs=$rootfs efi=$target_efi esp=$esp_mount slot=$slot"
 
-  # --- Resolve device paths from environment or by-partsets ---
+  # --- Resolve device paths from environment ---
   local _pf_loop_dev="${LOOP_DEV:-}"
   local _pf_rootfs_dev="${ROOTFS_DEV:-}"
   local _pf_efi_dev="${EFI_DEV:-}"
-
-  # Attempt to resolve EFI device from by-partsets if not provided directly.
-  if [[ -z "$_pf_efi_dev" && -n "$slot" && -e "/dev/disk/by-partsets/$slot/efi" ]]; then
-    _pf_efi_dev="$(readlink -f "/dev/disk/by-partsets/$slot/efi" 2>/dev/null)" || _pf_efi_dev=""
-  fi
 
   # --- Scenario checks (require resolved devices, not mounts) ---
   if [[ -n "$_pf_loop_dev" && -n "$_pf_rootfs_dev" && -n "$_pf_efi_dev" ]]; then

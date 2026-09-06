@@ -358,7 +358,9 @@ phase_build_build() {
   # Snapshot package state before hardware install (name-only for comm baseline)
   local _hw_before="$WORKDIR/hw-pkgs-before.txt"
   local _hw_before_full="$WORKDIR/hw-pkgs-before-full.txt"
-  pacman -Q --dbpath "$MERGED/usr/lib/holo/pacmandb" 2>/dev/null \
+  local _hw_before_dbpath
+  _hw_before_dbpath="$(resolve_pacman_dbpath "$MERGED")" || _hw_before_dbpath="$MERGED/var/lib/pacman"
+  pacman -Q --dbpath "$_hw_before_dbpath" 2>/dev/null \
     | LC_ALL=C sort >"$_hw_before_full"
   awk '{print $1}' "$_hw_before_full" | LC_ALL=C sort -u >"$_hw_before"
 
@@ -368,7 +370,9 @@ phase_build_build() {
   # (install_hw_libs installs into $MERGED overlay; files must be copied to $MNT)
   local _hw_after="$WORKDIR/hw-pkgs-after.txt"
   local _hw_after_full="$WORKDIR/hw-pkgs-after-full.txt"
-  pacman -Q --dbpath "$MERGED/usr/lib/holo/pacmandb" 2>/dev/null \
+  local _hw_after_dbpath
+  _hw_after_dbpath="$(resolve_pacman_dbpath "$MERGED")" || _hw_after_dbpath="$MERGED/var/lib/pacman"
+  pacman -Q --dbpath "$_hw_after_dbpath" 2>/dev/null \
     | LC_ALL=C sort >"$_hw_after_full"
   awk '{print $1}' "$_hw_after_full" | LC_ALL=C sort -u >"$_hw_after"
 
@@ -430,7 +434,9 @@ phase_build_build() {
 
     # Register packages in the image's pacman db
     local _hw_upper="${UPPER:?UPPER is not set}"
-    if [[ -d "$_hw_upper/usr/lib/holo/pacmandb/local" ]]; then
+    local _hw_dbpath
+    _hw_dbpath="$(resolve_pacman_dbpath "$MERGED")" || _hw_dbpath="$MERGED/usr/lib/holo/pacmandb"
+    if [[ -d "${_hw_upper}${_hw_dbpath#"$MERGED"}/local" ]]; then
       local -a _hw_new_pkgs=()
       mapfile -t _hw_new_pkgs <"$_hw_new_pkgs_file"
 

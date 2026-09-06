@@ -62,7 +62,7 @@ _build_overlay_create_root() {
     losetup -d "$ovl_loop" 2>/dev/null
     return 1
   }
-  track_mount "$ovl_mnt"
+  cleanup_track_mount "$ovl_mnt"
 
   mkdir -p "$ovl_mnt/upper" "$ovl_mnt/ovlwork"
 
@@ -75,19 +75,19 @@ _build_overlay_create_root() {
     losetup -d "$ovl_loop" 2>/dev/null
     return 1
   }
-  track_mount "$merged"
+  cleanup_track_mount "$merged"
 
   # Mount essential filesystems
   mount --bind /dev "$merged/dev" || true
-  track_mount "$merged/dev"
+  cleanup_track_mount "$merged/dev"
   mount --bind /dev/pts "$merged/dev/pts" || true
-  track_mount "$merged/dev/pts"
+  cleanup_track_mount "$merged/dev/pts"
   mount --bind /dev/shm "$merged/dev/shm" || true
-  track_mount "$merged/dev/shm"
+  cleanup_track_mount "$merged/dev/shm"
   mount --bind /proc "$merged/proc" || true
-  track_mount "$merged/proc"
+  cleanup_track_mount "$merged/proc"
   mount --bind /sys "$merged/sys" || true
-  track_mount "$merged/sys"
+  cleanup_track_mount "$merged/sys"
 
   log "  Overlay build root created" >&2
   echo "$build_dir"

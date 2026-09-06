@@ -542,7 +542,7 @@ reconcile_grub() {
   log "Mounting $label EFI: $efi_dev -> $(readlink -f "$efi_dev" 2>/dev/null || echo '<unresolved>')"
   mount "$efi_dev" "$EFIMNT" \
     || die "Could not mount EFI for $label"
-  track_mount "$EFIMNT"
+  cleanup_track_mount "$EFIMNT"
 
   log "Target EFI mount: $(findmnt -rn -o SOURCE,FSTYPE,OPTIONS,TARGET "$EFIMNT" 2>/dev/null || echo '<unknown>')"
 

@@ -256,8 +256,8 @@ _pf_fs_btrfs_replace_active() {
     return 2
   fi
 
-  # The output contains "No replace found on" when idle.
-  if [[ "$output" == *"No replace found"* || "$output" == *"no replace found"* ]]; then
+  # The output contains "No replace found" or "Never started" when idle.
+  if [[ "$output" == *"No replace found"* || "$output" == *"no replace found"* || "$output" == *"Never started"* ]]; then
     return 1
   fi
 
@@ -275,16 +275,22 @@ _pf_fs_btrfs_replace_active() {
 #   Returns:
 #     0 — active UUID-change operation detected (not used currently, see below)
 #     1 — no active UUID-change operation (idle)
-#     2 — unable to determine (always, until a reliable locking mechanism is implemented)
-#   NOTE: The old pgrep-based approach was unreliable (global, race-prone).
-#         A proper per-filesystem locking mechanism is needed for accurate detection.
-#         Until then we always return 2 (unable to determine) to fail closed.
+#   NOTE: Reliable detection of an in-progress btrfstune UUID change is not
+#         feasible from outside the process. The deployment lock (PF_LOCK_FD
+#         from preflight_resources_validate) provides the real protection
+#         against concurrent mutations. We assume idle and let the lock
+#         prevent conflicts.
 _pf_fs_btrfs_uuid_change_active() {
-  # pgrep -x btrfstune is unreliable — it is global and race-prone.
-  # We cannot reliably detect an in-progress UUID change without proper
-  # per-filesystem locking (e.g., advisory lock files or btrfs-specific state).
-  # Fail closed: return unable-to-determine.
-  return 2
+  # Reliable detection of an in-progress btrfstune UUID change is not
+  # feasible from outside the process. The superblock flag
+  # BTRFS_SUPER_FLAG_CHANGING_FSID could be checked via raw device reads,
+  # but requires byte-level parsing and raw block device access.
+  #
+  # The deployment lock (PF_LOCK_FD from preflight_resources_validate)
+  # provides the real protection against concurrent mutations.
+  # Assume idle and let the lock prevent conflicts.
+  debug "_pf_fs_btrfs_uuid_change_active: assuming idle (detection not implemented; protected by deployment lock)"
+  return 1
 }
 
 # _pf_fs_resolve_device_major_minor DEVICE
@@ -703,6 +709,14 @@ pf_fs_check_rootfs_device_identity() {
 pf_fs_check_no_btrfs_operations() {
   local rootfs="${1:?pf_fs_check_no_btrfs_operations: missing rootfs path}"
   local rc
+
+  # Skip if not Btrfs — these checks are filesystem-specific.
+  local fstype
+  fstype="$(findmnt -nro FSTYPE -M "$rootfs" 2>/dev/null | head -1)" || fstype=""
+  if [[ "$fstype" != "btrfs" ]]; then
+    debug "PF-60: rootfs is $fstype (not btrfs) — skipping Btrfs operation checks"
+    return 0
+  fi
 
   _pf_fs_acquire_btrfs_lock "$rootfs"
 

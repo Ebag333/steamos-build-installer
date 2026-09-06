@@ -36,7 +36,7 @@ nvidia_is_selected() {
     fi
   fi
   # Fallback: check if nvidia-utils is in the image
-  if [[ -n "${MNT:-}" ]] && pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" nvidia-utils &>/dev/null; then
+  if [[ -n "${MNT:-}" ]] && pacman -Q --dbpath "$(resolve_pacman_dbpath "$MNT")" nvidia-utils &>/dev/null; then
     return 0
   fi
   return 1
@@ -47,7 +47,8 @@ nvidia_is_selected() {
 # Args: $1 = root path
 discover_kernel_pkg() {
   local root="${1:?discover_kernel_pkg: missing root}"
-  local dbpath="$root/usr/lib/holo/pacmandb"
+  local dbpath
+  dbpath="$(resolve_pacman_dbpath "$root")"
 
   KPKG_NAME="$(
     pacman --dbpath "$dbpath" -Qq 2>/dev/null \
@@ -186,8 +187,12 @@ register_payload_pkgs() {
   local overlay_upper="${2:?register_payload_pkgs: missing overlay upper}"
   shift 2
 
-  local db="$dest_root/usr/lib/holo/pacmandb/local"
+  local db
+  db="$(resolve_pacman_dbpath "$dest_root")/local"
   local pkg new_ver old_ver src
+
+  local _overlay_dbpath
+  _overlay_dbpath="$(resolve_pacman_dbpath "$MERGED")" || _overlay_dbpath="$MERGED/usr/lib/holo/pacmandb"
 
   mkdir -p "$db"
 
@@ -201,7 +206,7 @@ register_payload_pkgs() {
     [[ -n "$new_ver" ]] \
       || die "Unable to determine overlay version for package: $pkg"
 
-    src="$overlay_upper/usr/lib/holo/pacmandb/local/$pkg-$new_ver"
+    src="$overlay_upper${_overlay_dbpath#"$MERGED"}/local/$pkg-$new_ver"
 
     [[ -d "$src" ]] \
       || die "Pacman DB entry not found in overlay upper: $pkg-$new_ver"
@@ -209,7 +214,7 @@ register_payload_pkgs() {
     # Remove exact previous version of this same package from destination.
     old_ver="$(
       pacman \
-        --dbpath "$dest_root/usr/lib/holo/pacmandb" \
+        --dbpath "$(resolve_pacman_dbpath "$dest_root")" \
         -Q "$pkg" 2>/dev/null \
         | awk 'NR == 1 {print $2}'
     )" || true
@@ -231,7 +236,8 @@ remove_replaced_packages() {
   local root="${1:?remove_replaced_packages: missing root}"
   shift
 
-  local dbpath="$root/usr/lib/holo/pacmandb"
+  local dbpath
+  dbpath="$(resolve_pacman_dbpath "$root")"
   local pkg f ver
 
   for pkg in "$@"; do

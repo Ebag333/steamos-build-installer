@@ -10,6 +10,47 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+# resolve_pacman_dbpath ROOT
+#   Resolve the pacman database path for a given root filesystem.
+#   Strategy:
+#     1. Parse DBPath from $ROOT/etc/pacman.conf
+#     2. Check for SteamOS holo/pacmandb directory
+#     3. Fall back to Arch default /var/lib/pacman
+#   Prints the resolved path and returns 0 on success.
+#   Returns 1 if ROOT is empty or doesn't exist.
+resolve_pacman_dbpath() {
+  local root="${1:?resolve_pacman_dbpath: missing ROOT}"
+
+  [[ -n "$root" && -d "$root" ]] || return 1
+
+  # Strategy 1: Parse DBPath from pacman.conf
+  local dbpath=""
+  if [[ -f "$root/etc/pacman.conf" ]]; then
+    dbpath="$(sed -n 's/^[[:space:]]*DBPath[[:space:]]*=//p' "$root/etc/pacman.conf" 2>/dev/null \
+      | head -1 | tr -d ' ')"
+  fi
+  if [[ -n "$dbpath" && -d "$root$dbpath" ]]; then
+    echo "$root$dbpath"
+    return 0
+  fi
+
+  # Strategy 2: Check SteamOS holo/pacmandb
+  if [[ -d "$root/usr/lib/holo/pacmandb" ]]; then
+    echo "$root/usr/lib/holo/pacmandb"
+    return 0
+  fi
+
+  # Strategy 3: Arch default
+  if [[ -d "$root/var/lib/pacman" ]]; then
+    echo "$root/var/lib/pacman"
+    return 0
+  fi
+
+  # Nothing found — return the default (caller should handle missing dir)
+  echo "$root/var/lib/pacman"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Internal: Resolve pacman config for the current context.
 #
@@ -1936,9 +1977,11 @@ pacman_clean_cache() {
         return 1
       }
 
+      local _dbpath
+      _dbpath="$(resolve_pacman_dbpath "$root")" || _dbpath="$root/var/lib/pacman"
       pacman \
         --root "$root" \
-        --dbpath "$root/var/lib/pacman" \
+        --dbpath "$_dbpath" \
         --cachedir "$root/var/cache/pacman/pkg" \
         --config "$root/etc/pacman.conf" \
         -Sc --noconfirm

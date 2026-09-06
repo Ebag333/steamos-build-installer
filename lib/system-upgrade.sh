@@ -111,7 +111,9 @@ system_upgrade() {
 
   # Snapshot package state before upgrade
   local before_file="$WORKDIR/pkgs-before-sysupgrade.txt"
-  pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" 2>/dev/null | sort >"$before_file" || true
+  local _pre_dbpath
+  _pre_dbpath="$(resolve_pacman_dbpath "$MNT")" || _pre_dbpath="$MNT/var/lib/pacman"
+  pacman -Q --dbpath "$_pre_dbpath" 2>/dev/null | sort >"$before_file" || true
   if [[ ! -s "$before_file" ]]; then
     warn "Could not snapshot pre-upgrade package list — summary will be inaccurate"
   fi
@@ -148,7 +150,9 @@ system_upgrade() {
 
   # Snapshot package state after upgrade
   local after_file="$WORKDIR/pkgs-after-sysupgrade.txt"
-  pacman -Q --dbpath "$MNT/usr/lib/holo/pacmandb" 2>/dev/null | sort >"$after_file" || true
+  local _post_dbpath
+  _post_dbpath="$(resolve_pacman_dbpath "$MNT")" || _post_dbpath="$MNT/var/lib/pacman"
+  pacman -Q --dbpath "$_post_dbpath" 2>/dev/null | sort >"$after_file" || true
   if [[ ! -s "$after_file" ]]; then
     warn "Could not snapshot post-upgrade package list — summary will be inaccurate"
   fi
