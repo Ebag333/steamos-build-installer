@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# 25-amd-gpu — raise discrete AMD GPU power cap to vendor ceiling.
+# APUs expose no power*_cap, so anything found here is a discrete card.
+# Idempotent: exits early if already at desired state.
+set -uo pipefail
+
+for h in /sys/class/hwmon/hwmon*; do
+  [ "$(cat "$h/name" 2>/dev/null)" = "amdgpu" ] || continue
+  [ -r "$h/power1_cap" ] && [ -r "$h/power1_cap_max" ] || continue
+
+  current="$(cat "$h/power1_cap")"
+  target="$(cat "$h/power1_cap_max")"
+
+  if [ -n "$target" ] && [ "$current" != "$target" ]; then
+    [ -w "$h/power1_cap" ] && echo "$target" >"$h/power1_cap" 2>/dev/null || true
+  fi
+done

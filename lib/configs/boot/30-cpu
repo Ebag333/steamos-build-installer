@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# 30-cpu — set CPU governor and energy performance preference.
+# Reads desired values from /etc/steam-perf/config.conf.
+# Idempotent: exits early if already at desired state.
+set -uo pipefail
+
+CONFIG=/etc/steam-perf/config.conf
+[ -r "$CONFIG" ] && . "$CONFIG"
+
+TARGET_GOV="${CPU_GOVERNOR:-performance}"
+TARGET_EPP="${CPU_EPP:-performance}"
+
+changed=0
+for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+  [ -w "$f" ] || continue
+  if [ "$(cat "$f")" != "$TARGET_GOV" ]; then
+    echo "$TARGET_GOV" >"$f" 2>/dev/null || true
+    changed=1
+  fi
+done
+
+for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
+  [ -w "$f" ] || continue
+  if [ "$(cat "$f")" != "$TARGET_EPP" ]; then
+    echo "$TARGET_EPP" >"$f" 2>/dev/null || true
+    changed=1
+  fi
+done
+
+# Ensure boost is enabled (AMD and Intel spell it differently).
+[ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 >/sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true
+[ -w /sys/devices/system/cpu/intel_pstate/no_turbo ] && echo 0 >/sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true

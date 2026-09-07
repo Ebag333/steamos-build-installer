@@ -1,0 +1,57 @@
+# Maintainer: steamos-build-installer
+pkgname=logitech-hid
+pkgver=1.0
+pkgrel=1
+pkgdesc="Logitech receiver and HID++ kernel modules (upstream)"
+arch=('x86_64')
+license=('GPL2')
+makedepends=('linux-neptune-616-headers' 'pahole' 'curl')
+source=()
+noextract=()
+
+_kver="6.16.12.valve24-1-neptune-616"
+_ref="master"
+_base_url="https://raw.githubusercontent.com/torvalds/linux/${_ref}/drivers/hid"
+
+prepare() {
+  cd "$srcdir"
+  mkdir -p usbhid
+
+  for f in hid-logitech-dj.c hid-logitech-hidpp.c hid-ids.h; do
+    echo "  Downloading $f"
+    curl -sfL "${_base_url}/$f" -o "$f"
+  done
+
+  # usbhid.h — prefer kernel's own copy, fall back to upstream
+  if [[ -f "/usr/lib/modules/${_kver}/build/drivers/hid/usbhid/usbhid.h" ]]; then
+    cp "/usr/lib/modules/${_kver}/build/drivers/hid/usbhid/usbhid.h" usbhid/usbhid.h
+  else
+    curl -sfL "${_base_url}/usbhid/usbhid.h" -o usbhid/usbhid.h
+  fi
+
+  # Patch kernel API compat
+  for f in hid-logitech-*.c; do
+    sed -i 's/kzalloc_obj(\*\([a-zA-Z_][a-zA-Z_0-9]*\))/kzalloc(sizeof(*\1), GFP_KERNEL)/g' "$f"
+    sed -i 's/kzalloc_obj(struct \([a-zA-Z_][a-zA-Z_0-9]*\))/kzalloc(sizeof(struct \1), GFP_KERNEL)/g' "$f"
+    sed -i 's/kzalloc_objs(\([a-zA-Z_][a-zA-Z_0-9]*\), \([a-zA-Z_][a-zA-Z_0-9]*\))/kcalloc(\2, sizeof(\1), GFP_KERNEL)/g' "$f"
+    sed -i 's/consumer_report, sizeof(consumer_report), 5, 1);/consumer_report, 5, 1);/' "$f"
+  done
+
+  cat >Makefile <<'MAKEFILE'
+obj-m += hid-logitech-dj.o
+obj-m += hid-logitech-hidpp.o
+MAKEFILE
+}
+
+build() {
+  cd "$srcdir"
+  make -C "/usr/lib/modules/${_kver}/build" M="$srcdir" clean
+  make -C "/usr/lib/modules/${_kver}/build" M="$srcdir" modules
+}
+
+package() {
+  cd "$srcdir"
+  local _install_dir="$pkgdir/usr/lib/modules/${_kver}/updates/logitech"
+  install -Dm644 hid-logitech-dj.ko "$_install_dir/hid-logitech-dj.ko"
+  install -Dm644 hid-logitech-hidpp.ko "$_install_dir/hid-logitech-hidpp.ko"
+}

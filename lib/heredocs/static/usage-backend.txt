@@ -1,0 +1,21 @@
+Usage:
+  backend.sh --action <build|flash|flashless|live|validate|preflight|list-images|list-devices|is-system-disk|reboot> [options]
+
+Common:
+  --action ACTION           Required: build, flash, flashless, live, validate, preflight, list-images, list-devices, is-system-disk, reboot
+  --image FILE              Source image path (for build)
+  --config FILE             Build configuration file (required for build, flash, live)
+
+Build:
+  All build settings are configured via --config file.
+  --output-dir DIR          Directory for finished image (default: same as source)
+
+Flash:
+  --device /dev/sdX         Target device for flash action
+  --confirm                 Required for destructive CLI/backend flash
+  --allow-system-disk       Override system-disk protection
+
+Live:
+  Config file uses the same format as build.
+
+No positional parameters are accepted.

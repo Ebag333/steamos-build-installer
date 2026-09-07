@@ -1,0 +1,13 @@
+[Unit]
+Description=Collect boot logs to USB
+DefaultDependencies=no
+After=local-fs.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/collect-boot-logs
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

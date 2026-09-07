@@ -1,0 +1,15 @@
+# /etc/scx_loader/config.toml
+# scx_loader configuration — steamos-nvidia-installer
+# LAVD scheduler in autopilot mode for frametime consistency.
+# Reference: https://github.com/sched-ext/scx-loader/blob/main/crates/scx_loader/configuration.md
+# Landed at /etc/scx_loader/config.toml by the installer.
+
+default_sched = "scx_lavd"
+default_mode = "Auto"
+
+[scheds.scx_lavd]
+auto_mode = ["--autopilot", "--pinned-slice-us", "500"]
+gaming_mode = ["--performance", "--pinned-slice-us", "500"]
+lowlatency_mode = ["--performance", "--pinned-slice-us", "500"]
+powersave_mode = ["--powersave", "--pinned-slice-us", "500"]
+server_mode = ["--performance", "--slice-min-us", "3000", "--slice-max-us", "10000", "--pinned-slice-us", "3000"]

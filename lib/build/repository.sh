@@ -1,0 +1,141 @@
+#!/bin/bash
+#
+# steamos-build-installer — lib/build/repository.sh
+# Repository policy enforcement.
+#
+# Sourced by engine.sh — do not run directly.
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "lib/build/repository.sh is a library — source it from the wrapper, not run directly." >&2
+  exit 1
+fi
+
+# Guard against double-sourcing
+[[ -v _BUILD_REPO_LOADED ]] && return 0
+_BUILD_REPO_LOADED=1
+
+# ---------------------------------------------------------------------------
+# Repository policy
+# ---------------------------------------------------------------------------
+
+# Packages that are allowed to come from Arch repos (build tools).
+# These are safe because they don't affect runtime ABI.
+ARCH_FALLBACK_ALLOWED=(
+  cmake
+  meson
+  ninja
+  git
+  patch
+  pkgconf
+  python
+  python-build
+  python-installer
+  python-setuptools
+  python-wheel
+  autoconf
+  automake
+  bison
+  flex
+  m4
+  make
+  gcc
+  binutils
+  debugedit
+  fakeroot
+)
+
+# Base packages that must NEVER come from Arch repos (ABI-critical).
+# These are generic system packages that always match the target image.
+ARCH_FALLBACK_DENIED_BASE=(
+  glibc
+  gcc-libs
+  libgcc
+  libstdc++
+  systemd
+  linux
+  linux-api-headers
+)
+
+# Runtime denied list (base + recipe-specific).
+# Populated by repo_init() from recipe.conf ARCH_FALLBACK_DENIED_EXTRA.
+ARCH_FALLBACK_DENIED=("${ARCH_FALLBACK_DENIED_BASE[@]}")
+
+# Initialize repository policy from recipe.conf.
+# Call this after sourcing a recipe to add recipe-specific denied packages.
+# Args: $1 = recipe.conf path (optional)
+repo_init() {
+  local recipe_conf="${1:-}"
+
+  # Start with base denied list
+  ARCH_FALLBACK_DENIED=("${ARCH_FALLBACK_DENIED_BASE[@]}")
+
+  # Add recipe-specific denied packages if provided
+  if [[ -n "$recipe_conf" && -f "$recipe_conf" ]]; then
+    local extra_str
+    extra_str="$(sed -n '/^ARCH_FALLBACK_DENIED_EXTRA=(/,/^)/{/^ARCH_FALLBACK_DENIED_EXTRA=(/s///;/^)/s///;p}' "$recipe_conf" 2>/dev/null)"
+    if [[ -n "$extra_str" ]]; then
+      local -a extra_pkgs
+      eval "extra_pkgs=($extra_str)"
+      ARCH_FALLBACK_DENIED+=("${extra_pkgs[@]}")
+    fi
+  fi
+}
+
+# Check if a package is allowed to come from Arch repos.
+# Args: $1 = package name
+# Returns 0 if allowed, 1 if denied.
+repo_is_arch_allowed() {
+  local pkg="${1:?}"
+
+  # Check denied list first
+  local denied
+  for denied in "${ARCH_FALLBACK_DENIED[@]}"; do
+    [[ "$pkg" == "$denied" ]] && return 1
+  done
+
+  # Check allowed list
+  local allowed
+  for allowed in "${ARCH_FALLBACK_ALLOWED[@]}"; do
+    [[ "$pkg" == "$allowed" ]] && return 0
+  done
+
+  # Unknown packages are denied by default
+  return 1
+}
+
+# Generate a pacman config with proper repository priority.
+# Args: $1 = target root, $2 = output path, $3 = include arch repos (0/1)
+repo_generate_config() {
+  local root="${1:?}"
+  local output="${2:?}"
+  local include_arch="${3:-1}"
+
+  # Validate that the target's pacman.conf exists and is readable
+  local pacman_conf="$root/etc/pacman.conf"
+  if [[ ! -r "$pacman_conf" ]]; then
+    echo "ERROR: Cannot read $pacman_conf — target root may be corrupt or incomplete." >&2
+    return 1
+  fi
+
+  # Read DBPath from the target's config
+  local dbpath
+  dbpath="$(sed -n 's/^[[:space:]]*DBPath[[:space:]]*=//p' "$pacman_conf" | head -1 | tr -d ' ')"
+  [[ -n "$dbpath" ]] || dbpath="/var/lib/pacman"
+
+  # Start with options
+  {
+    printf '[options]\n'
+    printf 'SigLevel = Never\n'
+    printf 'Architecture = %s\n' "${PROFILE_ARCH:-x86_64}"
+    printf 'DBPath = %s\n' "$dbpath"
+    printf '\n'
+  } >"$output"
+
+  # Append repo sections from the target's config (skip [options])
+  sed -n '/^\[/,$p' "$pacman_conf" | sed '/^\[options\]/,/^$/d' >>"$output"
+
+  # Optionally append Arch repos
+  if ((include_arch)); then
+    append_arch_repos "$output"
+  fi
+}

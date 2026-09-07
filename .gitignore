@@ -9,6 +9,11 @@
 .nvidia-patch-work/
 .verify-work/
 
+# test build output
+/tools/tests/build/**
+/tools/tests/output/**
+/tools/tests/temp/*
+
 # personal working notes (not part of the released tool)
 ACHIEVEMENTS.md
 HANDOFF.md
@@ -17,3 +22,8 @@ BLACKSCREEN-INVESTIGATION.md
 # archived earlier scripts + dev notes — not part of the release
 old/
 NOTES.md
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
+._*
