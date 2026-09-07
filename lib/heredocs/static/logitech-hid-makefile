@@ -1,0 +1,2 @@
+obj-m += hid-logitech-dj.o
+obj-m += hid-logitech-hidpp.o

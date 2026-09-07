@@ -91,10 +91,7 @@ if grep -qE 'sizeof\(consumer_report\), 5, 1' "${matched_files[@]}"; then
 fi
 
 # ── 3. Create Makefile ───────────────────────────────────────────────────
-cat >"$BUILD_DIR/Makefile" <<'MAKEFILE'
-obj-m += hid-logitech-dj.o
-obj-m += hid-logitech-hidpp.o
-MAKEFILE
+cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../heredocs/static/logitech-hid-makefile" >"$BUILD_DIR/Makefile"
 
 # ── 4. Verify stock drivers are modules (not built-in) ───────────────────
 KCONFIG="/usr/lib/modules/$KVER/build/.config"

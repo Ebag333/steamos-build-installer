@@ -324,14 +324,7 @@ _NVIDIA_CONF="/etc/modprobe.d/99-nvidia-patch.conf"
 if [[ ! -s "$_NVIDIA_CONF" ]]; then
   echo "Installing nvidia modprobe config"
   mkdir -p /etc/modprobe.d
-  cat >"$_NVIDIA_CONF" <<'MODPROBE_EOF'
-# Added by steamos-build-installer
-blacklist nouveau
-options nouveau modeset=0
-
-# Explicit although enabled by default on current NVIDIA drivers
-options nvidia_drm modeset=1 fbdev=1
-MODPROBE_EOF
+  cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../heredocs/static/nvidia-modprobe-dkms.conf" >"$_NVIDIA_CONF"
 fi
 
 if [[ -s "$_NVIDIA_CONF" ]]; then

@@ -10,6 +10,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
+# Resolve the path to the heredocs directory relative to this file
+_heredoc_dir() {
+    local dir
+    dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    echo "${dir}/heredocs"
+}
+
 # Shared logging/failure framework.  Callers may set these before sourcing:
 #   LOG_TAG      short human-readable prefix (default: nvidia-usb)
 #   LOGGER_TAG   systemd-journal tag (default: steamos-build)
@@ -568,26 +575,14 @@ append_arch_repos() {
 
   # Idempotency: only append sections that don't already exist
   if ! grep -q '^\[core\]' "$conf" 2>/dev/null; then
-    cat >>"$conf" <<'EOF'
-
-[core]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-EOF
+    cat "$(_heredoc_dir)/static/pacman-core.conf" >>"$conf"
   fi
 
   if ! grep -q '^\[extra\]' "$conf" 2>/dev/null; then
-    cat >>"$conf" <<'EOF'
-
-[extra]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-EOF
+    cat "$(_heredoc_dir)/static/pacman-extra.conf" >>"$conf"
   fi
 
   if ! grep -q '^\[multilib\]' "$conf" 2>/dev/null; then
-    cat >>"$conf" <<'EOF'
-
-[multilib]
-Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
-EOF
+    cat "$(_heredoc_dir)/static/pacman-multilib.conf" >>"$conf"
   fi
 }

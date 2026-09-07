@@ -421,13 +421,7 @@ install_nvidia_modprobe_conf() {
   log "Installing nvidia modprobe configuration"
 
   mkdir -p "$conf_dir"
-  cat >"$conf_dir/99-nvidia-patch.conf" <<'EOF'
-# Added by steamos-build-installer
-blacklist nouveau
-options nouveau modeset=0
-options nvidia-drm modeset=1 fbdev=1
-options nvidia NVreg_PreserveVideoMemoryAllocations=1
-EOF
+  cat "$(_heredoc_dir)/static/nvidia-modprobe.conf" > "$conf_dir/99-nvidia-patch.conf"
 
   return 0
 }

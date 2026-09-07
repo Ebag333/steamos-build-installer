@@ -50,14 +50,7 @@ apply_update_strategy() {
           warn "hold: failed to back up $bin"
           continue
         }
-      cat >"$MNT/usr/bin/$bin" <<'STUB'
-#!/bin/bash
-# Stubbed by steamos-build-installer: an OS update would replace the rootfs
-# and remove the NVIDIA driver. Original saved as $0.orig.
-echo "OS updates are held on this system (NVIDIA-patched image)." >&2
-# 7 = "no update available" to keep the Steam UI happy
-exit 7
-STUB
+      cat "$(_heredoc_dir)/static/update-stub.sh" > "$MNT/usr/bin/$bin"
       chmod 755 "$MNT/usr/bin/$bin" \
         || warn "hold: failed to chmod $bin"
     done

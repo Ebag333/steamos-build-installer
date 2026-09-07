@@ -27,35 +27,7 @@ FORMAT="csv"
 HAVE_BASE_SET=0
 
 usage() {
-  cat <<'EOF_USAGE'
-Usage:
-  pacman-provenance-audit.sh --arch-conf FILE [OPTIONS] [PACKAGE...]
-
-Options:
-  --arch-conf FILE      pacman.conf configured for upstream Arch repositories
-  --format FORMAT       Output format: csv, json, tsv, or table (default: csv)
-  --csv                 Alias for --format csv
-  --json                Alias for --format json
-  --tsv                 Alias for --format tsv
-  --table               Alias for --format table
-  -h, --help            Show this help
-
-With no PACKAGE arguments, all installed packages are examined.
-
-Source classes:
-  SHARED_UPSTREAM          Valve core/extra/multilib and Arch both provide it
-  VALVE_PLATFORM_OVERRIDE Valve holo/jupiter and Arch both provide it
-  VALVE_PLATFORM_ONLY     Valve holo/jupiter only
-  VALVE_BASE_REPO_ONLY    Valve core/extra/multilib only
-  SHARED_OTHER            Other Valve repo and Arch both provide it
-  VALVE_OTHER_ONLY        Other Valve repo only
-  ARCH_ONLY               Only upstream Arch currently provides it
-  LOCAL_ONLY              Installed, but in neither current repository universe
-
-Important:
-  Repository availability is current-state metadata. pacman does not reliably
-  record the sync repository an already-installed package originally came from.
-EOF_USAGE
+  cat "$(dirname "$(dirname "${BASH_SOURCE[0]}")")/lib/heredocs/static/usage-pacman-provence.txt"
 }
 
 packages=()
@@ -749,33 +721,6 @@ case "$FORMAT" in
     ;;
 
   json)
-    python3 - "$out" <<'PY'
-import csv
-import json
-import sys
-
-path = sys.argv[1]
-
-with open(path, "r", encoding="utf-8", newline="") as f:
-    rows = list(csv.DictReader(f, delimiter="\t"))
-
-for row in rows:
-    reqby = row.get("REQBY", "-")
-    row["REQBY"] = int(reqby) if reqby.isdigit() else None
-
-    arch_base = row.get("ARCH_BASE")
-    if arch_base == "YES":
-        row["ARCH_BASE"] = True
-    elif arch_base == "NO":
-        row["ARCH_BASE"] = False
-    else:
-        row["ARCH_BASE"] = None
-
-    flags = row.get("FLAGS", "-")
-    row["FLAGS"] = [] if flags in ("", "-") else flags.split(",")
-
-json.dump(rows, sys.stdout, indent=2, ensure_ascii=False)
-sys.stdout.write("\n")
-PY
+    python3 - "$out" < "$(dirname "$(dirname "${BASH_SOURCE[0]}")")/lib/heredocs/static/csv-to-json.py"
     ;;
 esac

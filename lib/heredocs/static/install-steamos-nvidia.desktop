@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Install SteamOS (NVIDIA) to Hard Drive
+GenericName=Install SteamOS (NVIDIA) to Hard Drive
+Comment=Erase an internal disk and install this NVIDIA-patched SteamOS onto it
+Exec=/home/deck/tools/install_to_hd.sh all
+Icon=drive-harddisk
+Path=/home/deck
+Terminal=true
+Type=Application
+StartupNotify=true

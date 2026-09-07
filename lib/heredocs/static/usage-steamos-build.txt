@@ -1,0 +1,33 @@
+Usage:
+  steamos-build.sh
+      Launch the YAD GUI.
+
+  steamos-build.sh --action build --image FILE --config FILE [options]
+  steamos-build.sh --action flash --image FILE --device /dev/sdX
+  steamos-build.sh --action live --config FILE
+  steamos-build.sh --action validate [--config FILE] [--image FILE] [--output FILE]
+  steamos-build.sh --action reboot
+  steamos-build.sh --setup
+
+Setup:
+  --setup                  Install host dependencies required by this tool
+
+Named arguments:
+  --action ACTION          build | flash | live | validate | reboot
+  --image FILE             Base SteamOS repair image
+  --device DEVICE          Target flash device (flash only)
+  --config FILE            Build config file (all build options go here)
+  --output-dir DIR         Where to write output image
+  --output FILE            Write validation JSON report to file (validate only)
+
+Flash:
+  --allow-system-disk      Permit a target detected as the current system disk
+
+Output control:
+  --verbose                Show additional detail (package names, command output)
+  --debug                  Show debug diagnostics (implies --verbose)
+
+All build options (rootfs size, session, update mode, packages, tweaks, etc.)
+are set via --config. See docs/customization_build_config.md for the full list.
+
+No positional parameters are accepted.

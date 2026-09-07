@@ -57,29 +57,7 @@ UDEV_RULE=/run/udev/rules.d/89-steamos-build-installer.rules
 UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 
 _backend_usage() {
-  cat <<'EOF'
-Usage:
-  backend.sh --action <build|flash|flashless|live|validate|preflight|list-images|list-devices|is-system-disk|reboot> [options]
-
-Common:
-  --action ACTION           Required: build, flash, flashless, live, validate, preflight, list-images, list-devices, is-system-disk, reboot
-  --image FILE              Source image path (for build)
-  --config FILE             Build configuration file (required for build, flash, live)
-
-Build:
-  All build settings are configured via --config file.
-  --output-dir DIR          Directory for finished image (default: same as source)
-
-Flash:
-  --device /dev/sdX         Target device for flash action
-  --confirm                 Required for destructive CLI/backend flash
-  --allow-system-disk       Override system-disk protection
-
-Live:
-  Config file uses the same format as build.
-
-No positional parameters are accepted.
-EOF
+  cat "$(_heredoc_dir)/static/usage-backend.txt"
 }
 
 # ---------------------------------------------------------------------------
@@ -438,10 +416,7 @@ _validate_mount_image() {
   # Install udev guard BEFORE attaching loop — prevents udisks2 from
   # seeing the partitions and triggering an automount popup.
   mkdir -p /run/udev/rules.d
-  cat >"$VALIDATE_UDEV_RULE" <<'EOF'
-# steamos-validate — suppress udisks2 automount for all loop partitions
-SUBSYSTEM=="block", KERNEL=="loop[0-9]*p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0"
-EOF
+  cat "$(_heredoc_dir)/static/validate-udev.rule" >"$VALIDATE_UDEV_RULE"
   udevadm control --reload-rules
   log "Installed udev guard: $VALIDATE_UDEV_RULE"
 

@@ -86,10 +86,7 @@ _flashless_extract_image() {
   # the rule is removed on cleanup regardless of which loop device was used.
   local _flashless_udev_rule="/run/udev/rules.d/89-steamos-build-flashless.rules"
   mkdir -p /run/udev/rules.d
-  cat >"$_flashless_udev_rule" <<'EOF'
-# steamos-build flashless-loop quarantine.
-SUBSYSTEM=="block", KERNEL=="loop[0-9]*p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0"
-EOF
+  cat "$(_heredoc_dir)/static/flashless-udev.rule" >"$_flashless_udev_rule"
   udevadm control --reload-rules 2>/dev/null || true
 
   log "Loop-mounting built image: $img"

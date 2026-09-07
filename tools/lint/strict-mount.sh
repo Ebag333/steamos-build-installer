@@ -117,7 +117,6 @@ while IFS= read -r -d '' file; do
       fi
       continue
     fi
-    # lint-ignore: private-funcs
     if [[ "$line" =~ _missing_commands ]]; then
       _in_missing_commands=1
       continue
@@ -210,7 +209,6 @@ while IFS= read -r -d '' file; do
         continue
       fi
       # Exclude known safe function names
-      # lint-ignore: private-funcs
       if [[ ! "$line" =~ cleanup_track_loop ]] \
         && [[ ! "$line" =~ strict_detach_loop ]] \
         && [[ ! "$line" =~ cleanup_attach_loop ]] \
