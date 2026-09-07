@@ -9,7 +9,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-# Globals set by overlay_mount() / overlay_mount_with_image().
+# Globals set by overlay_mount() / _overlay_mount_with_image().
 # Use := to only set if unset, so a caller that pre-populates these (e.g.
 # setup_clear_stale_state) is not clobbered when the library is sourced.
 : "${UPPER:=}"
@@ -23,7 +23,7 @@ fi
 # Sets: UPPER, OVLWORK, MERGED globals
 #
 # The caller is responsible for ensuring that a persistent upper layer belongs
-# to this lower tree.  overlay_mount_with_image() does that with a cache key.
+# to this lower tree.  _overlay_mount_with_image() does that with a cache key.
 overlay_mount() {
   local lowerdir="${1:?overlay_mount: missing lowerdir}"
   local workdir="${2:?overlay_mount: missing workdir}"
@@ -62,40 +62,33 @@ overlay_mount() {
   overlay_opts="index=off,metacopy=off,redirect_dir=nofollow,xino=off,nfs_export=off"
   overlay_opts+=",lowerdir=$lowerdir,upperdir=$UPPER,workdir=$OVLWORK"
 
-  mount -t overlay overlay -o "$overlay_opts" "$MERGED"
+  cleanup_mount "$MERGED" "overlay merge" -- -t overlay overlay -o "$overlay_opts"
   mount --make-rprivate "$MERGED"
-  cleanup_track_mount "$MERGED"
 
   # Mount virtual filesystems for chroot operations.
-  mount -t proc proc "$MERGED/proc"
-  cleanup_track_mount "$MERGED/proc"
-  mount --rbind /sys "$MERGED/sys"
+  cleanup_mount "$MERGED/proc" "chroot proc" -- -t proc proc "$MERGED/proc"
+  cleanup_mount "$MERGED/sys" "chroot sys" -- --rbind /sys "$MERGED/sys"
   mount --make-rslave "$MERGED/sys"
-  cleanup_track_mount "$MERGED/sys"
 
   # /dev: non-recursive bind to avoid cloning /dev/shm/steamos-build mounts.
-  mount --bind /dev "$MERGED/dev"
+  cleanup_mount "$MERGED/dev" "chroot dev" -- --bind /dev "$MERGED/dev"
   mount --make-private "$MERGED/dev"
-  cleanup_track_mount "$MERGED/dev"
 
   # Pseudoterminals.
   mkdir -p "$MERGED/dev/pts"
-  mount --bind /dev/pts "$MERGED/dev/pts"
+  cleanup_mount "$MERGED/dev/pts" "chroot dev/pts" -- --bind /dev/pts "$MERGED/dev/pts"
   mount --make-private "$MERGED/dev/pts"
-  cleanup_track_mount "$MERGED/dev/pts"
 
   # Private shared-memory filesystem — pacman/GnuPG use /dev/shm,
   # but the chroot must NOT see /dev/shm/steamos-build (our build mounts).
   mkdir -p "$MERGED/dev/shm"
-  mount -t tmpfs tmpfs "$MERGED/dev/shm" -o mode=1777,nosuid,nodev
-  cleanup_track_mount "$MERGED/dev/shm"
+  cleanup_mount "$MERGED/dev/shm" "chroot dev/shm" -- -t tmpfs tmpfs "$MERGED/dev/shm" -o mode=1777,nosuid,nodev
 
   # Bind-mount host /tmp into the chroot — the overlay mount path doesn't
   # match inside the chroot (host sees /path/to/merged, chroot sees /), so
   # pacman can't resolve mount points for its cachedir space check.
-  mount --bind /tmp "$MERGED/tmp"
+  cleanup_mount "$MERGED/tmp" "chroot tmp" -- --bind /tmp "$MERGED/tmp"
   mount --make-private "$MERGED/tmp"
-  cleanup_track_mount "$MERGED/tmp"
 
   # Set up chroot essentials.
   rm -f "$MERGED/etc/resolv.conf"
@@ -127,7 +120,7 @@ setup_overlay_chroot() {
   # reused against the same source image/kernel/driver combination.  This is
   # especially important because prepare_writable_rootfs() may reconstruct the
   # Btrfs lower filesystem between runs even when its contents are identical.
-  # overlay_mount_with_image() validates this key BEFORE mounting OverlayFS.
+  # _overlay_mount_with_image() validates this key BEFORE mounting OverlayFS.
   local source_fp="unknown"
   local root_uuid="unknown"
   local cache_key
@@ -150,7 +143,7 @@ setup_overlay_chroot() {
     "${KPKG_NAME:-unknown}" "${KPKG_VERREL:-unknown}"
 
   # shellcheck disable=SC2153  # WORKDIR is set in lib/backend.sh
-  overlay_mount_with_image "$MNT" "$WORKDIR" "$MERGED" "8G" "$cache_key"
+  _overlay_mount_with_image "$MNT" "$WORKDIR" "$MERGED" "8G" "$cache_key"
 
   if [[ $SKIP_SIG -eq 0 ]]; then
     setup_pacman_conf "$MERGED/tmp/pacman-bld.conf" "Required DatabaseOptional"
@@ -176,15 +169,15 @@ setup_overlay_chroot() {
 # The marker lives at the root of the ext4 workspace, outside upperdir, so it
 # survives clearing an incompatible upper layer.  Legacy caches without a key
 # are cleared once because their lower-tree identity cannot be proven.
-overlay_check_cache() {
-  local expected_key="${1:?overlay_check_cache: missing cache key}"
+_overlay_check_cache() {
+  local expected_key="${1:?_overlay_check_cache: missing cache key}"
   local cache_root="${OVL_MNT:-}"
   local marker current_key=""
 
   [[ -n "$cache_root" && -d "$cache_root" ]] \
-    || die "overlay_check_cache called before overlay workspace was mounted"
+    || die "_overlay_check_cache called before overlay workspace was mounted"
   [[ -n "${UPPER:-}" && -n "${OVLWORK:-}" ]] \
-    || die "overlay_check_cache called before upper/work paths were initialized"
+    || die "_overlay_check_cache called before upper/work paths were initialized"
 
   marker="$cache_root/.steamos-build-overlay-cache-key"
 
@@ -221,10 +214,10 @@ overlay_check_cache() {
 # Cache validation deliberately occurs after the ext4 workspace is mounted but
 # BEFORE mount -t overlay.  Deleting/recreating upper/work beneath an already
 # mounted overlay leaves the mount referring to different directory objects.
-overlay_mount_with_image() {
-  local lowerdir="${1:?overlay_mount_with_image: missing lowerdir}"
-  local workdir="${2:?overlay_mount_with_image: missing workdir}"
-  local merged="${3:?overlay_mount_with_image: missing merged}"
+_overlay_mount_with_image() {
+  local lowerdir="${1:?_overlay_mount_with_image: missing lowerdir}"
+  local workdir="${2:?_overlay_mount_with_image: missing workdir}"
+  local merged="${3:?_overlay_mount_with_image: missing merged}"
   local img_size="${4:-8G}"
   local cache_key="${5:-}"
 
@@ -248,24 +241,7 @@ overlay_mount_with_image() {
     local _existing_loops
     _existing_loops="$(losetup -j "$OVL_IMG" 2>/dev/null | cut -d: -f1)"
     if [[ -n "$_existing_loops" ]]; then
-      warn "overlay_mount_with_image: overlay-work.img still has loop device(s): $_existing_loops"
-      warn "Attempting to detach stale loops before proceeding"
-      while IFS="" read -r _stale; do
-        [[ -n "$_stale" ]] || continue
-        while IFS="" read -r _m; do
-          [[ -n "$_m" ]] || continue
-          umount -R "$_m" \
-            || die "Could not cleanly unmount stale overlay workspace: $_m"
-        done < <(findmnt -rn -o TARGET,SOURCE 2>/dev/null \
-          | awk -v l="$_stale" '$2 == l || index($2, l "p") == 1 {print $1}' \
-          | tac)
-        losetup -d "$_stale" 2>/dev/null || true
-      done <<<"$_existing_loops"
-      udevadm settle --timeout=5 2>/dev/null || true
-      _existing_loops="$(losetup -j "$OVL_IMG" 2>/dev/null | cut -d: -f1)"
-      if [[ -n "$_existing_loops" ]]; then
-        die "overlay_mount_with_image: could not detach stale loops for overlay-work.img: $_existing_loops"
-      fi
+      die "_overlay_mount_with_image: overlay-work.img still has loop device(s): $_existing_loops — run cleanup_recover first"
     fi
   else
     log "Creating overlay workspace image ($img_size)"
@@ -279,18 +255,17 @@ overlay_mount_with_image() {
   # loop on a backing file that already has one.
   OVL_LOOPDEV="$(losetup --find --show --nooverlap "$OVL_IMG")" \
     || die "Could not allocate loop device for overlay workspace"
-  mount "$OVL_LOOPDEV" "$OVL_MNT" \
-    || die "Could not mount overlay workspace image"
+  cleanup_track_loop "$OVL_LOOPDEV" "$OVL_IMG" "overlay workspace"
+  cleanup_mount "$OVL_MNT" "overlay workspace" -- "$OVL_LOOPDEV"
   mount --make-private "$OVL_MNT"
-  cleanup_track_mount "$OVL_MNT"
 
-  # Set these before validation so overlay_check_cache can inspect/clear them.
+  # Set these before validation so _overlay_check_cache can inspect/clear them.
   UPPER="$OVL_MNT/upper"
   OVLWORK="$OVL_MNT/ovlwork"
   mkdir -p "$UPPER" "$OVLWORK"
 
   if [[ -n "$cache_key" ]]; then
-    overlay_check_cache "$cache_key"
+    _overlay_check_cache "$cache_key"
   else
     # Even without persistent caching, workdir is scratch and must not carry
     # residue from a previous mount.
@@ -316,7 +291,7 @@ setup_pacman_conf() {
   # inside the chroot — the CacheDir in pacman.conf.
   local overlay_storage="${OVL_MNT:-}"
 
-  # overlay_mount_with_image() supplies OVL_MNT.
+  # _overlay_mount_with_image() supplies OVL_MNT.
   # Direct overlay_mount() callers such as repatch store upper/work directly
   # beneath the supplied work directory, so derive that directory from UPPER.
   if [[ -z "$overlay_storage" ]]; then
@@ -326,9 +301,7 @@ setup_pacman_conf() {
   mkdir -p "$overlay_storage/pkg-cache" "$MERGED/tmp/pkgcache"
 
   if ! mountpoint -q "$MERGED/tmp/pkgcache" 2>/dev/null; then
-    mount --bind "$overlay_storage/pkg-cache" "$MERGED/tmp/pkgcache" \
-      || die "Failed to bind-mount persistent pacman cache"
-    cleanup_track_mount "$MERGED/tmp/pkgcache"
+    cleanup_mount "$MERGED/tmp/pkgcache" "pacman cache" -- --bind "$overlay_storage/pkg-cache" "$MERGED/tmp/pkgcache"
   fi
 
   # SteamOS stores its pacman db at /usr/lib/holo/pacmandb/, not the default
@@ -408,15 +381,13 @@ mount_effective_etc() {
   if mountpoint -q "$root/etc" 2>/dev/null; then
     die "Refusing to mount effective /etc: $root/etc is already a mountpoint"
   fi
-  ensure_unmounted "$lower" "stale effective /etc lower bind"
-  ensure_unmounted "$varmnt" "stale effective /etc var mount"
+  strict_unmount "$lower" "stale effective /etc lower bind"
+  strict_unmount "$varmnt" "stale effective /etc var mount"
 
   # The upper/work paths do not exist in the host-side mountpoint until VARPART
   # is mounted here.  Mount var first, then inspect the real SteamOS overlay.
   log "  Mounting $VARPART to expose the runtime /etc upper/work"
-  mount -o rw "$VARPART" "$varmnt" \
-    || die "Failed to mount var for effective /etc"
-  cleanup_track_mount "$varmnt"
+  cleanup_mount "$varmnt" "effective etc var" -- -o rw "$VARPART"
 
   local ovl="$varmnt/lib/overlays/etc"
   local upper="$ovl/upper"
@@ -426,7 +397,6 @@ mount_effective_etc() {
     log "  No /etc overlay on var partition; using lower-only /etc"
     strict_unmount "$varmnt" "var after effective /etc overlay check" \
       || die "Failed to unmount var after effective /etc overlay check"
-    untrack_mount "$varmnt" 2>/dev/null || true
     return 0
   fi
 
@@ -436,26 +406,22 @@ mount_effective_etc() {
     [[ -d "$work" ]] && work_state="present"
     strict_unmount "$varmnt" "var after incomplete effective /etc overlay check" \
       || die "Failed to unmount var after incomplete effective /etc overlay check"
-    untrack_mount "$varmnt" 2>/dev/null || true
     die "Incomplete SteamOS /etc overlay state (upper=$upper_state, work=$work_state)"
   fi
 
   log "  Binding lower /etc: $root/etc → $lower"
-  if ! mount --bind "$root/etc" "$lower"; then
+  if ! cleanup_mount "$lower" "effective etc lower bind" -- --bind "$root/etc" "$lower"; then
     strict_unmount "$varmnt" "var after failed lower /etc bind" || true
     die "Failed to bind lower /etc"
   fi
-  cleanup_track_mount "$lower"
 
   log "  Mounting effective /etc overlay"
-  if ! mount -t overlay overlay \
-    -o "lowerdir=$lower,upperdir=$upper,workdir=$work" \
-    "$root/etc"; then
+  if ! cleanup_mount "$root/etc" "effective etc overlay" -- -t overlay overlay \
+    -o "lowerdir=$lower,upperdir=$upper,workdir=$work"; then
     strict_unmount "$lower" "lower /etc bind after failed effective overlay mount" || true
     strict_unmount "$varmnt" "var after failed effective /etc overlay mount" || true
     die "Failed to mount effective /etc overlay"
   fi
-  cleanup_track_mount "$root/etc"
 
   _EFFECTIVE_ETC_MOUNTED=1
   log "  Effective /etc overlay mounted on $root/etc"
@@ -472,15 +438,12 @@ unmount_effective_etc() {
 
   strict_unmount "$root/etc" "effective /etc overlay" \
     || die "Failed to unmount effective /etc overlay from $root/etc"
-  untrack_mount "$root/etc" 2>/dev/null || true
 
   strict_unmount "$WORKDIR/effective-etc-lower" "effective /etc lower bind" \
     || die "Failed to unmount lower /etc bind"
-  untrack_mount "$WORKDIR/effective-etc-lower" 2>/dev/null || true
 
   strict_unmount "$WORKDIR/effective-etc-var" "effective /etc var mount" \
     || die "Failed to unmount var for effective /etc"
-  untrack_mount "$WORKDIR/effective-etc-var" 2>/dev/null || true
 
   rmdir "$WORKDIR/effective-etc-lower" \
     "$WORKDIR/effective-etc-var" 2>/dev/null || true
@@ -516,10 +479,10 @@ setup_clear_stale_state() {
   log "Checking for stale build state"
 
   # Clean up any mounts tracked by a previous (possibly killed) run.
-  cleanup_tracked_mounts || warn "Some tracked mounts could not be cleaned"
+  cleanup_unmount_registered || warn "Some tracked mounts could not be cleaned"
 
   # Give overlay_cleanup the canonical paths even though this is running
-  # before overlay_mount_with_image().
+  # before _overlay_mount_with_image().
   OVL_IMG="$WORKDIR/overlay-work.img"
   OVL_MNT="$WORKDIR/overlay-mnt"
   # shellcheck disable=SC2034
@@ -571,12 +534,12 @@ setup_clear_stale_state() {
     local _etc_merged="$MNT/etc"
     if mountpoint -q "$_etc_merged" 2>/dev/null; then
       warn "Cleaning stale effective /etc overlay at $_etc_merged"
-      ensure_unmounted "$_etc_merged" "stale effective /etc overlay"
+      strict_unmount "$_etc_merged" "stale effective /etc overlay"
     fi
   fi
 
-  ensure_unmounted "$_etc_lower" "stale effective /etc lower bind"
-  ensure_unmounted "$_etc_var" "stale effective /etc var mount"
+  strict_unmount "$_etc_lower" "stale effective /etc lower bind"
+  strict_unmount "$_etc_var" "stale effective /etc var mount"
 
   rmdir "$_etc_lower" "$_etc_var" 2>/dev/null || true
   _EFFECTIVE_ETC_MOUNTED=0
@@ -593,7 +556,7 @@ setup_clear_stale_state() {
 
   if mountpoint -q "$_tmp_etc_merged" 2>/dev/null; then
     warn "Cleaning stale rootfs /etc reconstruction overlay at $_tmp_etc_merged"
-    ensure_unmounted "$_tmp_etc_merged" "stale rootfs /etc reconstruction overlay"
+    strict_unmount "$_tmp_etc_merged" "stale rootfs /etc reconstruction overlay"
   fi
 
   for _tmp_mount in \
@@ -607,7 +570,7 @@ setup_clear_stale_state() {
     "$WORKDIR/ovl-clean-mnt"; do
     if mountpoint -q "$_tmp_mount" 2>/dev/null; then
       warn "Cleaning stale rootfs helper mount: $_tmp_mount"
-      ensure_unmounted "$_tmp_mount" "stale rootfs helper mount"
+      strict_unmount "$_tmp_mount" "stale rootfs helper mount"
     fi
   done
 
@@ -694,7 +657,7 @@ setup_clear_stale_state() {
 
     if mountpoint -q "$m" 2>/dev/null; then
       warn "Unexpected stale project mount: $m"
-      ensure_unmounted "$m" "project filesystem"
+      strict_unmount "$m" "project filesystem"
     fi
   done
 
@@ -773,14 +736,7 @@ _cleanup_stale_build_roots() {
         [[ -n "$m" ]] || continue
         if mountpoint -q "$m" 2>/dev/null; then
           warn "  Unmounting stale build root mount: $m"
-          if strict_unmount "$m" "stale build root mount"; then
-            untrack_mount "$m" 2>/dev/null || true
-          else
-            warn "  Falling back to lazy unmount for $m"
-            sync 2>/dev/null || true
-            umount -Rl "$m" 2>/dev/null || true
-            untrack_mount "$m" 2>/dev/null || true
-          fi
+          strict_unmount "$m" "stale build root mount"
         fi
       done < <(mounts_for_loop "$loop")
 
@@ -789,25 +745,14 @@ _cleanup_stale_build_roots() {
         [[ -e "$m" ]] || continue
         if mountpoint -q "$m" 2>/dev/null; then
           warn "  Unmounting stale build root path: $m"
-          if strict_unmount "$m" "stale build root mount"; then
-            untrack_mount "$m" 2>/dev/null || true
-          else
-            warn "  Falling back to lazy unmount for $m"
-            sync 2>/dev/null || true
-            umount -Rl "$m" 2>/dev/null || true
-            untrack_mount "$m" 2>/dev/null || true
-          fi
+          strict_unmount "$m" "stale build root mount"
         fi
       done
 
       local ovl_mnt="$stale_dir/overlay-mnt"
       if [[ -e "$ovl_mnt" ]] && mountpoint -q "$ovl_mnt" 2>/dev/null; then
         warn "  Unmounting stale build root workspace: $ovl_mnt"
-        if ! umount -R "$ovl_mnt" 2>/dev/null; then
-          warn "  Falling back to lazy unmount for $ovl_mnt"
-          sync 2>/dev/null || true
-          umount -Rl "$ovl_mnt" 2>/dev/null || true
-        fi
+        strict_unmount "$ovl_mnt" "stale build root workspace"
       fi
 
       # Wait for ext4 release and detach
@@ -933,7 +878,7 @@ overlay_cleanup() {
   local m
   local loops=""
 
-  # Allow this to work during startup recovery before overlay_mount_with_image()
+  # Allow this to work during startup recovery before _overlay_mount_with_image()
   # has populated these globals.
   : "${OVL_IMG:=${WORKDIR:+$WORKDIR/overlay-work.img}}"
   : "${OVL_MNT:=${WORKDIR:+$WORKDIR/overlay-mnt}}"
@@ -967,7 +912,7 @@ overlay_cleanup() {
 
       if mountpoint -q "$m" 2>/dev/null; then
         if strict_unmount "$m" "chroot child"; then
-          untrack_mount "$m" 2>/dev/null || true
+          :
         else
           rc=1
         fi
@@ -999,10 +944,10 @@ overlay_cleanup() {
     fi
 
     local umount_merged_rc=0
-    umount -v "$MERGED" 2>&1 || umount_merged_rc=$?
+    umount -v "$MERGED" 2>&1 || umount_merged_rc=$? # lint-ignore: strict-mount
 
     if ((umount_merged_rc == 0)); then
-      untrack_mount "$MERGED" 2>/dev/null || true
+      :
     else
       # Dump diagnostics on failure
       warn "overlay_cleanup: MERGED unmount failed (rc=$umount_merged_rc)"
@@ -1054,10 +999,10 @@ overlay_cleanup() {
     fi
 
     local umount_ovl_rc=0
-    umount -v "$OVL_MNT" 2>&1 || umount_ovl_rc=$?
+    umount -v "$OVL_MNT" 2>&1 || umount_ovl_rc=$? # lint-ignore: strict-mount
 
     if ((umount_ovl_rc == 0)); then
-      untrack_mount "$OVL_MNT" 2>/dev/null || true
+      :
     else
       # Dump diagnostics on failure
       warn "overlay_cleanup: OVL_MNT unmount failed (rc=$umount_ovl_rc)"

@@ -33,7 +33,7 @@ run() {
   } >"$BASE/$name.txt" 2>&1 || true
 }
 
-run_sh() {
+_run_sh() {
   local name="$1"
   shift
   {
@@ -46,7 +46,7 @@ run_sh() {
   } >"$BASE/$name.txt" 2>&1 || true
 }
 
-sudo_run() {
+_sudo_run() {
   local name="$1"
   shift
   {
@@ -59,7 +59,7 @@ sudo_run() {
   } >"$BASE/$name.txt" 2>&1 || true
 }
 
-sudo_sh() {
+_sudo_sh() {
   local name="$1"
   shift
   {
@@ -84,7 +84,7 @@ fi
 ###############################################################################
 
 # shellcheck disable=SC2016 # $vars expand inside the inner bash -lc, not here
-run_sh system_identity '
+_run_sh system_identity '
 echo "=== DATE ==="
 date -Ins
 echo
@@ -116,7 +116,7 @@ echo "=== PROXY ENVIRONMENT ==="
 env | grep -iE "^(http|https|ftp|all|no)_proxy=" || true
 '
 
-run_sh time_and_tls '
+_run_sh time_and_tls '
 echo "=== TIME ==="
 date -Ins
 timedatectl 2>&1 || true
@@ -138,7 +138,7 @@ ls -l /etc/ssl/certs/ca-certificates.crt /etc/ca-certificates/extracted/tls-ca-b
 # 2. Boot state / kernel command line
 ###############################################################################
 
-run_sh boot_state '
+_run_sh boot_state '
 echo "=== CMDLINE ==="
 cat /proc/cmdline
 echo
@@ -149,13 +149,13 @@ echo "=== EFI VARIABLES AVAILABLE ==="
 test -d /sys/firmware/efi && echo yes || echo no
 '
 
-sudo_run efibootmgr efibootmgr -v
+_sudo_run efibootmgr efibootmgr -v
 
 ###############################################################################
 # 3. Disk, partition, filesystem, and mount state
 ###############################################################################
 
-run_sh block_devices '
+_run_sh block_devices '
 echo "=== LSBLK ==="
 lsblk -e7 -o NAME,PATH,TYPE,SIZE,RO,RM,TRAN,FSTYPE,FSVER,LABEL,UUID,PARTUUID,PARTLABEL,FSAVAIL,FSUSE%,MOUNTPOINTS
 echo
@@ -166,9 +166,9 @@ echo "=== /proc/partitions ==="
 cat /proc/partitions
 '
 
-sudo_run blkid_root blkid
+_sudo_run blkid_root blkid
 
-run_sh mounts '
+_run_sh mounts '
 echo "=== FINDMNT ==="
 findmnt -A -o TARGET,SOURCE,FSTYPE,OPTIONS
 echo
@@ -180,7 +180,7 @@ cat /proc/mounts
 '
 
 # shellcheck disable=SC2016 # $d expands inside the inner bash -lc, not here
-sudo_sh partition_tables '
+_sudo_sh partition_tables '
 for d in /dev/sd? /dev/nvme?n1 /dev/mmcblk?; do
   [[ -b "$d" ]] || continue
   echo
@@ -199,7 +199,7 @@ done
 # 4. Networking, DNS, routes, NetworkManager
 ###############################################################################
 
-run_sh network_state '
+_run_sh network_state '
 echo "=== LINKS ==="
 ip -br link
 echo
@@ -229,7 +229,7 @@ echo "=== RFKILL ==="
 rfkill list 2>&1 || true
 '
 
-run_sh networkmanager '
+_run_sh networkmanager '
 echo "=== NM GENERAL ==="
 nmcli general 2>&1 || true
 echo
@@ -243,7 +243,7 @@ echo "=== CONNECTIVITY ==="
 nmcli networking connectivity check 2>&1 || true
 '
 
-sudo_sh firewall '
+_sudo_sh firewall '
 echo "=== NFTABLES ==="
 nft list ruleset 2>&1 || true
 echo
@@ -259,7 +259,7 @@ ip6tables-save 2>&1 || true
 ###############################################################################
 
 # shellcheck disable=SC2016 # $h expands inside the inner bash -lc, not here
-run_sh dns_tests '
+_run_sh dns_tests '
 for h in \
   steamdeck-images.steamos.cloud \
   store.steampowered.com \
@@ -273,7 +273,7 @@ done
 '
 
 # shellcheck disable=SC2016 # $url expands inside the inner bash -lc, not here
-run_sh https_tests '
+_run_sh https_tests '
 for url in \
   https://steamdeck-images.steamos.cloud/ \
   https://store.steampowered.com/ \
@@ -293,7 +293,7 @@ do
 done
 '
 
-run_sh steamdeck_cloud_tls '
+_run_sh steamdeck_cloud_tls '
 if command -v openssl >/dev/null 2>&1; then
   echo | timeout 20 openssl s_client \
     -connect steamdeck-images.steamos.cloud:443 \
@@ -306,7 +306,7 @@ fi
 # 6. Systemd status and update/recovery-related units
 ###############################################################################
 
-run_sh systemd_failed '
+_run_sh systemd_failed '
 echo "=== FAILED UNITS ==="
 systemctl --failed --no-pager 2>&1 || true
 echo
@@ -314,7 +314,7 @@ echo "=== RUNNING/FAILED SERVICES ==="
 systemctl --no-pager --type=service --state=running,failed 2>&1 || true
 '
 
-run_sh steam_related_units '
+_run_sh steam_related_units '
 echo "=== MATCHING LOADED UNITS ==="
 systemctl list-units --all --no-pager 2>&1 | \
   grep -iE "steam|recovery|update|rauc|network|resolve|download" || true
@@ -329,7 +329,7 @@ systemctl list-unit-files --no-pager 2>&1 | \
 ###############################################################################
 
 # shellcheck disable=SC2016 # $c expands inside the inner bash -lc, not here
-run_sh updater_commands '
+_run_sh updater_commands '
 for c in \
   steamos-update \
   steamos-install \
@@ -347,7 +347,7 @@ done
 '
 
 # shellcheck disable=SC2016 # $root expands inside the inner bash -lc, not here
-sudo_sh updater_file_discovery '
+_sudo_sh updater_file_discovery '
 roots=(/usr/bin /usr/sbin /usr/lib /usr/libexec /usr/share/applications /etc/systemd /usr/lib/systemd /home/deck/Desktop /home/deck/.local/share/applications)
 for root in "${roots[@]}"; do
   [[ -e "$root" ]] || continue
@@ -361,7 +361,7 @@ done
 '
 
 # shellcheck disable=SC2016 # $root/$f expand inside the inner bash -lc, not here
-sudo_sh desktop_launchers '
+_sudo_sh desktop_launchers '
 for root in /home/deck/Desktop /usr/share/applications /home/deck/.local/share/applications; do
   [[ -d "$root" ]] || continue
   find "$root" -maxdepth 2 -type f -name "*.desktop" -print0 2>/dev/null |
@@ -379,7 +379,7 @@ done
 # 8. Process snapshot
 ###############################################################################
 
-run_sh processes '
+_run_sh processes '
 echo "=== PROCESS TREE ==="
 ps auxfww
 echo
@@ -391,21 +391,21 @@ ps auxww | grep -iE "steam|recovery|update|curl|wget|aria|install_to_hd|repair_d
 # 9. Journals: full boot plus focused extracts
 ###############################################################################
 
-sudo_sh journal_full_boot '
+_sudo_sh journal_full_boot '
 journalctl -b --no-pager -o short-precise
 '
 
-sudo_sh journal_kernel '
+_sudo_sh journal_kernel '
 journalctl -b -k --no-pager -o short-precise
 '
 
-sudo_sh journal_recovery_update '
+_sudo_sh journal_recovery_update '
 journalctl -b --no-pager -o short-precise | \
   grep -iE \
   "steam|recovery|update|download|curl|wget|http|https|tls|ssl|certificate|dns|resolve|network|timeout|timed out|error|fail|failed|404|403|401|5[0-9][0-9]" || true
 '
 
-sudo_sh journal_network '
+_sudo_sh journal_network '
 journalctl -b --no-pager -o short-precise \
   -u NetworkManager \
   -u systemd-resolved \
@@ -416,7 +416,7 @@ journalctl -b --no-pager -o short-precise \
 # 10. Kernel messages
 ###############################################################################
 
-sudo_sh dmesg '
+_sudo_sh dmesg '
 dmesg -T
 '
 
@@ -424,7 +424,7 @@ dmesg -T
 # 11. Installed package / updater context
 ###############################################################################
 
-run_sh package_context '
+_run_sh package_context '
 echo "=== RELEVANT PACMAN PACKAGES ==="
 pacman -Q 2>/dev/null | \
   grep -iE "steam|steamos|valve|networkmanager|curl|wget|openssl|ca-cert|rauc|kde|plasma" || true
@@ -438,7 +438,7 @@ pacman -Qkk 2>/dev/null | \
 # 12. Recent logs/files likely created by the updater
 ###############################################################################
 
-sudo_sh recent_log_inventory '
+_sudo_sh recent_log_inventory '
 echo "Files modified in the last 6 hours:"
 find /tmp /var/tmp /var/log /home/deck \
   -xdev -maxdepth 5 -type f -mmin -360 \

@@ -12,91 +12,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   exit 1
 fi
 
-# ── Cleanup machinery ─────────────────────────────────────────────────────────
-# Every temporary mountpoint and directory created during the flashless flow is
-# registered here so a single EXIT trap tears everything down in reverse order.
-# Normal phase completion unmounts explicitly; this is the failure safety net.
-
-_FL_CLEANUP_MOUNTS=()
-_FL_CLEANUP_DIRS=()
-_FL_CLEANUP_CMDS=()
 : "${FL_IMG_LOOP:=}"
-
-flashless_register_mount() { _FL_CLEANUP_MOUNTS+=("$1"); }
-flashless_register_dir() { _FL_CLEANUP_DIRS+=("$1"); }
-flashless_register_cleanup() { _FL_CLEANUP_CMDS+=("$1"); }
-
-flashless_unregister_mount() {
-  local target="$1"
-  local -a kept=()
-  local m
-  for m in "${_FL_CLEANUP_MOUNTS[@]}"; do
-    [[ "$m" != "$target" ]] && kept+=("$m")
-  done
-  _FL_CLEANUP_MOUNTS=("${kept[@]}")
-}
-
-flashless_cleanup() {
-  local _had_e=0
-  [[ -o errexit ]] && _had_e=1
-  set +e
-
-  # ------------------------------------------------------------
-  # Namespace verification: refuse aggressive cleanup when we are
-  # running in the init (PID 1) mount namespace.  Flashless install
-  # runs WITHOUT namespace isolation (steamos-build.sh); if the
-  # build namespace is lost, unmount/rm operations would affect the
-  # host directly.  Safe operations (udev rule removal, registered
-  # cleanup commands) are still allowed.
-  # ------------------------------------------------------------
-  local _IN_INIT_NS=0
-  if [[ -e /proc/self/ns/mnt && -e /proc/1/ns/mnt ]]; then
-    if [[ "$(readlink /proc/self/ns/mnt)" == "$(readlink /proc/1/ns/mnt)" ]]; then
-      _IN_INIT_NS=1
-      warn "flashless_cleanup: detected init (PID 1) mount namespace — refusing aggressive cleanup"
-      warn "flashless_cleanup: mount namespace: $(readlink /proc/self/ns/mnt)"
-      warn "flashless_cleanup: safe operations (udev rules, registered cmds) will proceed"
-      warn "flashless_cleanup: unmount, loop detach, and directory removal are skipped"
-      warn "flashless_cleanup: if the build namespace was lost, a reboot may be needed"
-    fi
-  fi
-
-  if ((_IN_INIT_NS)); then
-    warn "flashless_cleanup: skipping unmounts (in init namespace)"
-    warn "flashless_cleanup: skipping loop detach (in init namespace)"
-    warn "flashless_cleanup: skipping directory removal (in init namespace)"
-  else
-    # Unmount in reverse registration order.
-    local i
-    for ((i = ${#_FL_CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
-      local m="${_FL_CLEANUP_MOUNTS[$i]}"
-      if mountpoint -q "$m" 2>/dev/null; then
-        umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null
-      fi
-    done
-
-    # Detach loop device last.
-    if [[ -n "$FL_IMG_LOOP" ]]; then
-      losetup -d "$FL_IMG_LOOP" 2>/dev/null || true
-      FL_IMG_LOOP=""
-      FL_ROOTFS_WAS_RO=0
-    fi
-
-    # Remove temporary directories in reverse order (children before parents).
-    for ((i = ${#_FL_CLEANUP_DIRS[@]} - 1; i >= 0; i--)); do
-      rmdir "${_FL_CLEANUP_DIRS[$i]}" 2>/dev/null || true
-    done
-  fi
-
-  # Execute registered cleanup commands (e.g. udev rule removal).
-  # Safe in any namespace — these affect only resources we created.
-  local cmd
-  for cmd in "${_FL_CLEANUP_CMDS[@]}"; do
-    eval "$cmd" 2>/dev/null || true
-  done
-
-  [[ "$_had_e" -eq 1 ]] && set -e
-}
 
 # ── Slot detection ────────────────────────────────────────────────────────────
 
@@ -104,7 +20,7 @@ flashless_cleanup() {
 # Cross-checks steamos-bootconf against RAUC — disagreement or ambiguity is
 # fatal.  All target device paths are resolved to canonical /dev/... (not
 # symlinks) so a later loop-mount cannot hijack the partset namespace.
-flashless_detect_slots() {
+_flashless_detect_slots() {
   local bootconf_slot rauc_slot rauc_booted
 
   bootconf_slot="$(steamos-bootconf this-image 2>/dev/null)" \
@@ -160,7 +76,7 @@ flashless_detect_slots() {
 # We explicitly select rootfs-A (the partition our builder modifies), then
 # mount it read-only and verify it is actually our build.
 # Sets: FL_IMG_LOOP, FL_IMG_ROOTFS
-flashless_extract_image() {
+_flashless_extract_image() {
   local img="$1"
 
   [[ -f "$img" ]] || die "Built image not found: $img"
@@ -175,11 +91,11 @@ flashless_extract_image() {
 SUBSYSTEM=="block", KERNEL=="loop[0-9]*p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0"
 EOF
   udevadm control --reload-rules 2>/dev/null || true
-  flashless_register_cleanup "rm -f '$_flashless_udev_rule'; udevadm control --reload-rules 2>/dev/null || true"
 
   log "Loop-mounting built image: $img"
   FL_IMG_LOOP="$(losetup -f --show --partscan "$img" 2>/dev/null)" \
     || die "Could not loop-mount image"
+  cleanup_track_loop "$FL_IMG_LOOP" "$img" "flashless source image"
   log "  Loop device: $FL_IMG_LOOP"
 
   udevadm settle --timeout=10 2>/dev/null || true
@@ -205,10 +121,9 @@ EOF
   # Verify this is actually our build — mount read-only and check markers.
   local verify_mnt
   verify_mnt="$(mktemp -d /tmp/flashless-verify-src.XXXXXX)"
-  flashless_register_dir "$verify_mnt"
-  mount -o ro "$FL_IMG_ROOTFS" "$verify_mnt" \
+  cleanup_track_tempdir "$verify_mnt" "flashless-verify-src"
+  cleanup_mount "$verify_mnt" "flashless-verify-src" -- -o ro "$FL_IMG_ROOTFS" \
     || die "Could not mount source rootfs for build verification"
-  flashless_register_mount "$verify_mnt"
 
   # Check manifest variant matches what we built.
   if ! verify_system_config variant "$verify_mnt" "${TARGET_VARIANT:-steamdeck}"; then
@@ -222,7 +137,7 @@ EOF
     die "Source rootfs-A is not an NVIDIA-patched build (atomupd wrapper missing)"
   fi
 
-  # Capture the source image's update branch so flashless_restore_etc can
+  # Capture the source image's update branch so _flashless_restore_etc can
   # preserve it instead of falling back to the hardcoded default.
   local _src_manifest="$verify_mnt/usr/lib/steamos-atomupd/manifest.json"
   FL_SOURCE_BRANCH=""
@@ -234,8 +149,8 @@ EOF
   fi
   log "  Source verified: variant=${TARGET_VARIANT:-steamdeck}, branch=${FL_SOURCE_BRANCH:-<not set>}, NVIDIA payload present"
 
-  umount "$verify_mnt" 2>/dev/null || umount -l "$verify_mnt" 2>/dev/null
-  flashless_unregister_mount "$verify_mnt"
+  strict_unmount "$verify_mnt" "flashless source verify"
+  cleanup_release "$verify_mnt"
   rmdir "$verify_mnt" 2>/dev/null || true
 
   log "  Source rootfs: $FL_IMG_ROOTFS (verified as our build)"
@@ -243,7 +158,7 @@ EOF
 
 # ── Size check ────────────────────────────────────────────────────────────────
 
-flashless_check_sizes() {
+_flashless_check_sizes() {
   local src_bytes tgt_bytes
   src_bytes="$(blockdev --getsize64 "$FL_IMG_ROOTFS" 2>/dev/null)" \
     || die "Could not determine source rootfs size"
@@ -258,7 +173,7 @@ flashless_check_sizes() {
 
 # ── Target reset ──────────────────────────────────────────────────────────────
 
-flashless_format_target() {
+_flashless_format_target() {
   log "Formatting target EFI: $FL_TARGET_EFI"
   mkfs.vfat -F 32 -n "efi-$FL_TARGET" "$FL_TARGET_EFI" 2>/dev/null \
     || mkfs.vfat -F 32 "$FL_TARGET_EFI" \
@@ -271,7 +186,7 @@ flashless_format_target() {
 
 # ── Rootfs write ──────────────────────────────────────────────────────────────
 
-flashless_write_rootfs() {
+_flashless_write_rootfs() {
   local src_bytes tgt_bytes
   src_bytes="$(blockdev --getsize64 "$FL_IMG_ROOTFS" 2>/dev/null)" \
     || die "Could not determine source rootfs size for write"
@@ -323,19 +238,14 @@ flashless_write_rootfs() {
     log "Expanding target rootfs to fill partition"
     local resize_mnt
     resize_mnt="$(mktemp -d /tmp/flashless-resize.XXXXXX)"
-    flashless_register_dir "$resize_mnt"
-    mount -o compress-force=zstd:3 "$FL_TARGET_ROOTFS" "$resize_mnt" \
+    cleanup_track_tempdir "$resize_mnt" "flashless-resize"
+    cleanup_mount "$resize_mnt" "flashless-resize" -- -o compress-force=zstd:3 "$FL_TARGET_ROOTFS" \
       || die "Could not mount target rootfs for resize"
-    flashless_register_mount "$resize_mnt"
     btrfs filesystem resize max "$resize_mnt" \
       || die "Target rootfs resize failed"
     sync -f "$resize_mnt" 2>/dev/null || sync
-    umount "$resize_mnt" 2>/dev/null || {
-      warn "WARNING: normal unmount failed after btrfs resize — falling back to lazy unmount"
-      warn "WARNING: data integrity may be compromised; verify rootfs after reboot"
-      umount -l "$resize_mnt" 2>/dev/null
-    }
-    flashless_unregister_mount "$resize_mnt"
+    strict_unmount "$resize_mnt" "target after resize" || die "Could not unmount target after resize — aborting to prevent data corruption"
+    cleanup_release "$resize_mnt"
     rmdir "$resize_mnt" 2>/dev/null || true
   fi
 
@@ -346,7 +256,7 @@ flashless_write_rootfs() {
 
 # After detaching the loop image, verify that /dev/disk/by-partsets has
 # returned to pointing at the real target partitions.
-flashless_verify_partsets() {
+_flashless_verify_partsets() {
   log "Verifying partset symlinks point to real target devices"
 
   local resolved
@@ -425,18 +335,17 @@ _flashless_migrate_passwords() {
 
 # The freshly formatted var has no overlay yet, so the rootfs lower /etc
 # is authoritative until the first boot creates the runtime overlay.
-flashless_restore_etc() {
+_flashless_restore_etc() {
   local target_mnt
   target_mnt="$(mktemp -d /tmp/flashless-etc.XXXXXX)" \
     || die "Could not create temporary mount point"
-  flashless_register_dir "$target_mnt"
+  cleanup_track_tempdir "$target_mnt" "flashless-etc-restore"
 
-  mount -o rw "$FL_TARGET_ROOTFS" "$target_mnt" \
+  cleanup_mount "$target_mnt" "flashless-etc-restore" -- -o rw "$FL_TARGET_ROOTFS" \
     || die "Could not mount target rootfs for /etc restoration"
-  flashless_register_mount "$target_mnt"
 
   # Clear ro if set — but do NOT restore it here.  reconcile_grub still
-  # needs to write to the rootfs.  Restored in flashless_restore_rootfs_ro()
+  # needs to write to the rootfs.  Restored in _flashless_restore_rootfs_ro()
   # after all modifications are complete.
   local btrfs_ro
   btrfs_ro="$(
@@ -454,7 +363,7 @@ flashless_restore_etc() {
 
   # Preserve the source image's update branch instead of falling back to
   # the hardcoded default (stable).  FL_SOURCE_BRANCH was captured from the
-  # source manifest during flashless_extract_image.
+  # source manifest during _flashless_extract_image.
   if [[ -n "${FL_SOURCE_BRANCH:-}" ]]; then
     UPDATE_BRANCH="$FL_SOURCE_BRANCH"
     log "  Preserving source branch: $UPDATE_BRANCH"
@@ -473,12 +382,8 @@ flashless_restore_etc() {
   ensure_project_persisted
 
   sync -f "$target_mnt" 2>/dev/null || sync
-  umount "$target_mnt" 2>/dev/null || {
-    warn "WARNING: normal unmount failed after /etc restore and password migration — falling back to lazy unmount"
-    warn "WARNING: data integrity may be compromised; verify rootfs after reboot"
-    umount -l "$target_mnt" 2>/dev/null
-  }
-  flashless_unregister_mount "$target_mnt"
+  strict_unmount "$target_mnt" "target after etc restore" || die "Could not unmount target after etc restore — aborting to prevent data corruption"
+  cleanup_release "$target_mnt"
   rmdir "$target_mnt" 2>/dev/null || true
 
   log "Target /etc state restored"
@@ -486,7 +391,7 @@ flashless_restore_etc() {
 
 # ── Boot environment ──────────────────────────────────────────────────────────
 
-flashless_rebuild_boot() {
+_flashless_rebuild_boot() {
   log "Rebuilding boot environment for slot $FL_TARGET"
 
   local -a chroot_cmd=(
@@ -538,22 +443,17 @@ flashless_rebuild_boot() {
   local grub_root
   grub_root="$(mktemp -d /tmp/flashless-grub.XXXXXX)" \
     || die "Could not create GRUB root mountpoint"
-  flashless_register_dir "$grub_root"
+  cleanup_track_tempdir "$grub_root" "flashless-grub"
 
-  mount -o rw "$FL_TARGET_ROOTFS" "$grub_root" \
+  cleanup_mount "$grub_root" "flashless-grub" -- -o rw "$FL_TARGET_ROOTFS" \
     || die "Could not mount target rootfs for GRUB reconciliation"
-  flashless_register_mount "$grub_root"
 
   log "  Running reconcile_grub for $FL_TARGET"
   reconcile_grub "$grub_root" "$FL_TARGET_EFI" "$FL_TARGET" \
     || die "reconcile_grub failed — kernel command line may be incomplete"
 
-  umount "$grub_root" 2>/dev/null || {
-    warn "WARNING: normal unmount failed after GRUB config writes — falling back to lazy unmount"
-    warn "WARNING: data integrity may be compromised; verify rootfs and GRUB config after reboot"
-    umount -l "$grub_root" 2>/dev/null
-  }
-  flashless_unregister_mount "$grub_root"
+  strict_unmount "$grub_root" "target after grub reconcile" || die "Could not unmount target after grub reconcile — aborting to prevent data corruption"
+  cleanup_release "$grub_root"
   rmdir "$grub_root" 2>/dev/null || true
 
   log "Boot environment rebuilt for slot $FL_TARGET"
@@ -563,24 +463,23 @@ flashless_rebuild_boot() {
 
 # Restore the target rootfs's original Btrfs ro property after all
 # modifications are complete.  Called once, after reconcile_grub succeeds.
-flashless_restore_rootfs_ro() {
+_flashless_restore_rootfs_ro() {
   ((${FL_ROOTFS_WAS_RO:-0})) || return 0
 
   local mnt
   mnt="$(mktemp -d /tmp/flashless-ro.XXXXXX)" \
     || die "Could not create mountpoint for ro restore"
-  flashless_register_dir "$mnt"
+  cleanup_track_tempdir "$mnt" "flashless-ro-restore"
 
-  mount -o rw "$FL_TARGET_ROOTFS" "$mnt" \
+  cleanup_mount "$mnt" "flashless-ro-restore" -- -o rw "$FL_TARGET_ROOTFS" \
     || die "Could not mount target rootfs to restore ro property"
-  flashless_register_mount "$mnt"
 
   btrfs property set -ts "$mnt" ro true \
     || die "Could not restore target Btrfs ro property"
 
   sync -f "$mnt" 2>/dev/null || sync
-  umount "$mnt" || die "Could not unmount target after restoring ro"
-  flashless_unregister_mount "$mnt"
+  strict_unmount "$mnt" "target after ro restore" || die "Could not unmount target after restoring ro"
+  cleanup_release "$mnt"
   rmdir "$mnt" 2>/dev/null || true
 
   log "Target Btrfs ro property restored"
@@ -588,7 +487,7 @@ flashless_restore_rootfs_ro() {
 
 # ── Slot activation ───────────────────────────────────────────────────────────
 
-flashless_activate_slot() {
+_flashless_activate_slot() {
   local rauc_slot
   case "$FL_TARGET" in
     A) rauc_slot="rootfs.0" ;;
@@ -611,15 +510,14 @@ flashless_activate_slot() {
 
 # ── Final verification ────────────────────────────────────────────────────────
 
-flashless_verify_final() {
+_flashless_verify_final() {
   log "Final verification before activation"
 
   local target_mnt
   target_mnt="$(mktemp -d /tmp/flashless-final-verify.XXXXXX)"
-  flashless_register_dir "$target_mnt"
-  mount -o ro "$FL_TARGET_ROOTFS" "$target_mnt" \
+  cleanup_track_tempdir "$target_mnt" "flashless-final-verify"
+  cleanup_mount "$target_mnt" "flashless-final-verify" -- -o ro "$FL_TARGET_ROOTFS" \
     || die "Could not mount target rootfs for final verification"
-  flashless_register_mount "$target_mnt"
 
   local verify_failed=0
 
@@ -628,17 +526,16 @@ flashless_verify_final() {
     verify_failed=1
   fi
 
-  umount "$target_mnt" 2>/dev/null || umount -l "$target_mnt" 2>/dev/null
-  flashless_unregister_mount "$target_mnt"
+  strict_unmount "$target_mnt" "flashless final verify"
+  cleanup_release "$target_mnt"
   rmdir "$target_mnt" 2>/dev/null || true
 
   # Boot artifacts on EFI partition — all three must exist.
   local efi_mnt
   efi_mnt="$(mktemp -d /tmp/flashless-final-efi.XXXXXX)"
-  flashless_register_dir "$efi_mnt"
-  mount -o ro "$FL_TARGET_EFI" "$efi_mnt" \
+  cleanup_track_tempdir "$efi_mnt" "flashless-final-efi"
+  cleanup_mount "$efi_mnt" "flashless-final-efi" -- -o ro "$FL_TARGET_EFI" \
     || die "Could not mount target EFI for verification"
-  flashless_register_mount "$efi_mnt"
 
   if [[ ! -f "$efi_mnt/EFI/steamos/grub.cfg" ]]; then
     warn "  VERIFY FAILED: grub.cfg missing from target EFI"
@@ -699,8 +596,8 @@ flashless_verify_final() {
     done
   fi
 
-  umount "$efi_mnt" 2>/dev/null || umount -l "$efi_mnt" 2>/dev/null
-  flashless_unregister_mount "$efi_mnt"
+  strict_unmount "$efi_mnt" "flashless final EFI verify"
+  cleanup_release "$efi_mnt"
   rmdir "$efi_mnt" 2>/dev/null || true
 
   # Shared ESP bootconf.
@@ -727,11 +624,18 @@ flashless_install() {
 
   log "=== Flashless install: $img ==="
 
-  trap 'flashless_cleanup' EXIT
+  trap 'rm -f "${_flashless_udev_rule:-}" 2>/dev/null; udevadm control --reload-rules 2>/dev/null || true; cleanup_environment' EXIT
+
+  # Greenfield tracking: set workspace boundary
+  cleanup_set_workspace "/tmp" 2>/dev/null || true
+
+  # Ledger: recover from previous run, then initialize
+  pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
+  pipeline_init "" "/home/.steamos-build" || warn "Ledger initialization failed — proceeding without crash recovery"
 
   # Phase 1: detect + safety.
   stage_header "preparing & validating"
-  flashless_detect_slots
+  _flashless_detect_slots
 
   # Preflight safety checks
   preflight_validate \
@@ -743,20 +647,19 @@ flashless_install() {
     --variant "${TARGET_VARIANT:-}"
 
   # Phase 2: attach built image, identify source rootfs, verify it's our build.
-  flashless_extract_image "$img"
-  flashless_check_sizes
+  _flashless_extract_image "$img"
+  _flashless_check_sizes
 
   # Phase 3: reset target partitions.
   stage_header "deploying image to target"
-  flashless_format_target
+  _flashless_format_target
 
   # Phase 4: write rootfs (dd → flush → SHA256 verify → btrfstune → btrfs check → resize).
-  flashless_write_rootfs
+  _flashless_write_rootfs
 
   # Phase 5: detach source image — its partitions may be competing with
   # /dev/disk/by-partsets.  Must succeed; if detach fails, abort.
-  losetup -d "$FL_IMG_LOOP" \
-    || die "Could not detach source image loop $FL_IMG_LOOP"
+  strict_detach_loop "$FL_IMG_LOOP"
   FL_IMG_LOOP=""
 
   udevadm trigger --action=change \
@@ -769,24 +672,24 @@ flashless_install() {
     || die "udev did not settle after source loop detach"
 
   # Phase 6: verify partset symlinks returned to the real target partitions.
-  flashless_verify_partsets
+  _flashless_verify_partsets
 
   # Phase 7: restore /etc state (manifest, os-release).
   stage_header "configuring target system"
-  flashless_restore_etc
+  _flashless_restore_etc
 
   # Phase 8: rebuild boot environment via steamos-chroot.
-  flashless_rebuild_boot
+  _flashless_rebuild_boot
 
   # Phase 9: restore original Btrfs ro state (after all rootfs writes).
-  flashless_restore_rootfs_ro
+  _flashless_restore_rootfs_ro
 
   # Phase 10: final verification before activation.
   stage_header "verification & activation"
-  flashless_verify_final
+  _flashless_verify_final
 
   # Phase 11: activate target slot.
-  flashless_activate_slot
+  _flashless_activate_slot
 
   trap - EXIT
 

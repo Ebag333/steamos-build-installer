@@ -30,8 +30,8 @@ fi
 
 _PF_LOADER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source_module() {
-  local module="${1:?source_module: missing module path}"
+_source_module() {
+  local module="${1:?_source_module: missing module path}"
   if [[ ! -f "$module" ]]; then
     echo "preflight: FATAL: required module not found: $module" >&2
     return 1
@@ -43,8 +43,8 @@ source_module() {
   fi
 }
 
-require_function() {
-  local fn="${1:?require_function: missing function name}"
+_require_function() {
+  local fn="${1:?_require_function: missing function name}"
   if ! declare -F "$fn" >/dev/null 2>&1; then
     echo "preflight: FATAL: required function not found after module load: $fn" >&2
     return 1
@@ -52,53 +52,53 @@ require_function() {
 }
 
 # shellcheck source=preflight_efi.sh
-source_module "${_PF_LOADER_DIR}/preflight_efi.sh" || die "FATAL: failed to load preflight_efi.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_efi.sh" || die "FATAL: failed to load preflight_efi.sh"
 # shellcheck source=preflight_command_probe.sh
-source_module "${_PF_LOADER_DIR}/preflight_command_probe.sh" || die "FATAL: failed to load preflight_command_probe.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_command_probe.sh" || die "FATAL: failed to load preflight_command_probe.sh"
 # shellcheck source=preflight_esp.sh
-source_module "${_PF_LOADER_DIR}/preflight_esp.sh" || die "FATAL: failed to load preflight_esp.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_esp.sh" || die "FATAL: failed to load preflight_esp.sh"
 # shellcheck source=preflight_rootfs.sh
-source_module "${_PF_LOADER_DIR}/preflight_rootfs.sh" || die "FATAL: failed to load preflight_rootfs.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_rootfs.sh" || die "FATAL: failed to load preflight_rootfs.sh"
 # shellcheck source=preflight_scenario.sh
-source_module "${_PF_LOADER_DIR}/preflight_scenario.sh" || die "FATAL: failed to load preflight_scenario.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_scenario.sh" || die "FATAL: failed to load preflight_scenario.sh"
 # shellcheck source=preflight_generation.sh
-source_module "${_PF_LOADER_DIR}/preflight_generation.sh" || die "FATAL: failed to load preflight_generation.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_generation.sh" || die "FATAL: failed to load preflight_generation.sh"
 # shellcheck source=preflight_system_identity.sh
-source_module "${_PF_LOADER_DIR}/preflight_system_identity.sh" || die "FATAL: failed to load preflight_system_identity.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_system_identity.sh" || die "FATAL: failed to load preflight_system_identity.sh"
 # shellcheck source=preflight_bootconf.sh
-source_module "${_PF_LOADER_DIR}/preflight_bootconf.sh" || die "FATAL: failed to load preflight_bootconf.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_bootconf.sh" || die "FATAL: failed to load preflight_bootconf.sh"
 # shellcheck source=preflight_command_availability.sh
-source_module "${_PF_LOADER_DIR}/preflight_command_availability.sh" || die "FATAL: failed to load preflight_command_availability.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_command_availability.sh" || die "FATAL: failed to load preflight_command_availability.sh"
 # shellcheck source=preflight_chroot_mount.sh
-source_module "${_PF_LOADER_DIR}/preflight_chroot_mount.sh" || die "FATAL: failed to load preflight_chroot_mount.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_chroot_mount.sh" || die "FATAL: failed to load preflight_chroot_mount.sh"
 # shellcheck source=preflight_filesystem_state.sh
-source_module "${_PF_LOADER_DIR}/preflight_filesystem_state.sh" || die "FATAL: failed to load preflight_filesystem_state.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_filesystem_state.sh" || die "FATAL: failed to load preflight_filesystem_state.sh"
 # shellcheck source=preflight_path_safety.sh
-source_module "${_PF_LOADER_DIR}/preflight_path_safety.sh" || die "FATAL: failed to load preflight_path_safety.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_path_safety.sh" || die "FATAL: failed to load preflight_path_safety.sh"
 # shellcheck source=preflight_resources.sh
-source_module "${_PF_LOADER_DIR}/preflight_resources.sh" || die "FATAL: failed to load preflight_resources.sh"
+_source_module "${_PF_LOADER_DIR}/preflight_resources.sh" || die "FATAL: failed to load preflight_resources.sh"
 
 # ---------------------------------------------------------------------------
 # Verify critical entry points exist after module load
 # ---------------------------------------------------------------------------
-require_function "preflight_scenario_validate_build" || die "FATAL: missing preflight_scenario_validate_build"
-require_function "preflight_scenario_validate_recovery" || die "FATAL: missing preflight_scenario_validate_recovery"
-require_function "preflight_scenario_validate_flashless" || die "FATAL: missing preflight_scenario_validate_flashless"
-require_function "preflight_scenario_validate_live" || die "FATAL: missing preflight_scenario_validate_live"
-require_function "preflight_scenario_require_root" || die "FATAL: missing preflight_scenario_require_root"
-require_function "preflight_efi_validate_existing" || die "FATAL: missing preflight_efi_validate_existing"
-require_function "preflight_efi_validate_temporary" || die "FATAL: missing preflight_efi_validate_temporary"
-require_function "preflight_esp_validate" || die "FATAL: missing preflight_esp_validate"
-require_function "preflight_rootfs_validate" || die "FATAL: missing preflight_rootfs_validate"
-require_function "preflight_generation_validate" || die "FATAL: missing preflight_generation_validate"
-require_function "preflight_chroot_mount_validate" || die "FATAL: missing preflight_chroot_mount_validate"
-require_function "preflight_resources_validate" || die "FATAL: missing preflight_resources_validate"
-require_function "preflight_resources_rauc_idle" || die "FATAL: missing preflight_resources_rauc_idle"
-require_function "preflight_path_safety_validate" || die "FATAL: missing preflight_path_safety_validate"
-require_function "preflight_filesystem_state_validate" || die "FATAL: missing preflight_filesystem_state_validate"
-require_function "preflight_system_identity_validate" || die "FATAL: missing preflight_system_identity_validate"
-require_function "preflight_bootconf_validate" || die "FATAL: missing preflight_bootconf_validate"
-require_function "preflight_command_availability_validate" || die "FATAL: missing preflight_command_availability_validate"
+_require_function "preflight_scenario_validate_build" || die "FATAL: missing preflight_scenario_validate_build"
+_require_function "preflight_scenario_validate_recovery" || die "FATAL: missing preflight_scenario_validate_recovery"
+_require_function "preflight_scenario_validate_flashless" || die "FATAL: missing preflight_scenario_validate_flashless"
+_require_function "preflight_scenario_validate_live" || die "FATAL: missing preflight_scenario_validate_live"
+_require_function "preflight_scenario_require_root" || die "FATAL: missing preflight_scenario_require_root"
+_require_function "preflight_efi_validate_existing" || die "FATAL: missing preflight_efi_validate_existing"
+_require_function "preflight_efi_validate_temporary" || die "FATAL: missing preflight_efi_validate_temporary"
+_require_function "preflight_esp_validate" || die "FATAL: missing preflight_esp_validate"
+_require_function "preflight_rootfs_validate" || die "FATAL: missing preflight_rootfs_validate"
+_require_function "preflight_generation_validate" || die "FATAL: missing preflight_generation_validate"
+_require_function "preflight_chroot_mount_validate" || die "FATAL: missing preflight_chroot_mount_validate"
+_require_function "preflight_resources_validate" || die "FATAL: missing preflight_resources_validate"
+_require_function "preflight_resources_rauc_idle" || die "FATAL: missing preflight_resources_rauc_idle"
+_require_function "preflight_path_safety_validate" || die "FATAL: missing preflight_path_safety_validate"
+_require_function "preflight_filesystem_state_validate" || die "FATAL: missing preflight_filesystem_state_validate"
+_require_function "preflight_system_identity_validate" || die "FATAL: missing preflight_system_identity_validate"
+_require_function "preflight_bootconf_validate" || die "FATAL: missing preflight_bootconf_validate"
+_require_function "preflight_command_availability_validate" || die "FATAL: missing preflight_command_availability_validate"
 
 unset _PF_LOADER_DIR
 _PF_LOADED="true"

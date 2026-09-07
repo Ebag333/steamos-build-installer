@@ -59,7 +59,7 @@ trap test_harness_cleanup EXIT
 # unchanged. In the live scenario the target IS the current slot (A), so
 # the opposing slot B must remain byte-identical after apply.
 # ============================================================================
-test_l02_opposing_slot_isolation() {
+_test_l02_opposing_slot_isolation() {
   live_scenario_setup || exit 1
 
   # Apply live state to slot A (current = target)
@@ -111,7 +111,7 @@ test_l02_opposing_slot_isolation() {
 # were created inside the rootfs. The live scenario operates directly on
 # the running filesystem without entering a chroot environment.
 # ============================================================================
-test_l03_no_chroot_operations() {
+_test_l03_no_chroot_operations() {
   live_scenario_setup || exit 1
 
   # Record pre-apply state of /proc, /sys, /dev inside rootfs
@@ -180,7 +180,7 @@ test_l03_no_chroot_operations() {
 # same device with the same ownership as before. The installer must reuse
 # existing mount points rather than creating new ones.
 # ============================================================================
-test_l09_existing_mounts_preserved() {
+_test_l09_existing_mounts_preserved() {
   live_scenario_setup || exit 1
 
   # Record pre-apply EFI and ESP state
@@ -261,7 +261,7 @@ test_l09_existing_mounts_preserved() {
 # files are content-identical after apply. In the live scenario, target
 # = current, so the partsets and bootconf should not change.
 # ============================================================================
-test_l10_partsets_bootconf_unchanged() {
+_test_l10_partsets_bootconf_unchanged() {
   live_scenario_setup || exit 1
 
   # Snapshot all partset files before apply
@@ -369,7 +369,7 @@ test_l10_partsets_bootconf_unchanged() {
 # direct patching when update-grub fails, as long as the existing
 # grub.cfg is valid.
 # ============================================================================
-test_l11_validated_fallback() {
+_test_l11_validated_fallback() {
   live_scenario_setup || exit 1
 
   # Create a failing update-grub shim
@@ -447,7 +447,7 @@ test_l11_validated_fallback() {
 # the existing config has a wrong UUID, the installer should reject the
 # stale config and fail hard rather than silently using it.
 # ============================================================================
-test_l12_stale_fallback_rejected() {
+_test_l12_stale_fallback_rejected() {
   live_scenario_setup || exit 1
 
   # Inject a stale grub.cfg with a wrong UUID
@@ -519,7 +519,7 @@ test_l12_stale_fallback_rejected() {
 # the apply fails partway through, the current boot configuration
 # remains intact.
 # ============================================================================
-test_l13_atomic_replacement_protects() {
+_test_l13_atomic_replacement_protects() {
   live_scenario_setup || exit 1
 
   # Apply once to establish a valid baseline
@@ -605,7 +605,7 @@ test_l13_atomic_replacement_protects() {
 # or keep-list entries. The second apply should produce an identical
 # result to the first.
 # ============================================================================
-test_l14_idempotency() {
+_test_l14_idempotency() {
   live_scenario_setup || exit 1
 
   # Apply live state (first time)
@@ -683,7 +683,7 @@ test_l14_idempotency() {
 # is restored. The installer must re-enable read-only mode after
 # completing its operations to maintain system integrity.
 # ============================================================================
-test_l15_read_only_state_restored() {
+_test_l15_read_only_state_restored() {
   live_scenario_setup || exit 1
 
   # Verify initial read-only state (should be readonly=1)
@@ -740,7 +740,7 @@ test_l15_read_only_state_restored() {
 # The live scenario should not change boot selection state (bootconf
 # image-invalid, boot-attempts, title fields).
 # ============================================================================
-test_l16_no_boot_selection_mutation() {
+_test_l16_no_boot_selection_mutation() {
   live_scenario_setup || exit 1
 
   # Snapshot bootconf fields before apply
@@ -854,70 +854,70 @@ test_l16_no_boot_selection_mutation() {
 
 # L-02
 test_harness_begin_test "L-02: Opposing slot isolation"
-(test_l02_opposing_slot_isolation) || true
+(_test_l02_opposing_slot_isolation) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-03
 test_harness_begin_test "L-03: No chroot operations"
-(test_l03_no_chroot_operations) || true
+(_test_l03_no_chroot_operations) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-09
 test_harness_begin_test "L-09: Existing mounts preserved"
-(test_l09_existing_mounts_preserved) || true
+(_test_l09_existing_mounts_preserved) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-10
 test_harness_begin_test "L-10: Partsets and bootconf unchanged"
-(test_l10_partsets_bootconf_unchanged) || true
+(_test_l10_partsets_bootconf_unchanged) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-11
 test_harness_begin_test "L-11: Validated fallback after update-grub failure"
-(test_l11_validated_fallback) || true
+(_test_l11_validated_fallback) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-12
 test_harness_begin_test "L-12: Stale fallback rejected"
-(test_l12_stale_fallback_rejected) || true
+(_test_l12_stale_fallback_rejected) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-13
 test_harness_begin_test "L-13: Atomic replacement protects current boot"
-(test_l13_atomic_replacement_protects) || true
+(_test_l13_atomic_replacement_protects) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-14
 test_harness_begin_test "L-14: Idempotency"
-(test_l14_idempotency) || true
+(_test_l14_idempotency) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-15
 test_harness_begin_test "L-15: Read-only state restored"
-(test_l15_read_only_state_restored) || true
+(_test_l15_read_only_state_restored) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-16
 test_harness_begin_test "L-16: No boot-selection mutation"
-(test_l16_no_boot_selection_mutation) || true
+(_test_l16_no_boot_selection_mutation) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi

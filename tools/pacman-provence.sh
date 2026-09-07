@@ -161,7 +161,7 @@ declare -A BASE_SET=()
 # Helpers used while loading repositories
 ###############################################################################
 
-is_valve_platform_repo() {
+_is_valve_platform_repo() {
   local repo="$1"
 
   case "$repo" in
@@ -173,7 +173,7 @@ is_valve_platform_repo() {
   return 1
 }
 
-is_valve_base_repo() {
+_is_valve_base_repo() {
   local repo="$1"
 
   case "$repo" in
@@ -296,13 +296,13 @@ for repo in "${valve_repos[@]}"; do
 
     # Also retain the first platform and first ordinary base-repository
     # copy independently. This exposes deliberate holo/jupiter shadowing.
-    if is_valve_platform_repo "$actual_repo" \
+    if _is_valve_platform_repo "$actual_repo" \
       && [[ ! ${VALVE_PLATFORM_REPO[$pkg]+isset} ]]; then
       VALVE_PLATFORM_REPO["$pkg"]="$actual_repo"
       VALVE_PLATFORM_VER["$pkg"]="$ver"
     fi
 
-    if is_valve_base_repo "$actual_repo" \
+    if _is_valve_base_repo "$actual_repo" \
       && [[ ! ${VALVE_BASE_REPO[$pkg]+isset} ]]; then
       VALVE_BASE_REPO["$pkg"]="$actual_repo"
       VALVE_BASE_VER["$pkg"]="$ver"
@@ -385,7 +385,7 @@ fi
 # Classification helpers
 ###############################################################################
 
-version_delta() {
+_version_delta() {
   local installed="${1:-}"
   local candidate="${2:-}"
 
@@ -409,7 +409,7 @@ version_delta() {
 # Compare Valve's preferred platform override with Valve's own ordinary
 # core/extra/multilib copy. A same-pkgver but different pkgrel is called a
 # REBUILD, which is a useful signal that Valve deliberately rebuilt the package.
-valve_override_relation() {
+_valve_override_relation() {
   local platform_ver="${1:-}"
   local base_ver="${2:-}"
 
@@ -451,7 +451,7 @@ valve_override_relation() {
   fi
 }
 
-repo_flags() {
+_repo_flags() {
   local entries="$1"
   local entry repo
 
@@ -466,9 +466,9 @@ repo_flags() {
 
     repo="${entry%%=*}"
 
-    if is_valve_platform_repo "$repo"; then
+    if _is_valve_platform_repo "$repo"; then
       platform=1
-    elif is_valve_base_repo "$repo"; then
+    elif _is_valve_base_repo "$repo"; then
       base_repo=1
     else
       other=1
@@ -478,7 +478,7 @@ repo_flags() {
   printf '%s:%s:%s' "$platform" "$base_repo" "$other"
 }
 
-source_class() {
+_source_class() {
   local valve_entries="$1"
   local arch_entries="$2"
 
@@ -488,7 +488,7 @@ source_class() {
 
   if [[ -n "$valve_entries" ]]; then
     IFS=: read -r platform base_repo other < <(
-      repo_flags "$valve_entries"
+      _repo_flags "$valve_entries"
     )
   fi
 
@@ -526,7 +526,7 @@ source_class() {
   fi
 }
 
-package_flags() {
+_package_flags() {
   local pkg="$1"
   local valve_entries="$2"
   local reason="$3"
@@ -541,7 +541,7 @@ package_flags() {
 
   if [[ -n "$valve_entries" ]]; then
     IFS=: read -r platform base_repo other < <(
-      repo_flags "$valve_entries"
+      _repo_flags "$valve_entries"
     )
   fi
 
@@ -665,25 +665,25 @@ for pkg in "${packages[@]}"; do
   fi
 
   vdelta="$(
-    version_delta "${INSTALLED_VER[$pkg]-}" "${VALVE_PREF_VER[$pkg]-}"
+    _version_delta "${INSTALLED_VER[$pkg]-}" "${VALVE_PREF_VER[$pkg]-}"
   )"
 
   adelta="$(
-    version_delta "${INSTALLED_VER[$pkg]-}" "${ARCH_PREF_VER[$pkg]-}"
+    _version_delta "${INSTALLED_VER[$pkg]-}" "${ARCH_PREF_VER[$pkg]-}"
   )"
 
   override_relation="$(
-    valve_override_relation \
+    _valve_override_relation \
       "${VALVE_PLATFORM_VER[$pkg]-}" \
       "${VALVE_BASE_VER[$pkg]-}"
   )"
 
   class="$(
-    source_class "${VALVE_ALL[$pkg]-}" "${ARCH_ALL[$pkg]-}"
+    _source_class "${VALVE_ALL[$pkg]-}" "${ARCH_ALL[$pkg]-}"
   )"
 
   flags_str="$(
-    package_flags \
+    _package_flags \
       "$pkg" \
       "${VALVE_ALL[$pkg]-}" \
       "${INSTALLED_REASON[$pkg]-}" \

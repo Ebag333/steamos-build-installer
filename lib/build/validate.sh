@@ -7,7 +7,7 @@
 #
 # Usage:
 #   source lib/build/validate.sh
-#   run_validation_matrix "$MERGED"
+#   _run_validation_matrix "$MERGED"
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   echo "lib/build/validate.sh is a library — source it from the wrapper, not run directly." >&2
@@ -209,8 +209,8 @@ _validate_provenance_logging() {
 # Main validation runner
 # ---------------------------------------------------------------------------
 
-run_validation_matrix() {
-  local merged="${1:?run_validation_matrix: missing root}"
+_run_validation_matrix() {
+  local merged="${1:?_run_validation_matrix: missing root}"
   local workdir="${2:-${WORKDIR:-/tmp}/build-validation-$$}"
 
   mkdir -p "$workdir"

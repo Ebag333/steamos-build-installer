@@ -28,7 +28,7 @@ CRITICAL="nvme ahci sd_mod btrfs i915 xe nvidia nvidia_modeset nvidia_drm nvidia
 # Important: network, audio, sensors, USB controllers
 IMPORTANT="iwlwifi igc snd_hda_intel snd_sof_pci_intel_mtl mei_me i2c_i801 spi_intel_pci processor_thermal_device_pci"
 
-classify_driver() {
+_classify_driver() {
   local driver="$1"
   for d in $CRITICAL; do
     [[ "$driver" == "$d" ]] && echo "CRITICAL" && return
@@ -40,7 +40,7 @@ classify_driver() {
 }
 
 # Parse a single `lspci -nn` line into: dev, vendor_device, desc, driver.
-parse_lspci_line() {
+_parse_lspci_line() {
   local line="$1"
   dev=$(echo "$line" | cut -d' ' -f1)
   vendor_device=$(echo "$line" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}' | head -1)
@@ -59,7 +59,7 @@ unclaimed=0
 critical_missing=0
 
 while IFS="" read -r line; do
-  parse_lspci_line "$line"
+  _parse_lspci_line "$line"
 
   # Get device class
   sysfs_dev="$dev"
@@ -83,7 +83,7 @@ while IFS="" read -r line; do
 
   # Classify
   if [[ -n "$driver" ]]; then
-    priority=$(classify_driver "$driver")
+    priority=$(_classify_driver "$driver")
     case "$priority" in
       CRITICAL) status="${GREEN}✓ critical${NC}" ;;
       IMPORTANT) status="${GREEN}✓ important${NC}" ;;
@@ -112,7 +112,7 @@ while IFS="" read -r line; do
     # Check if any missing critical module
     if [[ -n "$modules" ]]; then
       for mod in $modules; do
-        if [[ "$(classify_driver "$mod")" == "CRITICAL" ]]; then
+        if [[ "$(_classify_driver "$mod")" == "CRITICAL" ]]; then
           ((++critical_missing))
         fi
       done
@@ -153,9 +153,9 @@ done
 echo ""
 echo -e "${CYAN}=== Claimed critical devices ===${NC}"
 while IFS="" read -r line; do
-  parse_lspci_line "$line"
+  _parse_lspci_line "$line"
   [[ -z "$driver" ]] && continue
-  priority=$(classify_driver "$driver")
+  priority=$(_classify_driver "$driver")
   [[ "$priority" == "CRITICAL" ]] || continue
   echo -e "  ${GREEN}✓${NC} $dev [${vendor_device:-?}]: $desc → $driver"
 done < <(lspci -nn)
@@ -165,7 +165,7 @@ if [[ $unclaimed -gt 0 ]]; then
   echo ""
   echo -e "${CYAN}=== Unclaimed devices with available modules ===${NC}"
   while IFS="" read -r line; do
-    parse_lspci_line "$line"
+    _parse_lspci_line "$line"
     [[ -n "$driver" ]] && continue
 
     if [[ -n "$vendor_device" ]]; then
@@ -183,7 +183,7 @@ if [[ $unclaimed -gt 0 ]]; then
   echo ""
   echo -e "${CYAN}=== Unclaimed device details ===${NC}"
   while IFS="" read -r line; do
-    parse_lspci_line "$line"
+    _parse_lspci_line "$line"
     [[ -n "$driver" ]] && continue
     echo ""
     lspci -nnk -s "$dev" 2>/dev/null | sed 's/^/  /'

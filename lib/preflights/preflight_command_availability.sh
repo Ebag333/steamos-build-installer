@@ -60,12 +60,12 @@ _pf_ca_grub_module_exists() {
 # Preflight checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_command_availability_required_commands ROOTFS
+# _preflight_command_availability_required_commands ROOTFS
 #   PF-50: Verify that grub-mkimage, update-grub, steamos-partsets,
 #   and steamos-bootconf all exist and are executable in the rootfs.
 #   Aggregates all missing commands into a single die message.
-preflight_command_availability_required_commands() {
-  local rootfs="${1:?preflight_command_availability_required_commands: missing rootfs path}"
+_preflight_command_availability_required_commands() {
+  local rootfs="${1:?_preflight_command_availability_required_commands: missing rootfs path}"
 
   local -a required_commands=(
     grub-mkimage
@@ -90,11 +90,11 @@ preflight_command_availability_required_commands() {
   debug "PF-50: all required commands available in rootfs: $rootfs"
 }
 
-# preflight_command_availability_steamos_grub_support ROOTFS
+# _preflight_command_availability_steamos_grub_support ROOTFS
 #   PF-51: Verify that SteamOS GRUB modules exist in the rootfs.
 #   Accepts either steamenv.mod or steamenv_boot.mod (distribution-dependent).
-preflight_command_availability_steamos_grub_support() {
-  local rootfs="${1:?preflight_command_availability_steamos_grub_support: missing rootfs path}"
+_preflight_command_availability_steamos_grub_support() {
+  local rootfs="${1:?_preflight_command_availability_steamos_grub_support: missing rootfs path}"
 
   local found=0
 
@@ -115,12 +115,12 @@ preflight_command_availability_steamos_grub_support() {
   debug "PF-51: SteamOS GRUB support present in rootfs: $rootfs"
 }
 
-# preflight_command_availability_boot_payload ROOTFS
+# _preflight_command_availability_boot_payload ROOTFS
 #   PF-52: Verify at least one vmlinuz-* kernel image exists in the
 #   rootfs /boot directory and has a matching initramfs-* companion.
 #   Dies on failure.
-preflight_command_availability_boot_payload() {
-  local rootfs="${1:?preflight_command_availability_boot_payload: missing rootfs path}"
+_preflight_command_availability_boot_payload() {
+  local rootfs="${1:?_preflight_command_availability_boot_payload: missing rootfs path}"
 
   local boot_dir="$rootfs/boot"
 
@@ -179,13 +179,13 @@ preflight_command_availability_validate() {
   debug "preflight_command_availability_validate: validating $rootfs"
 
   # PF-50: Required commands present in rootfs.
-  preflight_command_availability_required_commands "$rootfs"
+  _preflight_command_availability_required_commands "$rootfs"
 
   # PF-51: SteamOS GRUB modules present in rootfs.
-  preflight_command_availability_steamos_grub_support "$rootfs"
+  _preflight_command_availability_steamos_grub_support "$rootfs"
 
   # PF-52: Boot payload (kernel + initramfs) present in rootfs.
-  preflight_command_availability_boot_payload "$rootfs"
+  _preflight_command_availability_boot_payload "$rootfs"
 
   debug "preflight_command_availability_validate: all checks passed for $rootfs"
 }

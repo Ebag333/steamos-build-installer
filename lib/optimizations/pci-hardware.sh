@@ -52,8 +52,8 @@ _apply_pci_realloc() {
 
   if declare -F add_kernel_param >/dev/null 2>&1; then
     add_kernel_param "pci=realloc=on" || return 1
-    if declare -F _persist_kernel_param_live >/dev/null 2>&1; then
-      _persist_kernel_param_live "pci=realloc=on" || return 1
+    if declare -F persist_kernel_param_live >/dev/null 2>&1; then
+      persist_kernel_param_live "pci=realloc=on" || return 1
     fi
     return 0
   else

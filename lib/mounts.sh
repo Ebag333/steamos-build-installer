@@ -55,33 +55,6 @@ mounts_for_loop() {
     | cut -f2-
 }
 
-# Unmount an exact mount hierarchy. Never lazy-unmount persistent storage.
-strict_unmount() {
-  local target="${1:?strict_unmount: missing target}"
-  local label="${2:-mount}"
-
-  mountpoint -q "$target" 2>/dev/null || return 0
-
-  log "  Unmounting $label: $target"
-
-  if ! umount -R "$target" 2>/dev/null; then
-    warn "Could not cleanly unmount $label: $target"
-
-    findmnt -R "$target" >&2 2>/dev/null || true
-    fuser -vm "$target" >&2 2>/dev/null || true
-
-    return 1
-  fi
-
-  if mountpoint -q "$target" 2>/dev/null; then
-    warn "$label is still mounted after umount: $target"
-    findmnt -R "$target" >&2 2>/dev/null || true
-    return 1
-  fi
-
-  return 0
-}
-
 # Wait until an ext4 superblock associated with a loop device is gone.
 #
 # If this remains after the mount disappeared, the filesystem still has a
@@ -179,6 +152,54 @@ wait_ext4_gone() {
   return 1
 }
 
+# ── Cleanup tracking system ─────────────────────────────────────────────────────
+# NEW GREENFIELD CODE — added as part of the mount/loop cleanup system redesign.
+# This section provides resource tracking, workspace boundary enforcement,
+# identity-verified teardown, and deterministic cleanup orchestration.
+#
+# Foundational primitives (carried forward from legacy code):
+#   strict_unmount   — verified recursive unmount with diagnostics
+#   strict_detach_loop — verified loop detach with AUTOCLEAR awareness
+#
+# Dependencies: log/warn/die/debug (common.sh)
+#
+# KNOWN GAP: The current system uses a flat registry — all resources go into
+# the same arrays and teardown is all-or-nothing reverse order. There is no
+# concept of abstract/transient/temporary environments (e.g., overlay workspaces
+# with their own mount trees that should be torn down as a unit). Domain-specific
+# teardown (overlay_cleanup, chroot setup) currently lives in the domain code
+# because it needs ordering knowledge and escalation logic that the generic
+# reverse-order teardown cannot provide. This should be addressed when we have
+# a concrete use case for partial/environment-scoped cleanup.
+# ────────────────────────────────────────────────────────────────────────────────
+
+# Unmount an exact mount hierarchy. Never lazy-unmount persistent storage.
+strict_unmount() {
+  local target="${1:?strict_unmount: missing target}"
+  local label="${2:-mount}"
+
+  mountpoint -q "$target" 2>/dev/null || return 0
+
+  log "  Unmounting $label: $target"
+
+  if ! umount -R "$target" 2>/dev/null; then
+    warn "Could not cleanly unmount $label: $target"
+
+    findmnt -R "$target" >&2 2>/dev/null || true
+    fuser -vm "$target" >&2 2>/dev/null || true
+
+    return 1
+  fi
+
+  if mountpoint -q "$target" 2>/dev/null; then
+    warn "$label is still mounted after umount: $target"
+    findmnt -R "$target" >&2 2>/dev/null || true
+    return 1
+  fi
+
+  return 0
+}
+
 # Detach a loop device and verify it really disappeared.
 strict_detach_loop() {
   local loop="${1:?strict_detach_loop: missing loop device}"
@@ -221,319 +242,6 @@ strict_detach_loop() {
   return 1
 }
 
-# ---------------------------------------------------------------------------
-# System state snapshots (before/after build hygiene)
-# ---------------------------------------------------------------------------
-
-# Snapshot current system state (loops, mounts, ext4 superblocks).
-# Writes to a file that can be compared later.
-# Args: $1 = output file path
-snapshot_system_state() {
-  local outfile="${1:?snapshot_system_state: missing output file}"
-
-  {
-    echo "=== LOOP DEVICES ==="
-    losetup -J 2>/dev/null || echo '{"loopdevices":[]}'
-    echo ""
-    echo "=== MOUNTS ==="
-    findmnt --real --raw -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
-    echo ""
-    echo "=== EXT4 SUPERBLOCKS ==="
-    local sys
-    for sys in /sys/fs/ext4/*/; do
-      [[ -d "$sys" ]] && basename "$sys"
-    done 2>/dev/null || true
-  } >"$outfile"
-}
-
-# Extract loop device names from a system state snapshot file.
-# Args: $1 = snapshot file path
-# Prints sorted loop device names, one per line.
-_extract_loop_names() {
-  local file="${1:?_extract_loop_names: missing file}"
-  sed -n '/^=== LOOP DEVICES ===$/,/^===/{/^===/d;p}' "$file" \
-    | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    for d in data.get("loopdevices", []):
-        print(d.get("name",""))
-except: pass
-' 2>/dev/null | sort
-}
-
-# Compare two system state snapshots and report differences.
-# Args: $1 = before snapshot, $2 = after snapshot, $3 = label (optional)
-# Returns 0 if clean (no new entries), 1 if leftovers detected.
-compare_system_state() {
-  local before="${1:?compare_system_state: missing before snapshot}"
-  local after="${2:?compare_system_state: missing after snapshot}"
-  local label="${3:-build}"
-
-  [[ -f "$before" && -f "$after" ]] || {
-    warn "compare_system_state: missing snapshot files"
-    return 1
-  }
-
-  local rc=0
-
-  # Extract loop device names from JSON section
-  local loops_before loops_after
-  loops_before="$(_extract_loop_names "$before")"
-  loops_after="$(_extract_loop_names "$after")"
-
-  # Extract mount targets from MOUNTS section (skip header line)
-  local mounts_before mounts_after
-  mounts_before="$(sed -n '/^=== MOUNTS ===$/,/^===/{/^===/d;/^TARGET/d;p}' "$before" \
-    | awk '{print $1}' | sort)"
-  mounts_after="$(sed -n '/^=== MOUNTS ===$/,/^===/{/^===/d;/^TARGET/d;p}' "$after" \
-    | awk '{print $1}' | sort)"
-
-  # Extract ext4 superblocks
-  local ext4_before ext4_after
-  ext4_before="$(sed -n '/^=== EXT4 SUPERBLOCKS ===$/,/^===/{/^===/d;p}' "$before" | sort)"
-  ext4_after="$(sed -n '/^=== EXT4 SUPERBLOCKS ===$/,/^===/{/^===/d;p}' "$after" | sort)"
-
-  # Compare loops
-  local new_loops gone_loops
-  new_loops="$(echo "$loops_before" | grep -v '^$' | comm -13 - <(echo "$loops_after" | grep -v '^$'))"
-  gone_loops="$(echo "$loops_before" | grep -v '^$' | comm -23 - <(echo "$loops_after" | grep -v '^$'))"
-
-  # Compare mounts
-  local new_mounts gone_mounts
-  new_mounts="$(echo "$mounts_before" | grep -v '^$' | comm -13 - <(echo "$mounts_after" | grep -v '^$'))"
-  gone_mounts="$(echo "$mounts_before" | grep -v '^$' | comm -23 - <(echo "$mounts_after" | grep -v '^$'))"
-
-  # Compare ext4 superblocks
-  local new_ext4 gone_ext4
-  new_ext4="$(echo "$ext4_before" | grep -v '^$' | comm -13 - <(echo "$ext4_after" | grep -v '^$'))"
-  gone_ext4="$(echo "$ext4_before" | grep -v '^$' | comm -23 - <(echo "$ext4_after" | grep -v '^$'))"
-
-  # Report
-  log "System state comparison ($label):"
-
-  if [[ -n "$new_loops" ]]; then
-    warn "  NEW loop devices (left behind):"
-    emit_prefixed_lines warn "    " "$new_loops" 1
-    rc=1
-  fi
-
-  if [[ -n "$new_mounts" ]]; then
-    warn "  NEW mounts (left behind):"
-    emit_prefixed_lines warn "    " "$new_mounts" 1
-    rc=1
-  fi
-
-  if [[ -n "$new_ext4" ]]; then
-    warn "  NEW ext4 superblocks (left behind):"
-    emit_prefixed_lines warn "    " "$new_ext4" 1
-    rc=1
-  fi
-
-  if [[ -n "$gone_loops" ]]; then
-    log "  Removed loop devices (expected):"
-    emit_prefixed_lines log "    " "$gone_loops" 1
-  fi
-
-  if [[ -n "$gone_mounts" ]]; then
-    log "  Removed mounts (expected):"
-    emit_prefixed_lines log "    " "$gone_mounts" 1
-  fi
-
-  if [[ -n "$gone_ext4" ]]; then
-    log "  Removed ext4 superblocks (expected):"
-    emit_prefixed_lines log "    " "$gone_ext4" 1
-  fi
-
-  if ((rc == 0)); then
-    log "  Clean — no leftover resources detected"
-  fi
-
-  return "$rc"
-}
-
-# ---------------------------------------------------------------------------
-# Chroot filesystem mounting
-# ---------------------------------------------------------------------------
-
-# Mount proc/sys/dev into a chroot directory.
-# Args: $1 = root path (e.g. $MNT, $MERGED, $NEWROOT)
-mount_chroot_fs() {
-  local root="${1:?mount_chroot_fs: missing root}"
-  log "Mounting chroot filesystems in $root"
-  mkdir -p "$root/proc" "$root/sys" "$root/dev"
-  mount -t proc proc "$root/proc" \
-    || die "Failed to mount proc in $root"
-  mount --rbind /sys "$root/sys" \
-    || {
-      umount -R "$root/proc" 2>/dev/null
-      die "Failed to mount sys in $root"
-    }
-  mount --make-rslave "$root/sys" 2>/dev/null || true
-  mount --rbind /dev "$root/dev" \
-    || {
-      umount -R "$root/sys" "$root/proc" 2>/dev/null
-      die "Failed to mount dev in $root"
-    }
-  mount --make-rslave "$root/dev" 2>/dev/null || true
-  log "  chroot mounts ready: proc sys dev"
-}
-
-# Unmount proc/sys/dev from a chroot directory.
-# Args: $1 = root path, $2 = mode (optional: "strict" to die on failure, default: permissive)
-umount_chroot_fs() {
-  local root="${1:?umount_chroot_fs: missing root}"
-  local mode="${2:-}"
-
-  # Collect only the children that are actually mounted — avoids spurious
-  # warnings when cleanup runs before mount_chroot_fs was called.
-  local -a targets=()
-  local child
-  for child in proc sys dev; do
-    mountpoint -q "$root/$child" 2>/dev/null && targets+=("$root/$child")
-  done
-
-  if [[ ${#targets[@]} -eq 0 ]]; then
-    log "Unmounting chroot filesystems in $root (nothing mounted)"
-    return 0
-  fi
-
-  log "Unmounting chroot filesystems in $root"
-  if ! umount -R "${targets[@]}" 2>/dev/null; then
-    if [[ "$mode" == "strict" ]]; then
-      warn "Failed to unmount chroot filesystems in $root"
-      warn "  Active mounts:"
-      findmnt --target "$root" -o SOURCE,TARGET,OPTIONS 2>/dev/null | while IFS="" read -r line; do
-        warn "    $line"
-      done
-      die "Could not cleanly unmount chroot in $root"
-    else
-      warn "Regular unmount failed for $root, trying lazy unmount"
-      umount -Rl "${targets[@]}" 2>/dev/null || true
-    fi
-  fi
-  log "  chroot mounts removed"
-}
-
-# ---------------------------------------------------------------------------
-# Mount unmount wrapper
-# ---------------------------------------------------------------------------
-
-# Unmount a path if it is a mountpoint.  No-op when not mounted.
-# Args: $1 = path, $2 = label (used in error message)
-ensure_unmounted() {
-  local path="${1:?ensure_unmounted: missing path}"
-  local label="${2:-$path}"
-  if mountpoint -q "$path" 2>/dev/null; then
-    strict_unmount "$path" "$label" || die "Could not clean stale $label"
-  fi
-}
-
-# ---------------------------------------------------------------------------
-# Persistent mount tracking (file-based)
-# ---------------------------------------------------------------------------
-# A plain-text file ($MOUNTS_FILE, typically $WORKDIR/mounts) records every
-# mountpoint we create.  If the process is killed before cleanup runs, the next
-# build reads this file and tears down the leftovers in reverse order.
-#
-# Callers set MOUNTS_FILE before using these helpers.  All functions are no-ops
-# when MOUNTS_FILE is unset or the file does not exist.
-
-# Append a mountpoint to the tracking file.  Idempotent — duplicates are
-# silently skipped.
-# Args: $1 = mountpoint path
-track_mount() {
-  local mnt="${1:?track_mount: missing mountpoint}"
-  [[ -n "${MOUNTS_FILE:-}" ]] || return 0
-  mkdir -p "$(dirname "$MOUNTS_FILE")"
-  if [[ ! -f "$MOUNTS_FILE" ]] || ! grep -qxF "$mnt" "$MOUNTS_FILE" 2>/dev/null; then
-    printf '%s\n' "$mnt" >>"$MOUNTS_FILE"
-  fi
-}
-
-# Remove a mountpoint from the tracking file, but ONLY after verifying the
-# mount is actually gone.  No-op if the entry does not exist or the path is
-# still mounted.
-# Args: $1 = mountpoint path
-untrack_mount() {
-  local mnt="${1:?untrack_mount: missing mountpoint}"
-  [[ -n "${MOUNTS_FILE:-}" && -f "$MOUNTS_FILE" ]] || return 0
-
-  # Safety: refuse to untrack if the mount is still alive.
-  if mountpoint -q "$mnt" 2>/dev/null; then
-    warn "untrack_mount: $mnt is still mounted — refusing to remove from tracking"
-    return 1
-  fi
-
-  local tmp="${MOUNTS_FILE}.untrack.$$"
-  grep -vxF "$mnt" "$MOUNTS_FILE" >"$tmp" 2>/dev/null || true
-  if [[ -s "$tmp" ]]; then
-    mv -- "$tmp" "$MOUNTS_FILE"
-  else
-    rm -f "$tmp" "$MOUNTS_FILE"
-  fi
-}
-
-# Read the tracking file and tear down every listed mount in reverse order.
-# Entries for mounts that are already gone are silently removed.  Entries whose
-# unmount fails are left in place for the next attempt.
-# Args: none (uses $MOUNTS_FILE)
-cleanup_tracked_mounts() {
-  [[ -n "${MOUNTS_FILE:-}" && -f "$MOUNTS_FILE" ]] || return 0
-
-  log "Cleaning up tracked mounts from $MOUNTS_FILE"
-
-  # Read into an array so we can process in reverse (LIFO).
-  local -a mounts=()
-  local line
-  while IFS="" read -r line; do
-    [[ -n "$line" ]] && mounts+=("$line")
-  done <"$MOUNTS_FILE"
-
-  if [[ ${#mounts[@]} -eq 0 ]]; then
-    rm -f "$MOUNTS_FILE"
-    return 0
-  fi
-
-  local rc=0
-  local i
-  for ((i = ${#mounts[@]} - 1; i >= 0; i--)); do
-    local m="${mounts[$i]}"
-
-    if ! mountpoint -q "$m" 2>/dev/null; then
-      # Already gone — just clean the entry.
-      untrack_mount "$m" 2>/dev/null || true
-      continue
-    fi
-
-    if strict_unmount "$m" "tracked mount"; then
-      untrack_mount "$m" 2>/dev/null || true
-    else
-      warn "cleanup_tracked_mounts: could not unmount $m"
-      rc=1
-    fi
-  done
-
-  # If everything was cleaned up, remove the file.
-  if ((rc == 0)) && [[ -f "$MOUNTS_FILE" ]]; then
-    local remaining
-    remaining="$(wc -l <"$MOUNTS_FILE" 2>/dev/null || echo 1)"
-    if [[ "$remaining" -eq 0 ]] 2>/dev/null; then
-      rm -f "$MOUNTS_FILE"
-    fi
-  fi
-
-  return "$rc"
-}
-
-# ── Cleanup tracking system ─────────────────────────────────────────────────────
-# NEW GREENFIELD CODE — added as part of the mount/loop cleanup system redesign.
-# This section provides resource tracking, workspace boundary enforcement,
-# identity-verified teardown, and deterministic cleanup orchestration.
-#
-# Dependencies: strict_unmount (above), log/warn/die/debug (common.sh)
-# ────────────────────────────────────────────────────────────────────────────────
-
 CLEANUP_RUNNING=0
 CLEANUP_INCOMPLETE=0
 CLEANUP_ATTEMPTED=0
@@ -569,7 +277,7 @@ cleanup_track_mount() {
   fi
 
   # Validate path is inside workspace
-  if ! cleanup_validate_workspace "$mountpoint"; then
+  if ! _cleanup_validate_workspace "$mountpoint"; then
     return 1
   fi
 
@@ -584,12 +292,12 @@ cleanup_track_mount() {
   local mount_count
   mount_count="$(echo "$mount_ids" | grep -c . 2>/dev/null)" || mount_count=0
 
-  if (( mount_count == 0 )); then
+  if ((mount_count == 0)); then
     warn "cleanup_track_mount: could not resolve mount ID for $canonical"
     return 1
   fi
 
-  if (( mount_count > 1 )); then
+  if ((mount_count > 1)); then
     warn "cleanup_track_mount: multiple mounts at $canonical ($mount_count) — stacked mounts not supported"
     return 1
   fi
@@ -612,14 +320,14 @@ cleanup_track_loop() {
   local label="${3:-}"
 
   # Lifecycle guard
-  if (( CLEANUP_RUNNING )); then
+  if ((CLEANUP_RUNNING)); then
     warn "cleanup_track_loop: cannot register during cleanup"
     return 1
   fi
 
   # Workspace validation
   if [[ -n "$CLEANUP_WORKSPACE_ROOT" ]]; then
-    if ! cleanup_validate_workspace "$backing"; then
+    if ! _cleanup_validate_workspace "$backing"; then
       return 1
     fi
   fi
@@ -695,7 +403,7 @@ cleanup_track_tempdir() {
   fi
 
   # Validate path is inside workspace
-  if ! cleanup_validate_workspace "$dir"; then
+  if ! _cleanup_validate_workspace "$dir"; then
     return 1
   fi
 
@@ -725,20 +433,20 @@ cleanup_set_workspace() {
   CLEANUP_WORKSPACE_ROOT="$resolved"
 }
 
-# cleanup_validate_workspace PATH
+# _cleanup_validate_workspace PATH
 #   Verify PATH is inside the approved workspace boundary.
 #   Returns 1 if the path is outside the boundary or boundary is not set.
-cleanup_validate_workspace() {
-  local path="${1:?cleanup_validate_workspace: missing path}"
+_cleanup_validate_workspace() {
+  local path="${1:?_cleanup_validate_workspace: missing path}"
 
   [[ -n "$CLEANUP_WORKSPACE_ROOT" ]] || {
-    warn "cleanup_validate_workspace: no workspace boundary set"
+    warn "_cleanup_validate_workspace: no workspace boundary set"
     return 1
   }
 
   local resolved
   resolved="$(realpath "$path" 2>/dev/null)" || {
-    warn "cleanup_validate_workspace: cannot resolve $path"
+    warn "_cleanup_validate_workspace: cannot resolve $path"
     return 1
   }
 
@@ -746,14 +454,14 @@ cleanup_validate_workspace() {
   case "$resolved" in
     / | /bin | /boot | /dev | /etc | /home | /lib* | /media | /mnt | \
       /opt | /proc | /root | /run | /sbin | /srv | /sys | /usr | /var)
-      warn "cleanup_validate_workspace: refusing to clean system path: $resolved"
+      warn "_cleanup_validate_workspace: refusing to clean system path: $resolved"
       return 1
       ;;
   esac
 
   # Reject paths with .. that could escape
   if [[ "$path" == *".."* ]]; then
-    warn "cleanup_validate_workspace: path contains '..': $path"
+    warn "_cleanup_validate_workspace: path contains '..': $path"
     return 1
   fi
 
@@ -763,7 +471,7 @@ cleanup_validate_workspace() {
     return 0
   fi
 
-  warn "cleanup_validate_workspace: $path is outside workspace $CLEANUP_WORKSPACE_ROOT"
+  warn "_cleanup_validate_workspace: $path is outside workspace $CLEANUP_WORKSPACE_ROOT"
   return 1
 }
 
@@ -778,16 +486,40 @@ _cleanup_read_mount_inventory() {
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     printf '%b\n' "$line" || return 1
-  done <<< "$raw"
+  done <<<"$raw"
 
   return 0
 }
 
-# cleanup_assert_no_mounts_under DIRECTORY
+# _cleanup_check_tracked_mounts
+#   Read kernel mount inventory and verify all tracked mounts are gone.
+#   Returns 0 if all gone, 1 if any remain.
+_cleanup_check_tracked_mounts() {
+  local rc=0
+
+  local all_mounts
+  all_mounts="$(_cleanup_read_mount_inventory 2>/dev/null)" || {
+    warn "_cleanup_check_tracked_mounts: cannot read mount inventory"
+    return 1
+  }
+
+  local i
+  for ((i = 0; i < ${#CLEANUP_MOUNTS[@]}; i++)); do
+    local m="${CLEANUP_MOUNTS[$i]}"
+    if grep -qxF -- "$m" <<<"$all_mounts" 2>/dev/null; then
+      warn "_cleanup_check_tracked_mounts: $m still mounted"
+      rc=1
+    fi
+  done
+
+  return "$rc"
+}
+
+# _cleanup_assert_no_mounts_under DIRECTORY
 #   Check that no mounts exist at or below DIRECTORY.
 #   Returns 0 if clean, 1 if mounts found.
-cleanup_assert_no_mounts_under() {
-  local dir="${1:?cleanup_assert_no_mounts_under: missing directory}"
+_cleanup_assert_no_mounts_under() {
+  local dir="${1:?_cleanup_assert_no_mounts_under: missing directory}"
 
   # Normalize directory
   local normalized
@@ -800,7 +532,7 @@ cleanup_assert_no_mounts_under() {
   # Read kernel mount inventory with decoding
   local all_mounts
   all_mounts="$(_cleanup_read_mount_inventory)" || {
-    warn "cleanup_assert_no_mounts_under: cannot read kernel mount table"
+    warn "_cleanup_assert_no_mounts_under: cannot read kernel mount table"
     return 1
   }
 
@@ -813,13 +545,19 @@ cleanup_assert_no_mounts_under() {
     m_normalized="$(realpath "$m" 2>/dev/null)" || m_normalized="$m"
     m_normalized="${m_normalized%/}"
     # Exact match
-    [[ "$m_normalized" == "$normalized" ]] && { found=1; break; }
+    [[ "$m_normalized" == "$normalized" ]] && {
+      found=1
+      break
+    }
     # Descendant match
-    [[ "$m_normalized" == "${normalized_with_slash}"* ]] && { found=1; break; }
-  done <<< "$all_mounts"
+    [[ "$m_normalized" == "${normalized_with_slash}"* ]] && {
+      found=1
+      break
+    }
+  done <<<"$all_mounts"
 
-  if (( found )); then
-    warn "cleanup_assert_no_mounts_under: mount(s) remain under $dir"
+  if ((found)); then
+    warn "_cleanup_assert_no_mounts_under: mount(s) remain under $dir"
     return 1
   fi
 
@@ -841,7 +579,7 @@ cleanup_unmount_registered() {
 
     # Revalidate path before unmounting
     if [[ -n "$CLEANUP_WORKSPACE_ROOT" ]]; then
-      if ! cleanup_validate_workspace "$m"; then
+      if ! _cleanup_validate_workspace "$m"; then
         warn "cleanup_unmount_registered: $m no longer in workspace — preserving"
         rc=1
         continue
@@ -860,13 +598,13 @@ cleanup_unmount_registered() {
     local current_count
     current_count="$(echo "$current_ids" | grep -c . 2>/dev/null)" || current_count=0
 
-    if (( current_count == 0 )); then
+    if ((current_count == 0)); then
       warn "cleanup_unmount_registered: cannot verify identity of $m — preserving"
       rc=1
       continue
     fi
 
-    if (( current_count > 1 )); then
+    if ((current_count > 1)); then
       warn "cleanup_unmount_registered: multiple mounts at $m ($current_count) — stacked mounts not supported"
       rc=1
       continue
@@ -889,13 +627,13 @@ cleanup_unmount_registered() {
 
     # Ledger: mark releasing
     if [[ -n "$_LEDGER_RUN_DIR" ]]; then
-      cleanup_ledger_mark_releasing "mount:$m" || true
+      _cleanup_ledger_mark_releasing "mount:$m" || true
     fi
 
     if strict_unmount "$m" "${label:-cleanup}"; then
       # Ledger: mark released
       if [[ -n "$_LEDGER_RUN_DIR" ]]; then
-        cleanup_ledger_mark_released "mount:$m" || true
+        _cleanup_ledger_mark_released "mount:$m" || true
       fi
       debug "cleanup_unmount_registered: unmounted $m"
     else
@@ -907,52 +645,25 @@ cleanup_unmount_registered() {
   return "$rc"
 }
 
-# cleanup_verify_mounts_released
-#   Verify all tracked mounts are actually gone.
-#   Returns 0 if all released, 1 if any remain.
-cleanup_verify_mounts_released() {
-  local rc=0
-  local i
-
-  # Read complete mount inventory ONCE — failure here means we can't verify
-  local all_mounts
-  all_mounts="$(_cleanup_read_mount_inventory)" || {
-    warn "cleanup_verify_mounts_released: cannot read mount inventory"
-    return 1
-  }
-
-  for (( i=0; i<${#CLEANUP_MOUNTS[@]}; i++ )); do
-    local m="${CLEANUP_MOUNTS[$i]}"
-    
-    # Use here-string to avoid pipefail issues
-    if grep -qxF -- "$m" <<< "$all_mounts" 2>/dev/null; then
-      warn "cleanup_verify_mounts_released: $m still mounted"
-      rc=1
-    fi
-  done
-
-  return "$rc"
-}
-
-# cleanup_detach_registered_loops
+# _cleanup_detach_registered_loops
 #   Detach all tracked loop devices.
 #   Returns 0 if all detached, 1 if any remain.
-cleanup_detach_registered_loops() {
+_cleanup_detach_registered_loops() {
   local rc=0
   local i
 
   # Read configured-loop inventory once — failure means we can't verify
   local loop_inventory
   loop_inventory="$(losetup -a 2>/dev/null)" || {
-    warn "cleanup_detach_registered_loops: cannot read loop inventory"
+    warn "_cleanup_detach_registered_loops: cannot read loop inventory"
     CLEANUP_INCOMPLETE=1
     return 1
   }
 
   # Verify no unexpected mounts remain before detaching loops
   if [[ -n "$CLEANUP_WORKSPACE_ROOT" ]]; then
-    if ! cleanup_assert_no_mounts_under "$CLEANUP_WORKSPACE_ROOT"; then
-      warn "cleanup_detach_registered_loops: unexpected mounts remain under workspace — preserving loops"
+    if ! _cleanup_assert_no_mounts_under "$CLEANUP_WORKSPACE_ROOT"; then
+      warn "_cleanup_detach_registered_loops: unexpected mounts remain under workspace — preserving loops"
       CLEANUP_INCOMPLETE=1
       return 1
     fi
@@ -963,14 +674,14 @@ cleanup_detach_registered_loops() {
     local expected_backing="${CLEANUP_LOOP_BACKINGS[$i]:-}"
 
     # Check if loop is still attached using cached inventory
-    if ! grep -q "^${l}:" <<< "$loop_inventory" 2>/dev/null; then
-      debug "cleanup_detach_registered_loops: $l already detached"
+    if ! grep -q "^${l}:" <<<"$loop_inventory" 2>/dev/null; then
+      debug "_cleanup_detach_registered_loops: $l already detached"
       continue
     fi
 
     # Verify loop backing identity before detaching
     local current_backing_id=""
-    
+
     # Try sysfs first (gives us the backing path, then we stat it)
     if [[ -f "/sys/block/${l##*/}/loop/backing_file" ]]; then
       local current_backing_path
@@ -979,22 +690,22 @@ cleanup_detach_registered_loops() {
         current_backing_id="$(stat -c '%d:%i' "$current_backing_path" 2>/dev/null)" || current_backing_id=""
       fi
     fi
-    
+
     # If sysfs failed, we cannot verify identity — preserve the loop
     if [[ -z "$current_backing_id" ]]; then
-      warn "cleanup_detach_registered_loops: cannot verify identity of $l (sysfs unavailable) — preserving"
+      warn "_cleanup_detach_registered_loops: cannot verify identity of $l (sysfs unavailable) — preserving"
       rc=1
       continue
     fi
 
     if [[ -z "$expected_backing" || -z "$current_backing_id" ]]; then
-      warn "cleanup_detach_registered_loops: cannot verify identity of $l — preserving"
+      warn "_cleanup_detach_registered_loops: cannot verify identity of $l — preserving"
       rc=1
       continue
     fi
 
     if [[ "$current_backing_id" != "$expected_backing" ]]; then
-      warn "cleanup_detach_registered_loops: $l backing changed ($expected_backing → $current_backing_id) — preserving"
+      warn "_cleanup_detach_registered_loops: $l backing changed ($expected_backing → $current_backing_id) — preserving"
       rc=1
       continue
     fi
@@ -1011,28 +722,49 @@ cleanup_detach_registered_loops() {
 
     # Ledger: mark releasing
     if [[ -n "$_LEDGER_RUN_DIR" && -n "$_pf_ledger_loop_id" ]]; then
-      cleanup_ledger_mark_releasing "$_pf_ledger_loop_id" || true
+      _cleanup_ledger_mark_releasing "$_pf_ledger_loop_id" || true
     fi
 
+    # Wait for ext4 superblock to release before detaching
+    if ! wait_ext4_gone "$l" 2>/dev/null; then
+      warn "_cleanup_detach_registered_loops: ext4 superblock still alive for $l — proceeding anyway"
+    fi
+
+    # Detach loop
     if strict_detach_loop "$l" 2>/dev/null; then
       # Ledger: mark released
       if [[ -n "$_LEDGER_RUN_DIR" && -n "$_pf_ledger_loop_id" ]]; then
-        cleanup_ledger_mark_released "$_pf_ledger_loop_id" || true
+        _cleanup_ledger_mark_released "$_pf_ledger_loop_id" || true
       fi
-      debug "cleanup_detach_registered_loops: detached $l"
+      debug "_cleanup_detach_registered_loops: detached $l"
     else
-      warn "cleanup_detach_registered_loops: failed to detach $l (backing: ${expected_backing:-unknown})"
+      warn "_cleanup_detach_registered_loops: failed to detach $l (backing: ${expected_backing:-unknown})"
       rc=1
     fi
   done
 
-  return "$rc"
+  # Post-detach verification: confirm all tracked loops are actually detached
+  local verify_rc=0
+  for ((i = 0; i < ${#CLEANUP_LOOPS[@]}; i++)); do
+    local _pf_vl="${CLEANUP_LOOPS[$i]}"
+    if [[ -f "/sys/block/${_pf_vl##*/}/loop/backing_file" ]] || losetup "$_pf_vl" &>/dev/null; then
+      warn "_cleanup_detach_registered_loops: $_pf_vl still attached after detach attempts"
+      verify_rc=1
+    fi
+  done
+
+  if ((verify_rc != 0)); then
+    warn "_cleanup_detach_registered_loops: some loops could not be detached"
+    CLEANUP_INCOMPLETE=1
+  fi
+
+  return $((rc || verify_rc))
 }
 
-# cleanup_remove_registered_tempdirs
+# _cleanup_remove_registered_tempdirs
 #   Remove registered temporary directories (must be empty after unmounting).
 #   Returns 0 if all removed, 1 if any remain.
-cleanup_remove_registered_tempdirs() {
+_cleanup_remove_registered_tempdirs() {
   local rc=0
   local i
 
@@ -1044,8 +776,8 @@ cleanup_remove_registered_tempdirs() {
 
     # Revalidate path is still inside workspace before removal
     if [[ -n "$CLEANUP_WORKSPACE_ROOT" ]]; then
-      if ! cleanup_validate_workspace "$d"; then
-        warn "cleanup_remove_registered_tempdirs: $d no longer in workspace — preserving"
+      if ! _cleanup_validate_workspace "$d"; then
+        warn "_cleanup_remove_registered_tempdirs: $d no longer in workspace — preserving"
         rc=1
         continue
       fi
@@ -1053,7 +785,15 @@ cleanup_remove_registered_tempdirs() {
 
     # rmdir handles emptiness check internally — no separate ls -A race
     if ! rmdir "$d" 2>/dev/null; then
-      warn "cleanup_remove_registered_tempdirs: could not remove $d (not empty or still in use)"
+      warn "_cleanup_remove_registered_tempdirs: could not remove $d (not empty or still in use)"
+      rc=1
+    fi
+  done
+
+  # Post-removal verification: confirm all tracked tempdirs are actually gone
+  for ((i = 0; i < ${#CLEANUP_TEMPDIRS[@]}; i++)); do
+    if [[ -d "${CLEANUP_TEMPDIRS[$i]}" ]]; then
+      warn "_cleanup_remove_registered_tempdirs: ${CLEANUP_TEMPDIRS[$i]} still exists after removal"
       rc=1
     fi
   done
@@ -1082,7 +822,7 @@ cleanup_environment() {
   cleanup_unmount_registered || mounts_ok=0
 
   # Phase 2: Verify mounts are released
-  cleanup_verify_mounts_released || mounts_ok=0
+  _cleanup_check_tracked_mounts || mounts_ok=0
 
   if ((!mounts_ok)); then
     warn "cleanup_environment: mount cleanup incomplete — preserving loops and workspace"
@@ -1092,7 +832,7 @@ cleanup_environment() {
   fi
 
   # Phase 3: Detach registered loops
-  cleanup_detach_registered_loops || loops_ok=0
+  _cleanup_detach_registered_loops || loops_ok=0
 
   if ((!loops_ok)); then
     warn "cleanup_environment: loop cleanup incomplete — preserving workspace"
@@ -1103,14 +843,14 @@ cleanup_environment() {
 
   # Phase 4: Remove registered temp directories
   local rc=0
-  cleanup_remove_registered_tempdirs || rc=1
+  _cleanup_remove_registered_tempdirs || rc=1
 
   # Phase 5: Final verification
   cleanup_verify || rc=1
 
   # Ledger: mark run as CLEAN
-  if (( rc == 0 )) && [[ -n "$_LEDGER_RUN_DIR" ]]; then
-    cleanup_ledger_finish || true
+  if ((rc == 0)) && [[ -n "$_LEDGER_RUN_DIR" ]]; then
+    _cleanup_ledger_finish || true
   fi
 
   CLEANUP_INCOMPLETE=$rc
@@ -1123,50 +863,50 @@ cleanup_environment() {
 #   Returns 0 if clean, 1 if residuals remain.
 cleanup_verify() {
   local rc=0
+
+  # Check tracked mounts are gone
+  _cleanup_check_tracked_mounts || rc=1
+
+  # Check tracked loops are detached (with identity verification)
   local i
-
-  # Check all tracked mounts
-  local all_mounts
-  all_mounts="$(_cleanup_read_mount_inventory)" || {
-    warn "cleanup_verify: cannot read mount inventory"
-    rc=1
-  }
-
-  for (( i=0; i<${#CLEANUP_MOUNTS[@]}; i++ )); do
-    # Use here-string to avoid pipefail issues
-    if grep -qxF -- "${CLEANUP_MOUNTS[$i]}" <<< "$all_mounts" 2>/dev/null; then
-      warn "cleanup_verify: ${CLEANUP_MOUNTS[$i]} still mounted"
-      rc=1
-    fi
-  done
-
-  # Check all tracked loops
-  # Read configured-loop inventory once
-  local loop_inventory
-  loop_inventory="$(losetup -a 2>/dev/null)" || {
-    warn "cleanup_verify: cannot read loop inventory"
-    rc=1
-  }
-
-  for (( i=0; i<${#CLEANUP_LOOPS[@]}; i++ )); do
+  for ((i = 0; i < ${#CLEANUP_LOOPS[@]}; i++)); do
     local l="${CLEANUP_LOOPS[$i]}"
-    local is_attached=0
+    local expected_id="${CLEANUP_LOOP_BACKINGS[$i]:-}"
 
-    # Check sysfs first (preferred)
-    if [[ -e "/sys/block/${l##*/}/loop/backing_file" ]]; then
+    local is_attached=0
+    if [[ -f "/sys/block/${l##*/}/loop/backing_file" ]]; then
       is_attached=1
-    # Fall back to loop inventory
-    elif grep -q "^${l}:" <<< "$loop_inventory" 2>/dev/null; then
+    elif losetup "$l" &>/dev/null; then
       is_attached=1
     fi
 
-    if (( is_attached )); then
-      warn "cleanup_verify: ${CLEANUP_LOOPS[$i]} still attached"
-      rc=1
+    if ((is_attached)); then
+      if [[ -n "$expected_id" ]]; then
+        local current_backing=""
+        if [[ -f "/sys/block/${l##*/}/loop/backing_file" ]]; then
+          current_backing="$(cat "/sys/block/${l##*/}/loop/backing_file" 2>/dev/null)" || current_backing=""
+          if [[ -n "$current_backing" && -e "$current_backing" ]]; then
+            current_backing="$(stat -c '%d:%i' "$current_backing" 2>/dev/null)" || current_backing=""
+          fi
+        fi
+        if [[ -n "$current_backing" && "$current_backing" != "$expected_id" ]]; then
+          warn "cleanup_verify: $l identity changed ($expected_id → $current_backing)"
+          rc=1
+        elif [[ -z "$current_backing" ]]; then
+          warn "cleanup_verify: $l still attached but identity unverifiable"
+          rc=1
+        else
+          warn "cleanup_verify: $l still attached with correct identity"
+          rc=1
+        fi
+      else
+        warn "cleanup_verify: $l still attached"
+        rc=1
+      fi
     fi
   done
 
-  # Check all tracked tempdirs
+  # Check tracked tempdirs are gone
   for ((i = 0; i < ${#CLEANUP_TEMPDIRS[@]}; i++)); do
     if [[ -d "${CLEANUP_TEMPDIRS[$i]}" ]]; then
       warn "cleanup_verify: ${CLEANUP_TEMPDIRS[$i]} still exists"
@@ -1174,11 +914,9 @@ cleanup_verify() {
     fi
   done
 
-  # Also verify no unexpected mounts under workspace
+  # Check for untracked resources under workspace
   if [[ -n "$CLEANUP_WORKSPACE_ROOT" ]]; then
-    if ! cleanup_assert_no_mounts_under "$CLEANUP_WORKSPACE_ROOT"; then
-      rc=1
-    fi
+    _audit_workspace_strays "$CLEANUP_WORKSPACE_ROOT" || rc=1
   fi
 
   if ((rc == 0)); then
@@ -1188,11 +926,11 @@ cleanup_verify() {
   return "$rc"
 }
 
-# cleanup_reset
+# _cleanup_reset
 #   Clear all tracking state. Call after successful cleanup or before a new run.
-cleanup_reset() {
+_cleanup_reset() {
   if ((CLEANUP_RUNNING)); then
-    warn "cleanup_reset: cannot reset during cleanup"
+    warn "_cleanup_reset: cannot reset during cleanup"
     return 1
   fi
 
@@ -1201,16 +939,16 @@ cleanup_reset() {
   ((${#CLEANUP_LOOPS[@]} > 0)) && has_registrations=1
   ((${#CLEANUP_TEMPDIRS[@]} > 0)) && has_registrations=1
 
-  if (( has_registrations )); then
+  if ((has_registrations)); then
     # Require cleanup was attempted AND succeeded
-    if (( ! CLEANUP_ATTEMPTED || CLEANUP_INCOMPLETE )); then
-      warn "cleanup_reset: cannot reset unresolved cleanup state"
+    if ((!CLEANUP_ATTEMPTED || CLEANUP_INCOMPLETE)); then
+      warn "_cleanup_reset: cannot reset unresolved cleanup state"
       return 1
     fi
 
     # Verify success before clearing
     if ! cleanup_verify; then
-      warn "cleanup_reset: verification failed — refusing to clear registrations"
+      warn "_cleanup_reset: verification failed — refusing to clear registrations"
       return 1
     fi
   fi
@@ -1239,13 +977,13 @@ cleanup_reset() {
 cleanup_mount() {
   local target="${1:?cleanup_mount: missing target}"
   local label="${2:-}"
-  shift 2 || shift $#  # Consume target and label
+  shift 2 || shift $# # Consume target and label
 
   # Skip -- separator if present
   [[ "${1:-}" == "--" ]] && shift
 
   # --- Preconditions ---
-  if (( CLEANUP_RUNNING )); then
+  if ((CLEANUP_RUNNING)); then
     warn "cleanup_mount: cannot create mounts during cleanup"
     return 1
   fi
@@ -1255,7 +993,7 @@ cleanup_mount() {
     return 1
   fi
 
-  if ! cleanup_validate_workspace "$target"; then
+  if ! _cleanup_validate_workspace "$target"; then
     return 1
   fi
 
@@ -1266,9 +1004,10 @@ cleanup_mount() {
   fi
 
   # Ledger: persist PREPARED record
+  # shellcheck disable=SC2155  # fallback printf guarantees non-empty assignment; return value not checked
   local _pf_ledger_id="mount:$(realpath "$target" 2>/dev/null || printf '%s' "$target")"
   if [[ -n "$_LEDGER_RUN_DIR" ]]; then
-    cleanup_ledger_prepare "$_pf_ledger_id" "mount" "$target" "" "$label" || {
+    _cleanup_ledger_prepare "$_pf_ledger_id" "mount" "$target" "" "$label" || {
       warn "cleanup_mount: ledger prepare failed — aborting"
       return 1
     }
@@ -1302,7 +1041,7 @@ cleanup_mount() {
 
   # Ledger: transition to ACTIVE
   if [[ -n "$_LEDGER_RUN_DIR" ]]; then
-    cleanup_ledger_activate "$_pf_ledger_id" "$(findmnt -rno ID -M "$target" --kernel 2>/dev/null | head -1)" || true
+    _cleanup_ledger_activate "$_pf_ledger_id" "$(findmnt -rno ID -M "$target" --kernel 2>/dev/null | head -1)" || true
   fi
 
   debug "cleanup_mount: mounted and registered $target"
@@ -1316,7 +1055,7 @@ cleanup_mount() {
 cleanup_attach_loop() {
   local _pf_backing="${1:?cleanup_attach_loop: missing backing file}"
   local _pf_label="${2:-}"
-  
+
   # Parse optional output variable name (3rd arg before --)
   local _pf_output_var="CLEANUP_ATTACHED_LOOP"
   if [[ "${3:-}" != "--" && -n "${3:-}" ]]; then
@@ -1335,14 +1074,14 @@ cleanup_attach_loop() {
 
   # Reject output names that collide with internal prefixed names
   case "$_pf_output_var" in
-    _pf_*|CLEANUP_*|CLEANUP_ATTACHED_*)
+    _pf_* | CLEANUP_*)
       warn "cleanup_attach_loop: output variable name '$_pf_output_var' is reserved"
       return 1
       ;;
   esac
 
   # --- Preconditions ---
-  if (( CLEANUP_RUNNING )); then
+  if ((CLEANUP_RUNNING)); then
     warn "cleanup_attach_loop: cannot create loops during cleanup"
     return 1
   fi
@@ -1352,7 +1091,7 @@ cleanup_attach_loop() {
     return 1
   fi
 
-  if ! cleanup_validate_workspace "$_pf_backing"; then
+  if ! _cleanup_validate_workspace "$_pf_backing"; then
     return 1
   fi
 
@@ -1377,15 +1116,16 @@ cleanup_attach_loop() {
     fi
   fi
 
-  if (( _pf_loops_rc != 0 )) && [[ -z "$_pf_existing" ]]; then
+  if ((_pf_loops_rc != 0)) && [[ -z "$_pf_existing" ]]; then
     warn "cleanup_attach_loop: could not query existing loops for $_pf_backing (rc=$_pf_loops_rc)"
     return 1
   fi
 
   # Ledger: persist PREPARED record (backing file known, loop device not yet)
+  # shellcheck disable=SC2155  # fallback printf guarantees non-empty assignment; return value not checked
   local _pf_ledger_id="loop:$(realpath "$_pf_backing" 2>/dev/null || printf '%s' "$_pf_backing")"
   if [[ -n "$_LEDGER_RUN_DIR" ]]; then
-    cleanup_ledger_prepare "$_pf_ledger_id" "loop" "$_pf_backing" "" "$_pf_label" || {
+    _cleanup_ledger_prepare "$_pf_ledger_id" "loop" "$_pf_backing" "" "$_pf_label" || {
       warn "cleanup_attach_loop: ledger prepare failed — aborting"
       return 1
     }
@@ -1432,7 +1172,7 @@ cleanup_attach_loop() {
         _pf_loop_identity="$(stat -c '%d:%i' "$_pf_bp" 2>/dev/null)" || _pf_loop_identity=""
       fi
     fi
-    cleanup_ledger_activate "$_pf_ledger_id" "$_pf_loop_identity" || true
+    _cleanup_ledger_activate "$_pf_ledger_id" "$_pf_loop_identity" || true
   fi
 
   # Output loop device via nameref
@@ -1450,7 +1190,7 @@ cleanup_mount_chroot() {
   local root="${1:?cleanup_mount_chroot: missing root}"
 
   # --- Preconditions ---
-  if (( CLEANUP_RUNNING )); then
+  if ((CLEANUP_RUNNING)); then
     warn "cleanup_mount_chroot: cannot create mounts during cleanup"
     return 1
   fi
@@ -1458,7 +1198,7 @@ cleanup_mount_chroot() {
     warn "cleanup_mount_chroot: CLEANUP_WORKSPACE_ROOT not set"
     return 1
   fi
-  if ! cleanup_validate_workspace "$root"; then
+  if ! _cleanup_validate_workspace "$root"; then
     return 1
   fi
 
@@ -1484,7 +1224,10 @@ cleanup_mount_chroot() {
       rc=1
     fi
   fi
-  (( rc )) && { _cleanup_chroot_rollback "$boundary"; return "$rc"; }
+  ((rc)) && {
+    _cleanup_chroot_rollback "$boundary"
+    return "$rc"
+  }
 
   # sys — non-recursive bind
   if ! mountpoint -q "$root/sys" 2>/dev/null; then
@@ -1498,7 +1241,10 @@ cleanup_mount_chroot() {
       rc=1
     fi
   fi
-  (( rc )) && { _cleanup_chroot_rollback "$boundary"; return "$rc"; }
+  ((rc)) && {
+    _cleanup_chroot_rollback "$boundary"
+    return "$rc"
+  }
 
   # dev
   if ! mountpoint -q "$root/dev" 2>/dev/null; then
@@ -1512,7 +1258,10 @@ cleanup_mount_chroot() {
       rc=1
     fi
   fi
-  (( rc )) && { _cleanup_chroot_rollback "$boundary"; return "$rc"; }
+  ((rc)) && {
+    _cleanup_chroot_rollback "$boundary"
+    return "$rc"
+  }
 
   # dev/pts
   if ! mountpoint -q "$root/dev/pts" 2>/dev/null; then
@@ -1526,7 +1275,10 @@ cleanup_mount_chroot() {
       rc=1
     fi
   fi
-  (( rc )) && { _cleanup_chroot_rollback "$boundary"; return "$rc"; }
+  ((rc)) && {
+    _cleanup_chroot_rollback "$boundary"
+    return "$rc"
+  }
 
   # dev/shm
   if ! mountpoint -q "$root/dev/shm" 2>/dev/null; then
@@ -1537,7 +1289,10 @@ cleanup_mount_chroot() {
       rc=1
     fi
   fi
-  (( rc )) && { _cleanup_chroot_rollback "$boundary"; return "$rc"; }
+  ((rc)) && {
+    _cleanup_chroot_rollback "$boundary"
+    return "$rc"
+  }
 
   return "$rc"
 }
@@ -1558,12 +1313,12 @@ _cleanup_chroot_rollback() {
   }
 
   # Unmount in reverse, only from our registration boundary onward
-  for (( i=${#CLEANUP_MOUNTS[@]}-1; i>=boundary; i-- )); do
+  for ((i = ${#CLEANUP_MOUNTS[@]} - 1; i >= boundary; i--)); do
     local m="${CLEANUP_MOUNTS[$i]}"
     local expected_id="${CLEANUP_MOUNT_IDS[$i]:-}"
 
     # Verify mount is still present in inventory before attempting unmount
-    if ! grep -qxF -- "$m" <<< "$inventory" 2>/dev/null; then
+    if ! grep -qxF -- "$m" <<<"$inventory" 2>/dev/null; then
       # Already absent — just remove from tracking
       unset 'CLEANUP_MOUNTS[i]'
       unset 'CLEANUP_MOUNT_IDS[i]'
@@ -1582,7 +1337,7 @@ _cleanup_chroot_rollback() {
     # Verify unmount succeeded
     local post_inventory=""
     post_inventory="$(_cleanup_read_mount_inventory 2>/dev/null)" || post_inventory=""
-    if [[ -n "$post_inventory" ]] && grep -qxF -- "$m" <<< "$post_inventory" 2>/dev/null; then
+    if [[ -n "$post_inventory" ]] && grep -qxF -- "$m" <<<"$post_inventory" 2>/dev/null; then
       warn "_cleanup_chroot_rollback: $m still present after unmount — preserving"
       CLEANUP_INCOMPLETE=1
       rc=1
@@ -1591,7 +1346,7 @@ _cleanup_chroot_rollback() {
 
     # Ledger: mark released
     if [[ -n "$_LEDGER_RUN_DIR" ]]; then
-      cleanup_ledger_mark_released "mount:$m" || true
+      _cleanup_ledger_mark_released "mount:$m" || true
     fi
 
     # Successfully unmounted — remove from tracking
@@ -1608,7 +1363,7 @@ _cleanup_chroot_rollback() {
   return "$rc"
 }
 
-# cleanup_stop_workers
+# _cleanup_stop_workers
 #   Stop all background jobs launched by the build.
 #   Waits for them to exit. Does NOT kill arbitrary processes.
 #   Returns 0 when all workers have exited.
@@ -1617,7 +1372,7 @@ _cleanup_chroot_rollback() {
 #   Pipeline members and subprocess trees are NOT guaranteed to be stopped.
 #   Callers should ensure build jobs are launched as direct background jobs,
 #   not through subprocess pipelines, for reliable shutdown.
-cleanup_stop_workers() {
+_cleanup_stop_workers() {
   local timeout=10
   local waited=0
 
@@ -1634,11 +1389,11 @@ cleanup_stop_workers() {
   done < <(jobs -p 2>/dev/null)
 
   if [[ ${#pids[@]} -eq 0 ]]; then
-    debug "cleanup_stop_workers: no background jobs"
+    debug "_cleanup_stop_workers: no background jobs"
     return 0
   fi
 
-  debug "cleanup_stop_workers: stopping ${#pids[@]} background job(s)"
+  debug "_cleanup_stop_workers: stopping ${#pids[@]} background job(s)"
 
   # Send SIGTERM to each
   for pid in "${pids[@]}"; do
@@ -1646,7 +1401,7 @@ cleanup_stop_workers() {
   done
 
   # Wait with timeout
-  while (( waited < timeout )); do
+  while ((waited < timeout)); do
     local all_done=1
     for pid in "${pids[@]}"; do
       if kill -0 "$pid" 2>/dev/null; then
@@ -1654,7 +1409,7 @@ cleanup_stop_workers() {
         break
       fi
     done
-    (( all_done )) && break
+    ((all_done)) && break
     sleep 1
     waited=$((waited + 1))
   done
@@ -1662,7 +1417,7 @@ cleanup_stop_workers() {
   # Force-kill any remaining
   for pid in "${pids[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
-      warn "cleanup_stop_workers: force-killing PID $pid"
+      warn "_cleanup_stop_workers: force-killing PID $pid"
       kill -KILL "$pid" 2>/dev/null || true
       sleep 0.5
     fi
@@ -1672,13 +1427,13 @@ cleanup_stop_workers() {
   local survivors=0
   for pid in "${pids[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
-      warn "cleanup_stop_workers: PID $pid still alive after SIGKILL"
+      warn "_cleanup_stop_workers: PID $pid still alive after SIGKILL"
       survivors=$((survivors + 1))
     fi
   done
 
-  if (( survivors > 0 )); then
-    warn "cleanup_stop_workers: $survivors direct job(s) could not be stopped — descendants may still be running"
+  if ((survivors > 0)); then
+    warn "_cleanup_stop_workers: $survivors direct job(s) could not be stopped — descendants may still be running"
     return 1
   fi
 
@@ -1687,7 +1442,7 @@ cleanup_stop_workers() {
     wait "$pid" 2>/dev/null || true
   done
 
-  debug "cleanup_stop_workers: all direct jobs stopped"
+  debug "_cleanup_stop_workers: all direct jobs stopped"
   return 0
 }
 
@@ -1698,7 +1453,7 @@ cleanup_release() {
   local target="${1:?cleanup_release: missing mountpoint}"
 
   # Cannot release during cleanup
-  if (( CLEANUP_RUNNING )); then
+  if ((CLEANUP_RUNNING)); then
     warn "cleanup_release: cannot release during cleanup"
     return 1
   fi
@@ -1715,19 +1470,19 @@ cleanup_release() {
   }
 
   # Verify mount is actually gone
-  if grep -qxF -- "$normalized" <<< "$inventory" 2>/dev/null; then
+  if grep -qxF -- "$normalized" <<<"$inventory" 2>/dev/null; then
     warn "cleanup_release: $target is still mounted — cannot release"
     return 1
   fi
 
   # Ledger: mark released
   if [[ -n "$_LEDGER_RUN_DIR" ]]; then
-    cleanup_ledger_mark_released "mount:$normalized" || true
+    _cleanup_ledger_mark_released "mount:$normalized" || true
   fi
 
   # Remove from tracking
   local i
-  for (( i=${#CLEANUP_MOUNTS[@]}-1; i>=0; i-- )); do
+  for ((i = ${#CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
     if [[ "${CLEANUP_MOUNTS[$i]}" == "$normalized" || "${CLEANUP_MOUNTS[$i]}" == "$target" ]]; then
       unset 'CLEANUP_MOUNTS[i]'
       unset 'CLEANUP_MOUNT_IDS[i]'
@@ -1744,20 +1499,20 @@ cleanup_release() {
   return 0
 }
 
-# cleanup_report_blockers TARGET
+# _cleanup_report_blockers TARGET
 #   Report why resources at TARGET could not be cleaned up.
 #   Shows remaining mounts, associated loops, and holders.
-cleanup_report_blockers() {
+_cleanup_report_blockers() {
   local target="${1:-}"
 
   if [[ -n "$target" ]]; then
-    warn "cleanup_report_blockers: diagnostics for $target"
+    warn "_cleanup_report_blockers: diagnostics for $target"
   fi
 
   # Report remaining mounts — use exact or descendant matching
   local remaining=""
   remaining="$(_cleanup_read_mount_inventory 2>/dev/null)" || {
-    warn "cleanup_report_blockers: cannot read mount inventory"
+    warn "_cleanup_report_blockers: cannot read mount inventory"
     remaining=""
   }
 
@@ -1780,13 +1535,13 @@ cleanup_report_blockers() {
         warn "    $m"
         found=1
       fi
-    done <<< "$remaining"
-    (( found )) || warn "    (none)"
+    done <<<"$remaining"
+    ((found)) || warn "    (none)"
   elif [[ -n "$remaining" ]]; then
     warn "  All mounts:"
     while IFS="" read -r m; do
       [[ -n "$m" ]] && warn "    $m"
-    done <<< "$remaining"
+    done <<<"$remaining"
   else
     warn "  Mount inventory: unavailable or empty"
   fi
@@ -1820,7 +1575,7 @@ cleanup_report_blockers() {
       warn "  Processes using $target:"
       while IFS="" read -r h; do
         [[ -n "$h" ]] && warn "    $h"
-      done <<< "$holders"
+      done <<<"$holders"
     else
       warn "  No processes found using $target"
     fi
@@ -1829,6 +1584,241 @@ cleanup_report_blockers() {
   fi
 
   return 0
+}
+
+# cleanup_force_teardown WORKSPACE
+#   Emergency last-resort cleanup when normal cleanup_environment fails.
+#   Kills processes, lazy-unmounts, detaches loops, removes temp dirs.
+#   ALWAYS returns 1 — this path means something went wrong.
+#   Callers should NOT continue after this succeeds.
+cleanup_force_teardown() {
+  local workspace="${1:?cleanup_force_teardown: missing workspace}"
+
+  warn "cleanup_force_teardown: emergency teardown of $workspace"
+
+  # Phase 1: Kill any processes still using resources under workspace
+  if command -v fuser &>/dev/null; then
+    local holders
+    holders="$(fuser -vm "$workspace" 2>&1)" || true
+    if [[ -n "$holders" ]]; then
+      warn "cleanup_force_teardown: killing processes holding $workspace"
+      fuser -k -s KILL "$workspace" 2>/dev/null || true
+      sleep 1
+    fi
+  fi
+
+  # Phase 2: Lazy-unmount all tracked mounts
+  local i
+  for ((i = ${#CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
+    local m="${CLEANUP_MOUNTS[$i]}"
+    if mountpoint -q "$m" 2>/dev/null; then
+      warn "cleanup_force_teardown: lazy-unmounting $m"
+      umount -Rl "$m" 2>/dev/null || true
+    fi
+  done
+
+  # Phase 3: Detach all tracked loops
+  for ((i = ${#CLEANUP_LOOPS[@]} - 1; i >= 0; i--)); do
+    local l="${CLEANUP_LOOPS[$i]}"
+    if losetup "$l" &>/dev/null; then
+      warn "cleanup_force_teardown: detaching loop $l"
+      sync 2>/dev/null || true
+      losetup -d "$l" 2>/dev/null || true
+    fi
+  done
+
+  # Phase 4: Remove tracked temp directories
+  for ((i = ${#CLEANUP_TEMPDIRS[@]} - 1; i >= 0; i--)); do
+    local d="${CLEANUP_TEMPDIRS[$i]}"
+    if [[ -d "$d" ]]; then
+      warn "cleanup_force_teardown: removing $d"
+      rm -rf "$d" 2>/dev/null || true
+    fi
+  done
+
+  # Phase 5: Remove workspace itself
+  if [[ -d "$workspace" ]]; then
+    warn "cleanup_force_teardown: removing workspace $workspace"
+    rm -rf "$workspace" 2>/dev/null || true
+  fi
+
+  # ALWAYS fail — this path means something went wrong
+  warn "cleanup_force_teardown: emergency teardown complete — resources may be inconsistent"
+  return 1
+}
+
+# refresh_loop_size LOOPDEV
+#   Refresh a loop device's capacity after the backing file was extended.
+#   Calls `losetup -c` to re-read the device size from the kernel.
+#   Dies on failure — a stale loop size causes I/O errors at the boundary.
+refresh_loop_size() {
+  local loopdev="${1:?refresh_loop_size: missing loop device}"
+
+  if ! losetup -c "$loopdev" 2>/dev/null; then
+    die "refresh_loop_size: failed to refresh loop device size: $loopdev"
+  fi
+
+  debug "refresh_loop_size: refreshed $loopdev capacity"
+  return 0
+}
+
+# _audit_workspace_strays WORKSPACE
+#   Detect untracked resources under the workspace.
+#   Compares live kernel state against the CLEANUP_* tracking arrays.
+#   Reports any mounts, loops, or ext4 superblocks that exist but weren't registered.
+#   Returns 0 if clean, 1 if strays found.
+_audit_workspace_strays() {
+  local workspace="${1:?_audit_workspace_strays: missing workspace}"
+  local rc=0
+
+  local ws_real
+  ws_real="$(realpath "$workspace" 2>/dev/null)" || ws_real="$workspace"
+  local ws_with_slash="${ws_real%/}/"
+
+  # --- Check 1: Untracked mounts under workspace ---
+  local all_mounts
+  all_mounts="$(_cleanup_read_mount_inventory 2>/dev/null)" || {
+    warn "_audit_workspace_strays: cannot read mount inventory"
+    return 1
+  }
+
+  # Build set of tracked mounts for comparison
+  local tracked_mounts=""
+  local i
+  for ((i = 0; i < ${#CLEANUP_MOUNTS[@]}; i++)); do
+    tracked_mounts+="${CLEANUP_MOUNTS[$i]}"$'\n'
+  done
+
+  local untracked_mounts=""
+  local m
+  while IFS="" read -r m; do
+    [[ -n "$m" ]] || continue
+    local m_real
+    m_real="$(realpath "$m" 2>/dev/null)" || m_real="$m"
+    m_real="${m_real%/}"
+    # Check if this mount is under our workspace
+    if [[ "$m_real" == "$ws_real" || "$m_real" == "${ws_with_slash}"* ]]; then
+      # Check if it's tracked
+      if ! grep -qxF -- "$m" <<<"$tracked_mounts" 2>/dev/null; then
+        untracked_mounts+="$m"$'\n'
+      fi
+    fi
+  done <<<"$all_mounts"
+
+  if [[ -n "$untracked_mounts" ]]; then
+    warn "_audit_workspace_strays: untracked mounts under workspace:"
+    while IFS="" read -r m; do
+      [[ -n "$m" ]] && warn "  $m"
+    done <<<"$untracked_mounts"
+    rc=1
+  fi
+
+  # --- Check 2: Untracked loops backed by workspace files ---
+  local loop_json
+  loop_json="$(losetup -J 2>/dev/null)" || {
+    warn "_audit_workspace_strays: cannot read loop inventory"
+    return 1
+  }
+
+  # Build set of tracked loop backings for comparison
+  local tracked_backings=""
+  for ((i = 0; i < ${#CLEANUP_LOOPS[@]}; i++)); do
+    tracked_backings+="${CLEANUP_LOOP_BACKINGS[$i]}"$'\n'
+  done
+
+  local untracked_loops=""
+  # Extract workspace-backed loops from JSON; output: "device\tbacking_file"
+  local ws_loops
+  ws_loops="$(python3 -c '
+import json, sys
+
+ws_real = sys.argv[1]
+ws_slash = sys.argv[2]
+
+try:
+    data = json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(0)
+
+for dev in data.get("loopdevices", []):
+    name = dev.get("name") or ""
+    backing = dev.get("back-file") or ""
+    clean = backing.removesuffix(" (deleted)")
+    if not name or not clean:
+        continue
+    if clean == ws_real or clean.startswith(ws_slash):
+        print(name + "\t" + clean)
+' "$ws_real" "$ws_with_slash" <<<"$loop_json")" || true
+
+  if [[ -n "$ws_loops" ]]; then
+    while IFS=$'\t' read -r l_dev l_backing; do
+      [[ -n "$l_dev" ]] || continue
+      local l_identity=""
+      if [[ -e "$l_backing" ]]; then
+        l_identity="$(stat -c '%d:%i' "$l_backing" 2>/dev/null)" || l_identity=""
+      fi
+      if [[ -z "$l_identity" ]] || ! grep -qxF -- "$l_identity" <<<"$tracked_backings" 2>/dev/null; then
+        untracked_loops+="  $l_dev ($l_backing)"$'\n'
+      fi
+    done <<<"$ws_loops"
+  fi
+
+  if [[ -n "$untracked_loops" ]]; then
+    warn "_audit_workspace_strays: untracked loops backed by workspace files:"
+    while IFS="" read -r l; do
+      [[ -n "$l" ]] && warn "  $l"
+    done <<<"$untracked_loops"
+    rc=1
+  fi
+
+  # --- Check 3: Ext4 superblocks for workspace loops ---
+  local ext4_dir="/sys/fs/ext4"
+  if [[ -d "$ext4_dir" ]]; then
+    local untracked_ext4=""
+    local ext4_entry
+    for ext4_entry in "$ext4_dir"/*/; do
+      [[ -d "$ext4_entry" ]] || continue
+      local ext4_name
+      ext4_name="$(basename "$ext4_entry")"
+      # Check if this ext4 superblock is for a workspace loop
+      # (ext4 sysfs entries are named after the loop device, e.g., loop0)
+      if [[ "$ext4_name" == loop* ]]; then
+        local ext4_loop="/dev/$ext4_name"
+        if [[ -b "$ext4_loop" ]]; then
+          # Check if this loop is backed by a workspace file
+          local ext4_backing=""
+          if [[ -f "/sys/block/${ext4_name}/loop/backing_file" ]]; then
+            ext4_backing="$(cat "/sys/block/${ext4_name}/loop/backing_file" 2>/dev/null)" || ext4_backing=""
+          fi
+          if [[ -n "$ext4_backing" && ("$ext4_backing" == "$ws_real"* || "$ext4_backing" == "${ws_with_slash}"*) ]]; then
+            # Check if tracked
+            local ext4_id=""
+            if [[ -e "$ext4_backing" ]]; then
+              ext4_id="$(stat -c '%d:%i' "$ext4_backing" 2>/dev/null)" || ext4_id=""
+            fi
+            if [[ -z "$ext4_id" ]] || ! grep -qxF -- "$ext4_id" <<<"$tracked_backings" 2>/dev/null; then
+              untracked_ext4+="  $ext4_name (backing: $ext4_backing)"$'\n'
+            fi
+          fi
+        fi
+      fi
+    done
+
+    if [[ -n "$untracked_ext4" ]]; then
+      warn "_audit_workspace_strays: untracked ext4 superblocks:"
+      printf '%s' "$untracked_ext4"
+      rc=1
+    fi
+  fi
+
+  # --- Summary ---
+  if ((rc == 0)); then
+    debug "_audit_workspace_strays: no stray resources detected under $workspace"
+  else
+    warn "_audit_workspace_strays: stray resources detected — manual cleanup may be required"
+  fi
+
+  return "$rc"
 }
 
 # ── Persistent resource ledger ──────────────────────────────────────────────────
@@ -1871,7 +1861,7 @@ _ledger_write_file() {
   # Write all lines
   local line
   for line in "$@"; do
-    printf '%s\n' "$line" >> "$tmp"
+    printf '%s\n' "$line" >>"$tmp"
   done || {
     rm -f "$tmp"
     return 1
@@ -1899,7 +1889,7 @@ _ledger_append_resource() {
 
   [[ -n "$_LEDGER_RUN_DIR" ]] || return 1
 
-  printf '%s\n' "$entry" >> "$_LEDGER_RUN_DIR/resources" || return 1
+  printf '%s\n' "$entry" >>"$_LEDGER_RUN_DIR/resources" || return 1
   sync "$_LEDGER_RUN_DIR/resources" 2>/dev/null || true
   return 0
 }
@@ -1914,8 +1904,8 @@ _ledger_update_resource() {
   [[ -n "$_LEDGER_RUN_DIR" ]] || return 1
   [[ -f "$_LEDGER_RUN_DIR/resources" ]] || return 1
 
-  local tmp="${_LEDGER_RUN_DIR/resources}.tmp.$$"
-  : > "$tmp"
+  local tmp="${_LEDGER_RUN_DIR}/resources.tmp.$$"
+  : >"$tmp"
 
   local found=0
   while IFS=$'\t' read -r rid rtype rstate locator_b64 identity_b64 label_b64 last_err timestamp; do
@@ -1927,22 +1917,25 @@ _ledger_update_resource() {
       fi
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$rid" "$rtype" "$new_state" "$locator_b64" "$identity_b64" "$label_b64" "$last_err" "$(date -Iseconds)" \
-        >> "$tmp"
+        >>"$tmp"
     else
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$rid" "$rtype" "$rstate" "$locator_b64" "$identity_b64" "$label_b64" "$last_err" "$timestamp" \
-        >> "$tmp"
+        >>"$tmp"
     fi
-  done < "$_LEDGER_RUN_DIR/resources"
+  done <"$_LEDGER_RUN_DIR/resources"
 
-  if (( ! found )); then
+  if ((!found)); then
     warn "_ledger_update_resource: resource $res_id not found"
     rm -f "$tmp"
     return 1
   fi
 
   sync "$tmp" 2>/dev/null || true
-  mv -- "$tmp" "$_LEDGER_RUN_DIR/resources" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -- "$tmp" "$_LEDGER_RUN_DIR/resources" 2>/dev/null || {
+    rm -f "$tmp"
+    return 1
+  }
   sync "$_LEDGER_RUN_DIR" 2>/dev/null || true
   return 0
 }
@@ -1971,19 +1964,22 @@ _ledger_update_manifest_in() {
 
   while IFS=$'\t' read -r k v; do
     if [[ "$k" == "$key" ]]; then
-      printf '%s\t%s\n' "$key" "$value" >> "$tmp"
+      printf '%s\t%s\n' "$key" "$value" >>"$tmp"
       found=1
     else
-      printf '%s\t%s\n' "$k" "$v" >> "$tmp"
+      printf '%s\t%s\n' "$k" "$v" >>"$tmp"
     fi
-  done < "$filepath"
+  done <"$filepath"
 
-  if (( ! found )); then
-    printf '%s\t%s\n' "$key" "$value" >> "$tmp"
+  if ((!found)); then
+    printf '%s\t%s\n' "$key" "$value" >>"$tmp"
   fi
 
   sync "$tmp" 2>/dev/null || true
-  mv -- "$tmp" "$filepath" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -- "$tmp" "$filepath" 2>/dev/null || {
+    rm -f "$tmp"
+    return 1
+  }
   sync "$(dirname "$filepath")" 2>/dev/null || true
   return 0
 }
@@ -2064,17 +2060,17 @@ cleanup_ledger_begin() {
   return 0
 }
 
-# cleanup_ledger_prepare RESOURCE_ID TYPE LOCATOR [EXPECTED_IDENTITY] [LABEL]
+# _cleanup_ledger_prepare RESOURCE_ID TYPE LOCATOR [EXPECTED_IDENTITY] [LABEL]
 #   Persist a PREPARED record before resource creation.
-cleanup_ledger_prepare() {
-  local res_id="${1:?cleanup_ledger_prepare: missing resource id}"
-  local res_type="${2:?cleanup_ledger_prepare: missing type (mount|loop)}"
-  local locator="${3:?cleanup_ledger_prepare: missing locator}"
+_cleanup_ledger_prepare() {
+  local res_id="${1:?_cleanup_ledger_prepare: missing resource id}"
+  local res_type="${2:?_cleanup_ledger_prepare: missing type (mount|loop)}"
+  local locator="${3:?_cleanup_ledger_prepare: missing locator}"
   local expected_id="${4:-}"
   local label="${5:-}"
 
   [[ -n "$_LEDGER_RUN_DIR" ]] || {
-    warn "cleanup_ledger_prepare: no active ledger"
+    warn "_cleanup_ledger_prepare: no active ledger"
     return 1
   }
 
@@ -2090,18 +2086,18 @@ cleanup_ledger_prepare() {
     "$(date -Iseconds)")"
 
   if ! _ledger_append_resource "$entry"; then
-    warn "cleanup_ledger_prepare: failed to persist PREPARED record for $res_id"
+    warn "_cleanup_ledger_prepare: failed to persist PREPARED record for $res_id"
     return 1
   fi
 
-  debug "cleanup_ledger_prepare: persisted PREPARED $res_type $res_id"
+  debug "_cleanup_ledger_prepare: persisted PREPARED $res_type $res_id"
   return 0
 }
 
-# cleanup_ledger_activate RESOURCE_ID [ACTUAL_IDENTITY]
+# _cleanup_ledger_activate RESOURCE_ID [ACTUAL_IDENTITY]
 #   Transition a resource from PREPARED to ACTIVE after successful creation.
-cleanup_ledger_activate() {
-  local res_id="${1:?cleanup_ledger_activate: missing resource id}"
+_cleanup_ledger_activate() {
+  local res_id="${1:?_cleanup_ledger_activate: missing resource id}"
   local actual_id="${2:-}"
 
   [[ -n "$_LEDGER_RUN_DIR" ]] || return 1
@@ -2109,27 +2105,27 @@ cleanup_ledger_activate() {
   _ledger_update_resource "$res_id" "$_LEDGER_RES_ACTIVE" "$actual_id"
 }
 
-# cleanup_ledger_mark_releasing RESOURCE_ID
-cleanup_ledger_mark_releasing() {
-  local res_id="${1:?cleanup_ledger_mark_releasing: missing resource id}"
+# _cleanup_ledger_mark_releasing RESOURCE_ID
+_cleanup_ledger_mark_releasing() {
+  local res_id="${1:?_cleanup_ledger_mark_releasing: missing resource id}"
 
   [[ -n "$_LEDGER_RUN_DIR" ]] || return 1
 
   _ledger_update_resource "$res_id" "$_LEDGER_RES_RELEASING" ""
 }
 
-# cleanup_ledger_mark_released RESOURCE_ID
-cleanup_ledger_mark_released() {
-  local res_id="${1:?cleanup_ledger_mark_released: missing resource id}"
+# _cleanup_ledger_mark_released RESOURCE_ID
+_cleanup_ledger_mark_released() {
+  local res_id="${1:?_cleanup_ledger_mark_released: missing resource id}"
 
   [[ -n "$_LEDGER_RUN_DIR" ]] || return 1
 
   _ledger_update_resource "$res_id" "$_LEDGER_RES_RELEASED" ""
 }
 
-# cleanup_ledger_finish
+# _cleanup_ledger_finish
 #   Mark the current run as CLEAN and release the lock.
-cleanup_ledger_finish() {
+_cleanup_ledger_finish() {
   [[ -n "$_LEDGER_RUN_DIR" ]] || return 0
 
   # Update manifest state
@@ -2140,7 +2136,7 @@ cleanup_ledger_finish() {
     eval "exec ${_LEDGER_LOCK_FD}>&-" 2>/dev/null || true
   fi
 
-  debug "cleanup_ledger_finish: run $_LEDGER_RUN_ID marked CLEAN"
+  debug "_cleanup_ledger_finish: run $_LEDGER_RUN_ID marked CLEAN"
   _LEDGER_RUN_DIR=""
   _LEDGER_RUN_ID=""
   _LEDGER_LOCK_FD=""
@@ -2165,8 +2161,7 @@ cleanup_recover() {
     return 1
   }
 
-  local run_state boot_id workspace_path
-  run_state="$(grep -m1 '^run_state' "$manifest" | cut -f2)" || run_state=""
+  local boot_id workspace_path
   boot_id="$(grep -m1 '^boot_id' "$manifest" | cut -f2)" || boot_id=""
   workspace_path="$(grep -m1 '^workspace_path' "$manifest" | cut -f2)" || workspace_path=""
 
@@ -2207,14 +2202,13 @@ cleanup_recover() {
   fi
 
   # Get current mount and loop inventories
-  local current_mounts current_loops
+  local current_mounts
   current_mounts="$(_cleanup_read_mount_inventory 2>/dev/null)" || current_mounts=""
-  current_loops="$(losetup -a 2>/dev/null)" || current_loops=""
 
   local released=0 preserved=0
 
   # Process each resource record
-  while IFS=$'\t' read -r res_id res_type res_state locator_b64 identity_b64 label_b64 last_err timestamp; do
+  while IFS=$'\t' read -r res_id res_type _res_state locator_b64 identity_b64 _label_b64 _last_err _timestamp; do
     [[ -n "$res_id" ]] || continue
 
     local locator
@@ -2225,7 +2219,7 @@ cleanup_recover() {
     case "$res_type" in
       mount)
         # Check if mount still exists
-        if [[ -n "$locator" ]] && grep -qxF -- "$locator" <<< "$current_mounts" 2>/dev/null; then
+        if [[ -n "$locator" ]] && grep -qxF -- "$locator" <<<"$current_mounts" 2>/dev/null; then
           # Mount exists — check identity if same boot
           if [[ "$boot_id" == "$current_boot_id" && -n "$expected_id" ]]; then
             local current_id
@@ -2281,12 +2275,12 @@ cleanup_recover() {
         fi
         ;;
     esac
-  done < "$resources_file"
+  done <"$resources_file"
 
   # Report result
   log "cleanup_recover: released=$released preserved=$preserved"
 
-  if (( preserved > 0 )); then
+  if ((preserved > 0)); then
     warn "cleanup_recover: $preserved resource(s) could not be released — ledger retained"
     _ledger_update_manifest_in "$manifest" "run_state" "$_LEDGER_STATE_BLOCKED"
     return 1

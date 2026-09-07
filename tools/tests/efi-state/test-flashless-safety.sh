@@ -56,7 +56,7 @@ trap test_harness_cleanup EXIT
 # target is slot B (standby), so slot A (current/active) must not be
 # modified by the apply operation.
 # ============================================================================
-test_f02_active_slot_isolation() {
+_test_f02_active_slot_isolation() {
   flashless_scenario_setup || exit 1
 
   # Snapshot A-slot state (pre-apply snapshot is already taken by setup)
@@ -133,7 +133,7 @@ test_f02_active_slot_isolation() {
 # a previous failed apply, the mechanism must handle it explicitly
 # (backup, then overwrite with new staging state).
 # ============================================================================
-test_f07_existing_b_bootconf_handled() {
+_test_f07_existing_b_bootconf_handled() {
   flashless_scenario_setup || exit 1
 
   # Verify B.conf exists from fixture setup
@@ -234,7 +234,7 @@ test_f07_existing_b_bootconf_handled() {
 # EFI partition has an invalid filesystem, the mechanism must only
 # format the target slot's EFI partition (efi-B), not efi-A or esp.
 # ============================================================================
-test_f09_formatting_fallback_constrained() {
+_test_f09_formatting_fallback_constrained() {
   flashless_scenario_setup || exit 1
 
   # Snapshot A-slot EFI state before formatting
@@ -353,7 +353,7 @@ test_f09_formatting_fallback_constrained() {
 # the mechanism must NOT activate B — it must leave A as the active slot
 # and keep B in an invalid state.
 # ============================================================================
-test_f11_validation_failure_blocks_activation() {
+_test_f11_validation_failure_blocks_activation() {
   flashless_scenario_setup || exit 1
 
   # Snapshot A-slot state before any operations
@@ -489,7 +489,7 @@ test_f11_validation_failure_blocks_activation() {
 # restored to its original state after the write phase completes,
 # regardless of whether the apply succeeded or failed.
 # ============================================================================
-test_f13_btrfs_property_restored() {
+_test_f13_btrfs_property_restored() {
   flashless_scenario_setup || exit 1
 
   # Verify initial btrfs ro state (should be ro=1)
@@ -600,7 +600,7 @@ test_f13_btrfs_property_restored() {
 # either restore the previous B slot state or leave B in an invalid
 # (unbootable) state to prevent booting a partially applied image.
 # ============================================================================
-test_f15_runtime_failure_preserves_rollback() {
+_test_f15_runtime_failure_preserves_rollback() {
   flashless_scenario_setup || exit 1
 
   # Apply flashless state (establish a valid post-apply baseline)
@@ -745,42 +745,42 @@ test_f15_runtime_failure_preserves_rollback() {
 
 # F-02
 test_harness_begin_test "F-02: Active-slot isolation"
-(test_f02_active_slot_isolation) || true
+(_test_f02_active_slot_isolation) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-07
 test_harness_begin_test "F-07: Existing B bootconf handled explicitly"
-(test_f07_existing_b_bootconf_handled) || true
+(_test_f07_existing_b_bootconf_handled) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-09
 test_harness_begin_test "F-09: Formatting fallback constrained"
-(test_f09_formatting_fallback_constrained) || true
+(_test_f09_formatting_fallback_constrained) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-11
 test_harness_begin_test "F-11: Validation failure blocks activation"
-(test_f11_validation_failure_blocks_activation) || true
+(_test_f11_validation_failure_blocks_activation) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-13
 test_harness_begin_test "F-13: Btrfs property restored"
-(test_f13_btrfs_property_restored) || true
+(_test_f13_btrfs_property_restored) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-15
 test_harness_begin_test "F-15: Runtime failure preserves rollback"
-(test_f15_runtime_failure_preserves_rollback) || true
+(_test_f15_runtime_failure_preserves_rollback) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi

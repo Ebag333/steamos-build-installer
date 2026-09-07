@@ -113,7 +113,7 @@ _apply_resize_bar() {
     if ! add_kernel_param "nvidia.NVreg_EnableResizableBar=1"; then
       return 1
     fi
-    _persist_kernel_param_live "nvidia.NVreg_EnableResizableBar=1"
+    persist_kernel_param_live "nvidia.NVreg_EnableResizableBar=1"
     return 0
   else
     warn "add_kernel_param not available — grub.sh may not be sourced"

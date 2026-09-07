@@ -22,7 +22,7 @@ fi
 # Query the FS_TREE ROOT_ITEM flags from a Btrfs partition.
 # Args: $1 = block device
 # Prints the flags line; callers check for "(RDONLY)".
-query_btrfs_root_item() {
+_query_btrfs_root_item() {
   btrfs inspect-internal dump-tree -t root "${1:?}" 2>/dev/null \
     | awk '
       /key \(FS_TREE ROOT_ITEM 0\)/ { found=1 }
@@ -33,8 +33,8 @@ query_btrfs_root_item() {
 # Collect blkid identity for a block device into globals.
 # Args: $1 = block device
 # Sets: PIDENT_UUID, PIDENT_UUID_SUB, PIDENT_LABEL, PIDENT_PARTUUID
-collect_partition_identity() {
-  local dev="${1:?collect_partition_identity: missing device}"
+_collect_partition_identity() {
+  local dev="${1:?_collect_partition_identity: missing device}"
   # shellcheck disable=SC2034
   PIDENT_UUID="$(blkid -s UUID -o value "$dev")"
   # shellcheck disable=SC2034
@@ -49,7 +49,7 @@ collect_partition_identity() {
 # Args: $1 = partition number, $2 = disk device
 # Sets: SGDINFO_START (first sector), SGDINFO_SIZE (sectors),
 #        SGDINFO_TYPE_GUID, SGDINFO_PARTUUID, SGDINFO_NAME
-sgdisk_partition_info() {
+_sgdisk_partition_info() {
   local pnum="${1:?}" disk="${2:?}"
   local raw
   raw="$(sgdisk -i "$pnum" "$disk" 2>/dev/null)"
@@ -68,8 +68,8 @@ sgdisk_partition_info() {
 # Extract UUID, Parent UUID, and Received UUID from a mounted Btrfs subvolume.
 # Args: $1 = mountpoint
 # Sets: SUBVOL_UUID, SUBVOL_PARENT_UUID, SUBVOL_RECEIVED_UUID (or "-" if empty)
-collect_subvolume_uuids() {
-  local mnt="${1:?collect_subvolume_uuids: missing mountpoint}" show
+_collect_subvolume_uuids() {
+  local mnt="${1:?_collect_subvolume_uuids: missing mountpoint}" show
   show="$(btrfs subvolume show "$mnt" 2>/dev/null || true)"
   SUBVOL_UUID="$(
     printf '%s\n' "$show" | sed -n 's/^[[:space:]]*UUID:[[:space:]]*//p' | head -n1
@@ -87,7 +87,7 @@ collect_subvolume_uuids() {
 
 # Print the raw Btrfs device size for a mounted filesystem.
 # Args: $1 = mountpoint
-get_btrfs_device_size() {
+_get_btrfs_device_size() {
   btrfs filesystem show --raw "$1" 2>/dev/null \
     | awk '
       $1 == "devid" {
@@ -102,8 +102,8 @@ get_btrfs_device_size() {
 # repair image and the reconstructed rootfs.  Diagnostics are intentionally
 # non-fatal: failure to query one property must not abort the build.
 # Args: $1 = mounted Btrfs root path, $2 = human-readable label
-log_rootfs_btrfs_diagnostics() {
-  local root="${1:?log_rootfs_btrfs_diagnostics: missing root}"
+_log_rootfs_btrfs_diagnostics() {
+  local root="${1:?_log_rootfs_btrfs_diagnostics: missing root}"
   local label="${2:-rootfs}"
 
   debug_cmd findmnt -T "$root" -o TARGET,SOURCE,FSTYPE,OPTIONS \
@@ -132,8 +132,8 @@ log_rootfs_btrfs_diagnostics() {
 #
 # Args: $1 = path to the current (old) rootfs mount (e.g. $srcmnt)
 # Sets: ETC_SNAPSHOT_VALID=1 if a snapshot was taken
-snapshot_runtime_etc() {
-  local src_root="${1:?snapshot_runtime_etc: missing source root}"
+_snapshot_runtime_etc() {
+  local src_root="${1:?_snapshot_runtime_etc: missing source root}"
 
   ETC_SNAPSHOT_VALID=0
   ETC_SNAPSHOT="$WORKDIR/etc-effective"
@@ -144,8 +144,8 @@ snapshot_runtime_etc() {
   mkdir -p "$ETC_SNAPSHOT" "$ETC_VAR_MNT" "$ETC_MERGED"
 
   # Defensive: clean stale mounts from a prior interrupted run.
-  ensure_unmounted "$ETC_MERGED" "stale /etc overlay"
-  ensure_unmounted "$ETC_VAR_MNT" "stale var mount"
+  strict_unmount "$ETC_MERGED" "stale /etc overlay"
+  strict_unmount "$ETC_VAR_MNT" "stale var mount"
 
   [[ -n "${VARPART:-}" && -b "$VARPART" ]] || {
     warn "No var partition; cannot snapshot runtime /etc overlay"
@@ -153,7 +153,7 @@ snapshot_runtime_etc() {
   }
 
   log "Mounting $VARPART to inspect the existing runtime /etc overlay"
-  mount -o rw "$VARPART" "$ETC_VAR_MNT" \
+  cleanup_mount "$ETC_VAR_MNT" "var partition for /etc overlay check" -- -o rw "$VARPART" \
     || die "Failed to mount SteamOS var partition"
 
   local ovl="$ETC_VAR_MNT/lib/overlays/etc"
@@ -169,6 +169,7 @@ snapshot_runtime_etc() {
     log "No existing runtime /etc overlay to preserve; using lower-only /etc"
     strict_unmount "$ETC_VAR_MNT" "var after /etc overlay check" \
       || die "Failed to unmount var after /etc overlay check"
+    cleanup_release "$ETC_VAR_MNT" || true
     return 0
   fi
 
@@ -178,6 +179,7 @@ snapshot_runtime_etc() {
     [[ -d "$work" ]] && work_state="present"
     strict_unmount "$ETC_VAR_MNT" "var after incomplete /etc overlay check" \
       || die "Failed to unmount var after incomplete /etc overlay check"
+    cleanup_release "$ETC_VAR_MNT" || true
     die "Incomplete SteamOS /etc overlay state (upper=$upper_state, work=$work_state)"
   fi
 
@@ -192,10 +194,10 @@ snapshot_runtime_etc() {
 
   log "Snapshotting effective runtime /etc"
 
-  if ! mount -t overlay overlay \
-    -o "lowerdir=$src_root/etc,upperdir=$upper,workdir=$work" \
-    "$ETC_MERGED"; then
+  if ! cleanup_mount "$ETC_MERGED" "original /etc overlay" -- -t overlay overlay \
+    -o "lowerdir=$src_root/etc,upperdir=$upper,workdir=$work"; then
     strict_unmount "$ETC_VAR_MNT" "var after failed /etc overlay mount" || true
+    cleanup_release "$ETC_VAR_MNT" || true
     die "Failed to mount original /etc overlay"
   fi
 
@@ -212,9 +214,11 @@ snapshot_runtime_etc() {
 
   strict_unmount "$ETC_MERGED" "original /etc overlay" \
     || die "Failed to unmount original /etc overlay"
+  cleanup_release "$ETC_MERGED" || true
 
   strict_unmount "$ETC_VAR_MNT" "var after /etc snapshot" \
     || die "Failed to unmount var after /etc snapshot"
+  cleanup_release "$ETC_VAR_MNT" || true
 
   ETC_SNAPSHOT_VALID=1
 }
@@ -222,7 +226,7 @@ snapshot_runtime_etc() {
 # Rebuild the /etc overlay against the NEW rootfs.
 # The old upper/work metadata refers to the old Btrfs inode/file handles,
 # so recreate the overlay and replay the effective /etc through OverlayFS.
-restore_runtime_etc() {
+_restore_runtime_etc() {
   [[ "${ETC_SNAPSHOT_VALID:-0}" == 1 ]] || {
     log "No runtime /etc snapshot to restore"
     return 0
@@ -238,15 +242,16 @@ restore_runtime_etc() {
   mkdir -p "$rootmnt" "$varmnt" "$merged"
 
   # Defensive: clean stale mounts from a prior interrupted run.
-  ensure_unmounted "$merged" "stale rebuilt /etc overlay"
-  ensure_unmounted "$rootmnt" "stale rootfs mount"
-  ensure_unmounted "$varmnt" "stale var mount"
+  strict_unmount "$merged" "stale rebuilt /etc overlay"
+  strict_unmount "$rootmnt" "stale rootfs mount"
+  strict_unmount "$varmnt" "stale var mount"
 
-  mount -o ro "$ROOTPART" "$rootmnt" \
+  cleanup_mount "$rootmnt" "rebuilt rootfs for /etc restore" -- -o ro "$ROOTPART" \
     || die "Failed to mount rebuilt rootfs"
 
-  if ! mount -o rw "$VARPART" "$varmnt"; then
+  if ! cleanup_mount "$varmnt" "var for /etc restore" -- -o rw "$VARPART"; then
     strict_unmount "$rootmnt" "rebuilt rootfs after failed var mount" || true
+    cleanup_release "$rootmnt" || true
     die "Failed to mount SteamOS var partition"
   fi
 
@@ -272,9 +277,8 @@ restore_runtime_etc() {
     || die "Failed to remove stale runtime /etc upper/work state"
   mkdir -p "$upper" "$work"
 
-  if ! mount -t overlay overlay \
-    -o "lowerdir=$rootmnt/etc,upperdir=$upper,workdir=$work" \
-    "$merged"; then
+  if ! cleanup_mount "$merged" "rebuilt /etc overlay" -- -t overlay overlay \
+    -o "lowerdir=$rootmnt/etc,upperdir=$upper,workdir=$work"; then
     strict_unmount "$varmnt" "var after failed rebuilt /etc overlay mount" || true
     strict_unmount "$rootmnt" "rebuilt rootfs after failed /etc overlay mount" || true
     die "Failed to mount fresh /etc overlay"
@@ -298,6 +302,7 @@ restore_runtime_etc() {
 
   strict_unmount "$merged" "rebuilt /etc overlay" \
     || die "Failed to unmount rebuilt /etc overlay"
+  cleanup_release "$merged" || true
 
   strict_unmount "$varmnt" "var after rebuilt /etc overlay" \
     || die "Failed to unmount var"
@@ -315,11 +320,11 @@ restore_runtime_etc() {
 # Legacy/fallback method: rebuild the SteamOS rootfs as a new writable Btrfs
 # filesystem using mkfs.btrfs --rootdir.  This remains available for A/B
 # testing against the native in-place method below.
-prepare_writable_rootfs_rebuild() {
+_prepare_writable_rootfs_rebuild() {
   local root_item root_bytes root_uuid root_dev_uuid root_label
   local srcmnt root_tmp new_bytes
 
-  root_item="$(query_btrfs_root_item "$ROOTPART")"
+  root_item="$(_query_btrfs_root_item "$ROOTPART")"
 
   log "Detected FS_TREE root item: ${root_item:-<not found>}"
 
@@ -338,11 +343,11 @@ prepare_writable_rootfs_rebuild() {
   root_tmp="$WORKDIR/rootfs-writable.img"
 
   mkdir -p "$srcmnt"
-  ensure_unmounted "$srcmnt" "stale rootfs source mount"
+  strict_unmount "$srcmnt" "stale rootfs source mount"
   rm -f "$root_tmp"
 
   root_bytes="$(blockdev --getsize64 "$ROOTPART")"
-  collect_partition_identity "$ROOTPART"
+  _collect_partition_identity "$ROOTPART"
   local root_uuid="$PIDENT_UUID"
   local root_dev_uuid="$PIDENT_UUID_SUB"
   local root_label="$PIDENT_LABEL"
@@ -354,17 +359,17 @@ prepare_writable_rootfs_rebuild() {
   log "  Label: ${root_label:-<none>}"
 
   # Source stays completely untouched.
-  mount -o ro "$ROOTPART" "$srcmnt" \
+  cleanup_mount "$srcmnt" "original rootfs read-only source" -- -o ro "$ROOTPART" \
     || die "Failed to mount original rootfs read-only"
 
-  log_rootfs_btrfs_diagnostics "$srcmnt" "Original rootfs"
+  _log_rootfs_btrfs_diagnostics "$srcmnt" "Original rootfs"
 
   log "Original rootfs disk usage:"
   debug_cmd du -sh "$srcmnt" >&2 || true
   debug_cmd du -sh --apparent-size "$srcmnt" >&2 || true
 
   # Snapshot the effective /etc BEFORE mkfs destroys the old lower filesystem.
-  snapshot_runtime_etc "$srcmnt"
+  _snapshot_runtime_etc "$srcmnt"
 
   truncate -s "$root_bytes" "$root_tmp"
 
@@ -396,6 +401,7 @@ prepare_writable_rootfs_rebuild() {
   # Never expose it to Btrfs while the original filesystem is mounted.
   strict_unmount "$srcmnt" "original rootfs source" \
     || die "Failed to unmount original rootfs source"
+  cleanup_release "$srcmnt" || true
 
   # mkfs.btrfs --rootdir copies any hidden /var/lib/overlays state contained
   # in rootfs-A.  When a separate SteamOS var partition exists, runtime state
@@ -405,12 +411,13 @@ prepare_writable_rootfs_rebuild() {
     log "Clearing hidden rootfs-internal overlay state from rebuilt filesystem"
     local ovl_tmp="$WORKDIR/ovl-clean-mnt"
     mkdir -p "$ovl_tmp"
-    ensure_unmounted "$ovl_tmp" "stale rebuilt-root overlay cleanup mount"
-    mount -o loop "$root_tmp" "$ovl_tmp" \
+    strict_unmount "$ovl_tmp" "stale rebuilt-root overlay cleanup mount"
+    cleanup_mount "$ovl_tmp" "rebuilt-root overlay cleanup mount" -- -o loop "$root_tmp" \
       || die "Failed to mount rebuilt rootfs for overlay cleanup"
     clean_overlay_state "$ovl_tmp"
     strict_unmount "$ovl_tmp" "rebuilt rootfs overlay cleanup" \
       || die "Failed to unmount rebuilt rootfs after overlay cleanup"
+    cleanup_release "$ovl_tmp" || true
     rmdir "$ovl_tmp" 2>/dev/null || true
   else
     warn "No verified var partition; preserving any rootfs-internal /var/lib/overlays state"
@@ -438,8 +445,8 @@ prepare_writable_rootfs_rebuild() {
     log "Expanding rebuilt rootfs to fill partition (${new_bytes} → ${root_bytes} bytes)"
     local resize_mnt="$WORKDIR/rootfs-resize"
     mkdir -p "$resize_mnt"
-    ensure_unmounted "$resize_mnt" "stale rootfs resize mount"
-    mount -o compress-force=zstd:3 "$ROOTPART" "$resize_mnt" \
+    strict_unmount "$resize_mnt" "stale rootfs resize mount"
+    cleanup_mount "$resize_mnt" "rebuilt rootfs resize mount" -- -o compress-force=zstd:3 "$ROOTPART" \
       || die "Failed to mount rebuilt rootfs for resize"
     if ! btrfs filesystem resize max "$resize_mnt"; then
       strict_unmount "$resize_mnt" "rebuilt rootfs after failed resize" || true
@@ -447,6 +454,7 @@ prepare_writable_rootfs_rebuild() {
     fi
     strict_unmount "$resize_mnt" "rebuilt rootfs resize mount" \
       || die "Failed to unmount rebuilt rootfs after resize"
+    cleanup_release "$resize_mnt" || true
     rmdir "$resize_mnt" 2>/dev/null || true
   fi
 
@@ -454,10 +462,10 @@ prepare_writable_rootfs_rebuild() {
   # stored on SteamOS's separate /var partition.  Snapshot the effective /etc
   # before the rebuild and replay it through a fresh overlay afterward, so
   # configuration is preserved without carrying stale OverlayFS metadata.
-  restore_runtime_etc
+  _restore_runtime_etc
 
   # Offline verification before proceeding.
-  root_item="$(query_btrfs_root_item "$ROOTPART")"
+  root_item="$(_query_btrfs_root_item "$ROOTPART")"
 
   log "Rebuilt FS_TREE: ${root_item:-<not found>}"
 
@@ -466,11 +474,12 @@ prepare_writable_rootfs_rebuild() {
 
   local diag_mnt="$WORKDIR/rootfs-post-rebuild-diag"
   mkdir -p "$diag_mnt"
-  ensure_unmounted "$diag_mnt" "stale post-rebuild diagnostic mount"
-  if mount -o ro "$ROOTPART" "$diag_mnt"; then
-    log_rootfs_btrfs_diagnostics "$diag_mnt" "Rebuilt rootfs"
+  strict_unmount "$diag_mnt" "stale post-rebuild diagnostic mount"
+  if cleanup_mount "$diag_mnt" "post-rebuild diagnostic rootfs" -- -o ro "$ROOTPART"; then
+    _log_rootfs_btrfs_diagnostics "$diag_mnt" "Rebuilt rootfs"
     strict_unmount "$diag_mnt" "post-rebuild diagnostic rootfs" \
       || die "Failed to unmount post-rebuild diagnostic rootfs"
+    cleanup_release "$diag_mnt" || true
   else
     warn "Could not mount rebuilt rootfs for post-rebuild diagnostics"
   fi
@@ -495,16 +504,16 @@ prepare_writable_rootfs_rebuild() {
 # identity change in this method.
 #
 # Args: none
-prepare_writable_rootfs_native() {
+_prepare_writable_rootfs_native() {
   local root_item mnt rootid
   local ro_before ro_after
   local default_before default_after etc_stat_before etc_stat_after
   local write_test
 
   [[ -n "${ROOTPART:-}" && -b "$ROOTPART" ]] \
-    || die "prepare_writable_rootfs_native: ROOTPART is not a block device"
+    || die "_prepare_writable_rootfs_native: ROOTPART is not a block device"
 
-  root_item="$(query_btrfs_root_item "$ROOTPART")"
+  root_item="$(_query_btrfs_root_item "$ROOTPART")"
 
   log "Native writable-rootfs method selected"
   log "Detected FS_TREE root item: ${root_item:-<not found>}"
@@ -522,9 +531,9 @@ prepare_writable_rootfs_native() {
   mnt="$WORKDIR/rootfs-native-rw"
   mkdir -p "$mnt"
 
-  ensure_unmounted "$mnt" "stale native rootfs mount"
+  strict_unmount "$mnt" "stale native rootfs mount"
 
-  collect_partition_identity "$ROOTPART"
+  _collect_partition_identity "$ROOTPART"
   local root_uuid="$PIDENT_UUID"
   local root_dev_uuid="$PIDENT_UUID_SUB"
   local root_label="$PIDENT_LABEL"
@@ -548,7 +557,7 @@ prepare_writable_rootfs_native() {
   # A read-only subvolume can still live on a filesystem mounted rw.  The
   # subvolume ro property is what rejects writes, so mount the top-level tree
   # explicitly and change that property through Btrfs itself.
-  mount -o rw,subvolid=5 "$ROOTPART" "$mnt" \
+  cleanup_mount "$mnt" "native rootfs conversion mount" -- -o rw,subvolid=5 "$ROOTPART" \
     || die "Failed to mount top-level rootfs subvolume for native conversion"
 
   rootid="$(btrfs inspect-internal rootid "$mnt" 2>/dev/null || true)"
@@ -558,7 +567,7 @@ prepare_writable_rootfs_native() {
     die "Native rootfs conversion mounted rootid ${rootid:-unknown}, expected 5"
   fi
 
-  log_rootfs_btrfs_diagnostics "$mnt" "Original rootfs (native method)"
+  _log_rootfs_btrfs_diagnostics "$mnt" "Original rootfs (native method)"
 
   if ! ro_before="$(btrfs property get -ts "$mnt" ro 2>&1)"; then
     strict_unmount "$mnt" "native rootfs after failed ro-property query" || true
@@ -566,7 +575,7 @@ prepare_writable_rootfs_native() {
   fi
   log "Native rootfs property before conversion: $ro_before"
 
-  collect_subvolume_uuids "$mnt"
+  _collect_subvolume_uuids "$mnt"
   local subvol_uuid_before="$SUBVOL_UUID"
   local parent_uuid_before="$SUBVOL_PARENT_UUID"
   local received_before="$SUBVOL_RECEIVED_UUID"
@@ -634,7 +643,7 @@ prepare_writable_rootfs_native() {
 
   sync -f "$mnt" 2>/dev/null || sync
 
-  collect_subvolume_uuids "$mnt"
+  _collect_subvolume_uuids "$mnt"
   local subvol_uuid_after="$SUBVOL_UUID"
   local parent_uuid_after="$SUBVOL_PARENT_UUID"
   local received_after="$SUBVOL_RECEIVED_UUID"
@@ -679,10 +688,11 @@ prepare_writable_rootfs_native() {
     warn "  after:  $etc_stat_after"
   fi
 
-  log_rootfs_btrfs_diagnostics "$mnt" "Writable rootfs (native method)"
+  _log_rootfs_btrfs_diagnostics "$mnt" "Writable rootfs (native method)"
 
   strict_unmount "$mnt" "native writable rootfs" \
     || die "Failed to unmount rootfs after native conversion"
+  cleanup_release "$mnt" || true
   rmdir "$mnt" 2>/dev/null || true
 
   udevadm settle
@@ -690,7 +700,7 @@ prepare_writable_rootfs_native() {
   # Verify the on-disk root item after the transaction has been committed and
   # the filesystem is unmounted.  This directly checks the condition that made
   # the stock image unwritable in the first place.
-  root_item="$(query_btrfs_root_item "$ROOTPART")"
+  root_item="$(_query_btrfs_root_item "$ROOTPART")"
   log "Native post-conversion FS_TREE: ${root_item:-<not found>}"
 
   if [[ -z "$root_item" ]]; then
@@ -700,7 +710,7 @@ prepare_writable_rootfs_native() {
     || die "Native conversion completed but FS_TREE is still RDONLY"
 
   # The native method should preserve the filesystem's block-level identity.
-  collect_partition_identity "$ROOTPART"
+  _collect_partition_identity "$ROOTPART"
   local after_uuid="$PIDENT_UUID"
   local after_dev_uuid="$PIDENT_UUID_SUB"
   local after_label="$PIDENT_LABEL"
@@ -745,13 +755,13 @@ prepare_writable_rootfs_native() {
 #
 # Args: $1 = requested rootfs size in MiB
 # Sets: ROOTFS_GROWTH_BYTES, PROJECTED_IMAGE_BYTES
-prepare_image_rootfs_size() {
-  local requested_mib="${1:?prepare_image_rootfs_size: missing size}"
+_prepare_image_rootfs_size() {
+  local requested_mib="${1:?_prepare_image_rootfs_size: missing size}"
 
   [[ -n "${LOOPDEV:-}" && -b "${LOOPDEV:-}" ]] \
-    || die "prepare_image_rootfs_size: LOOPDEV is not set or not a block device"
+    || die "_prepare_image_rootfs_size: LOOPDEV is not set or not a block device"
   [[ -n "${ROOTPART:-}" && -b "${ROOTPART:-}" ]] \
-    || die "prepare_image_rootfs_size: ROOTPART is not set or not a block device"
+    || die "_prepare_image_rootfs_size: ROOTPART is not set or not a block device"
   command -v sgdisk >/dev/null 2>&1 \
     || die "sgdisk not found — install gptfdisk"
   command -v sfdisk >/dev/null 2>&1 \
@@ -783,7 +793,7 @@ prepare_image_rootfs_size() {
   for part in "$LOOPDEV"p*; do
     [[ -b "$part" ]] || continue
     local pnum="${part##*p}"
-    sgdisk_partition_info "$pnum" "$LOOPDEV"
+    _sgdisk_partition_info "$pnum" "$LOOPDEV"
     if [[ "$SGDINFO_NAME" == "rootfs-A" ]]; then
       root_partnum="$pnum"
       root_start="$SGDINFO_START"
@@ -830,7 +840,7 @@ prepare_image_rootfs_size() {
     [[ -b "$part" ]] || continue
     local pnum="${part##*p}"
     [[ "$pnum" == "$root_partnum" ]] && continue
-    sgdisk_partition_info "$pnum" "$LOOPDEV"
+    _sgdisk_partition_info "$pnum" "$LOOPDEV"
     local p_start="$SGDINFO_START"
     [[ -n "$p_start" ]] || continue
     if ((p_start > root_end)); then
@@ -914,7 +924,7 @@ prepare_image_rootfs_size() {
     part_hashes_before[$pnum]="$(sha256sum "$pdev" | cut -d' ' -f1)" \
       || die "Failed to hash partition $pnum"
     # GPT identity from sgdisk (kernel-independent).
-    sgdisk_partition_info "$pnum" "$LOOPDEV"
+    _sgdisk_partition_info "$pnum" "$LOOPDEV"
     part_uuids[$pnum]="$SGDINFO_PARTUUID"
     part_labels[$pnum]="$SGDINFO_NAME"
     part_type_guids[$pnum]="$SGDINFO_TYPE_GUID"
@@ -927,8 +937,7 @@ prepare_image_rootfs_size() {
 
   log "Extending image by ${delta_mib} MiB"
   truncate -s "$new_image_bytes" "$OUT"
-  losetup -c "$LOOPDEV" \
-    || die "Failed to refresh loop device after image extension"
+  refresh_loop_size "$LOOPDEV"
 
   sgdisk --move-second-header "$LOOPDEV" \
     || die "Failed to relocate backup GPT after image extension"
@@ -954,7 +963,7 @@ prepare_image_rootfs_size() {
     fi
 
     # Verify GPT geometry first — this is the authoritative on-disk value.
-    sgdisk_partition_info "$pnum" "$LOOPDEV"
+    _sgdisk_partition_info "$pnum" "$LOOPDEV"
     [[ "$SGDINFO_START" == "$new_start" ]] \
       || die "Partition $pnum GPT start mismatch: expected $new_start, got $SGDINFO_START"
 
@@ -975,7 +984,7 @@ prepare_image_rootfs_size() {
     log "    ✓ kernel geometry updated"
 
     # Verify identity — GPT from sgdisk, FS from blkid.
-    sgdisk_partition_info "$pnum" "$LOOPDEV"
+    _sgdisk_partition_info "$pnum" "$LOOPDEV"
     local chk_fs_uuid
     chk_fs_uuid="$(blkid -s UUID -o value "$pdev" 2>/dev/null)" \
       || die "Could not read FS UUID from $pdev after relocation"
@@ -1044,7 +1053,7 @@ prepare_image_rootfs_size() {
     local pdev="${LOOPDEV}p${pnum}"
     local p_lbl="${part_labels[$pnum]:-part$pnum}"
     local chk_partuuid chk_fs_uuid chk_size_sectors
-    sgdisk_partition_info "$pnum" "$LOOPDEV"
+    _sgdisk_partition_info "$pnum" "$LOOPDEV"
     chk_partuuid="$SGDINFO_PARTUUID"
     chk_size_sectors="$SGDINFO_SIZE"
     chk_fs_uuid="$(blkid -s UUID -o value "$pdev" 2>/dev/null || true)"
@@ -1066,7 +1075,7 @@ prepare_image_rootfs_size() {
     sgdisk -p "$LOOPDEV" 2>/dev/null \
       | sed -n 's/^Disk identifier (GUID):[[:space:]]*//p'
   )"
-  sgdisk_partition_info "$root_partnum" "$LOOPDEV"
+  _sgdisk_partition_info "$root_partnum" "$LOOPDEV"
   local final_root_type_guid="$SGDINFO_TYPE_GUID"
   local final_root_partuuid="$SGDINFO_PARTUUID"
   local final_root_label="$SGDINFO_NAME"
@@ -1110,19 +1119,19 @@ prepare_image_rootfs_size() {
 
 # Grow Btrfs rootfs to fill its partition.
 # Called after prepare_writable_rootfs_{native,rebuild} has made the filesystem
-# writable, and after prepare_image_rootfs_size may have enlarged the partition.
-grow_rootfs_filesystem_to_partition() {
+# writable, and after _prepare_image_rootfs_size may have enlarged the partition.
+_grow_rootfs_filesystem_to_partition() {
   local mnt="$WORKDIR/rootfs-grow"
   mkdir -p "$mnt"
 
-  ensure_unmounted "$mnt" "stale rootfs grow mount"
+  strict_unmount "$mnt" "stale rootfs grow mount"
 
-  mount -o rw,subvolid=5 "$ROOTPART" "$mnt" \
+  cleanup_mount "$mnt" "rootfs filesystem expansion" -- -o rw,subvolid=5 "$ROOTPART" \
     || die "Failed to mount rootfs for filesystem expansion"
 
   local partition_bytes before_bytes after_bytes
   partition_bytes="$(blockdev --getsize64 "$ROOTPART")"
-  before_bytes="$(get_btrfs_device_size "$mnt")"
+  before_bytes="$(_get_btrfs_device_size "$mnt")"
 
   log "Rootfs filesystem expansion:"
   log "  Partition: ${partition_bytes} bytes"
@@ -1139,7 +1148,7 @@ grow_rootfs_filesystem_to_partition() {
 
     sync -f "$mnt" 2>/dev/null || sync
 
-    after_bytes="$(get_btrfs_device_size "$mnt")"
+    after_bytes="$(_get_btrfs_device_size "$mnt")"
 
     if [[ ! "$after_bytes" =~ ^[0-9]+$ ]]; then
       strict_unmount "$mnt" "rootfs after unverifiable resize" || true
@@ -1156,6 +1165,7 @@ grow_rootfs_filesystem_to_partition() {
 
   strict_unmount "$mnt" "rootfs after filesystem expansion" \
     || die "Failed to unmount rootfs after filesystem expansion"
+  cleanup_release "$mnt" || true
   rmdir "$mnt" 2>/dev/null || true
 }
 
@@ -1173,22 +1183,22 @@ prepare_writable_rootfs() {
 
   # Grow the rootfs-A partition to ROOTFS_SIZE if requested.
   if [[ -n "${ROOTFS_SIZE:-}" ]] && ((ROOTFS_SIZE > 0)); then
-    prepare_image_rootfs_size "$ROOTFS_SIZE"
+    _prepare_image_rootfs_size "$ROOTFS_SIZE"
   fi
 
   case "$method" in
     native | ideal | inplace | in-place)
       log "Writable rootfs implementation: native/in-place"
-      prepare_writable_rootfs_native
+      _prepare_writable_rootfs_native
       ;;
     rebuild | legacy | mkfs)
       log "Writable rootfs implementation: legacy rebuild"
-      prepare_writable_rootfs_rebuild
+      _prepare_writable_rootfs_rebuild
       ;;
     *)
       die "Unknown ROOTFS_WRITABLE_METHOD '$method' (expected native or rebuild)"
       ;;
   esac
 
-  grow_rootfs_filesystem_to_partition
+  _grow_rootfs_filesystem_to_partition
 }

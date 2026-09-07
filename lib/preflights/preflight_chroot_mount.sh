@@ -126,11 +126,11 @@ _pf_chroot_check_pseudo_fs() {
 # Preflight checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_chroot_mount_rootfs_wired CHROOT_ROOT EXPECTED_ROOTFS_DEVICE
+# _preflight_chroot_mount_rootfs_wired CHROOT_ROOT EXPECTED_ROOTFS_DEVICE
 #   PF-49c: Verify that $CHROOT_ROOT itself is backed by the expected rootfs device.
-preflight_chroot_mount_rootfs_wired() {
-  local chroot_root="${1:?preflight_chroot_mount_rootfs_wired: missing chroot root}"
-  local expected_rootfs="${2:?preflight_chroot_mount_rootfs_wired: missing expected rootfs device}"
+_preflight_chroot_mount_rootfs_wired() {
+  local chroot_root="${1:?_preflight_chroot_mount_rootfs_wired: missing chroot root}"
+  local expected_rootfs="${2:?_preflight_chroot_mount_rootfs_wired: missing expected rootfs device}"
 
   # CHROOT_ROOT must itself be a mountpoint
   if ! mountpoint -q "$chroot_root" 2>/dev/null; then
@@ -168,31 +168,31 @@ preflight_chroot_mount_rootfs_wired() {
   debug "PF-49c: chroot rootfs wiring OK — $canonical_expected ($actual_mm)"
 }
 
-# preflight_chroot_mount_efi_wired CHROOT_ROOT EXPECTED_EFI_DEVICE
+# _preflight_chroot_mount_efi_wired CHROOT_ROOT EXPECTED_EFI_DEVICE
 #   PF-49a: Verify that /efi inside the chroot is backed by the expected EFI device.
 #   Requires: FAT type, read-write, FSROOT=/
-preflight_chroot_mount_efi_wired() {
-  local chroot_root="${1:?preflight_chroot_mount_efi_wired: missing chroot root}"
-  local expected_efi="${2:?preflight_chroot_mount_efi_wired: missing expected EFI device}"
+_preflight_chroot_mount_efi_wired() {
+  local chroot_root="${1:?_preflight_chroot_mount_efi_wired: missing chroot root}"
+  local expected_efi="${2:?_preflight_chroot_mount_efi_wired: missing expected EFI device}"
 
   _pf_chroot_validate_mount "$chroot_root" "/efi" "$expected_efi" "PF-49a" "vfat" "true" "/"
 }
 
-# preflight_chroot_mount_esp_wired CHROOT_ROOT EXPECTED_ESP_DEVICE
+# _preflight_chroot_mount_esp_wired CHROOT_ROOT EXPECTED_ESP_DEVICE
 #   PF-49b: Verify that /esp inside the chroot is backed by the expected ESP device.
 #   Requires: FAT type, read-write, FSROOT=/
 #   If /esp is not mounted, this is a hard fail (ESP was expected).
-preflight_chroot_mount_esp_wired() {
-  local chroot_root="${1:?preflight_chroot_mount_esp_wired: missing chroot root}"
-  local expected_esp="${2:?preflight_chroot_mount_esp_wired: missing expected ESP device}"
+_preflight_chroot_mount_esp_wired() {
+  local chroot_root="${1:?_preflight_chroot_mount_esp_wired: missing chroot root}"
+  local expected_esp="${2:?_preflight_chroot_mount_esp_wired: missing expected ESP device}"
 
   _pf_chroot_validate_mount "$chroot_root" "/esp" "$expected_esp" "PF-49b" "vfat" "true" "/"
 }
 
-# preflight_chroot_mount_pseudo_fs CHROOT_ROOT
+# _preflight_chroot_mount_pseudo_fs CHROOT_ROOT
 #   PF-49d: Verify that required pseudo-filesystems are mounted under the chroot.
-preflight_chroot_mount_pseudo_fs() {
-  local chroot_root="${1:?preflight_chroot_mount_pseudo_fs: missing chroot root}"
+_preflight_chroot_mount_pseudo_fs() {
+  local chroot_root="${1:?_preflight_chroot_mount_pseudo_fs: missing chroot root}"
 
   _pf_chroot_check_pseudo_fs "$chroot_root" "/proc" "proc"
   _pf_chroot_check_pseudo_fs "$chroot_root" "/sys" "sysfs"
@@ -231,17 +231,17 @@ preflight_chroot_mount_validate() {
   debug "preflight_chroot_mount_validate: validating chroot mounts (root=$chroot_root rootfs=$expected_rootfs efi=$expected_efi esp=${expected_esp:-<none>})"
 
   # PF-49c: rootfs wiring check (required).
-  preflight_chroot_mount_rootfs_wired "$chroot_root" "$expected_rootfs"
+  _preflight_chroot_mount_rootfs_wired "$chroot_root" "$expected_rootfs"
 
   # PF-49a: /efi wiring check (required).
-  preflight_chroot_mount_efi_wired "$chroot_root" "$expected_efi"
+  _preflight_chroot_mount_efi_wired "$chroot_root" "$expected_efi"
 
   # Track EFI major:minor for separation check
   local efi_mm="$_PF_MOUNT_ACTUAL_MM"
 
   # PF-49b: /esp wiring check (optional, skipped if not provided).
   if [[ -n "$expected_esp" ]]; then
-    preflight_chroot_mount_esp_wired "$chroot_root" "$expected_esp"
+    _preflight_chroot_mount_esp_wired "$chroot_root" "$expected_esp"
 
     # PF-50: EFI and ESP must be different devices
     local esp_mm="$_PF_MOUNT_ACTUAL_MM"
@@ -254,7 +254,7 @@ preflight_chroot_mount_validate() {
   fi
 
   # PF-49d: pseudo-filesystem checks
-  preflight_chroot_mount_pseudo_fs "$chroot_root"
+  _preflight_chroot_mount_pseudo_fs "$chroot_root"
 
   debug "preflight_chroot_mount_validate: all chroot mount checks passed"
 }

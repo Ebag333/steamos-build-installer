@@ -46,7 +46,7 @@ trap test_harness_cleanup EXIT
 # ============================================================================
 # B-11: Application is idempotent
 # ============================================================================
-test_b11_idempotent() {
+_test_b11_idempotent() {
   build_scenario_setup || exit 1
 
   # Apply EFI state once
@@ -158,7 +158,7 @@ test_b11_idempotent() {
 # ============================================================================
 # B-12: Existing state survives failed replacement
 # ============================================================================
-test_b12_failed_replacement() {
+_test_b12_failed_replacement() {
   build_scenario_setup || exit 1
 
   # Apply EFI state once (should succeed)
@@ -271,7 +271,7 @@ test_b12_failed_replacement() {
 # ============================================================================
 # B-13: Host isolation
 # ============================================================================
-test_b13_host_isolation() {
+_test_b13_host_isolation() {
   # Setup build fixture and apply EFI state
   build_scenario_setup || {
     test_harness_fail "B-13: build_scenario_setup failed"
@@ -356,7 +356,7 @@ test_b13_host_isolation() {
 # ============================================================================
 # B-14: Unmanaged EFI files preserved
 # ============================================================================
-test_b14_unmanaged_preserved() {
+_test_b14_unmanaged_preserved() {
   build_scenario_setup || exit 1
 
   # Create sentinel (unmanaged) files that should be preserved
@@ -416,7 +416,7 @@ test_b14_unmanaged_preserved() {
 # ============================================================================
 # B-15: No nonexistent slot emitted
 # ============================================================================
-test_b15_no_nonexistent_slot() {
+_test_b15_no_nonexistent_slot() {
   build_scenario_setup || exit 1
 
   # Apply EFI state
@@ -494,7 +494,7 @@ test_b15_no_nonexistent_slot() {
 
 # B-11
 test_harness_begin_test "B-11: Application is idempotent"
-(test_b11_idempotent) || true
+(_test_b11_idempotent) || true
 # Only pass if the function did not already fail
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
@@ -502,28 +502,28 @@ fi
 
 # B-12
 test_harness_begin_test "B-12: Existing state survives failed replacement"
-(test_b12_failed_replacement) || true
+(_test_b12_failed_replacement) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # B-13
 test_harness_begin_test "B-13: Host isolation"
-(test_b13_host_isolation) || true
+(_test_b13_host_isolation) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # B-14
 test_harness_begin_test "B-14: Unmanaged EFI files preserved"
-(test_b14_unmanaged_preserved) || true
+(_test_b14_unmanaged_preserved) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # B-15
 test_harness_begin_test "B-15: No nonexistent slot emitted"
-(test_b15_no_nonexistent_slot) || true
+(_test_b15_no_nonexistent_slot) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi

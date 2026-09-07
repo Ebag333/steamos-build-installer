@@ -189,14 +189,14 @@ _pf_rfs_write_contained_path() {
 # Preflight checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_rootfs_device_identity ROOTFS EXPECTED_DEVICE EXPECTED_PARTUUID
+# _preflight_rootfs_device_identity ROOTFS EXPECTED_DEVICE EXPECTED_PARTUUID
 #   Verify the rootfs mount is backed by the expected block device and partition.
 #   Compares major:minor between the mount and expected device, then verifies PARTUUID.
 #   Dies on any mismatch.
-preflight_rootfs_device_identity() {
-  local rootfs="${1:?preflight_rootfs_device_identity: missing rootfs path}"
-  local expected_device="${2:?preflight_rootfs_device_identity: missing expected device}"
-  local expected_partuuid="${3:?preflight_rootfs_device_identity: missing expected PARTUUID}"
+_preflight_rootfs_device_identity() {
+  local rootfs="${1:?_preflight_rootfs_device_identity: missing rootfs path}"
+  local expected_device="${2:?_preflight_rootfs_device_identity: missing expected device}"
+  local expected_partuuid="${3:?_preflight_rootfs_device_identity: missing expected PARTUUID}"
 
   # Resolve identity (uses shared snapshot if already called, otherwise fresh)
   _pf_rfs_resolve_identity "$rootfs"
@@ -235,10 +235,10 @@ preflight_rootfs_device_identity() {
   debug "PF-DEV: rootfs device identity OK — $_PF_RFS_ID_SOURCE ($_PF_RFS_ID_MM) PARTUUID=$_PF_RFS_ID_PARTUUID"
 }
 
-# preflight_rootfs_exists ROOTFS
+# _preflight_rootfs_exists ROOTFS
 #   PF-01: Verify the target root path exists.
-preflight_rootfs_exists() {
-  local rootfs="${1:?preflight_rootfs_exists: missing rootfs path}"
+_preflight_rootfs_exists() {
+  local rootfs="${1:?_preflight_rootfs_exists: missing rootfs path}"
 
   if [[ ! -e "$rootfs" ]]; then
     die "PF-01: target root not found: $rootfs"
@@ -247,10 +247,10 @@ preflight_rootfs_exists() {
   debug "PF-01: rootfs exists: $rootfs"
 }
 
-# preflight_rootfs_is_directory ROOTFS
+# _preflight_rootfs_is_directory ROOTFS
 #   PF-02: Verify the target root is a directory.
-preflight_rootfs_is_directory() {
-  local rootfs="${1:?preflight_rootfs_is_directory: missing rootfs path}"
+_preflight_rootfs_is_directory() {
+  local rootfs="${1:?_preflight_rootfs_is_directory: missing rootfs path}"
 
   if [[ ! -d "$rootfs" ]]; then
     die "PF-02: target root is not a directory: $rootfs"
@@ -259,10 +259,10 @@ preflight_rootfs_is_directory() {
   debug "PF-02: rootfs is a directory: $rootfs"
 }
 
-# preflight_rootfs_is_mounted ROOTFS
+# _preflight_rootfs_is_mounted ROOTFS
 #   PF-03: Verify the target root is a mountpoint.
-preflight_rootfs_is_mounted() {
-  local rootfs="${1:?preflight_rootfs_is_mounted: missing rootfs path}"
+_preflight_rootfs_is_mounted() {
+  local rootfs="${1:?_preflight_rootfs_is_mounted: missing rootfs path}"
 
   if ! mountpoint -q "$rootfs" 2>/dev/null; then
     die "PF-03: target root is not mounted: $rootfs"
@@ -271,13 +271,13 @@ preflight_rootfs_is_mounted() {
   debug "PF-03: rootfs is mounted: $rootfs"
 }
 
-# preflight_rootfs_os_release ROOTFS
+# _preflight_rootfs_os_release ROOTFS
 #   PF-04: Verify the rootfs contains a valid os-release file.
 #   Checks $rootfs/etc/os-release first, then $rootfs/usr/lib/os-release.
 #   Verifies the file is regular, non-empty, and contains expected fields.
 #   Parses safely via grep (no sourcing as shell code).
-preflight_rootfs_os_release() {
-  local rootfs="${1:?preflight_rootfs_os_release: missing rootfs path}"
+_preflight_rootfs_os_release() {
+  local rootfs="${1:?_preflight_rootfs_os_release: missing rootfs path}"
 
   # Check for os-release in standard locations (contained paths)
   local os_release=""
@@ -314,7 +314,7 @@ preflight_rootfs_os_release() {
   debug "PF-04: os-release validation passed: $os_release"
 }
 
-# preflight_rootfs_writable ROOTFS
+# _preflight_rootfs_writable ROOTFS
 #   PF-05: Verify the rootfs is writable.
 #   Phase 1: Check mount options via findmnt for 'ro' (read-only).
 #   Phase 2: Real write test by creating and immediately removing a temp file
@@ -323,8 +323,8 @@ preflight_rootfs_os_release() {
 #   IMPORTANT: This function performs a real write to the rootfs. It must be called
 #   AFTER all identity validation checks (device identity, UUID, filesystem type)
 #   have passed. The orchestrator is responsible for correct call ordering.
-preflight_rootfs_writable() {
-  local rootfs="${1:?preflight_rootfs_writable: missing rootfs path}"
+_preflight_rootfs_writable() {
+  local rootfs="${1:?_preflight_rootfs_writable: missing rootfs path}"
 
   # Phase 1: Check mount options for read-only flag
   local mount_opts
@@ -355,10 +355,10 @@ preflight_rootfs_writable() {
   debug "PF-05: rootfs is writable: $rootfs"
 }
 
-# preflight_rootfs_is_btrfs ROOTFS
+# _preflight_rootfs_is_btrfs ROOTFS
 #   PF-45: Verify the root filesystem is Btrfs.
-preflight_rootfs_is_btrfs() {
-  local rootfs="${1:?preflight_rootfs_is_btrfs: missing rootfs path}"
+_preflight_rootfs_is_btrfs() {
+  local rootfs="${1:?_preflight_rootfs_is_btrfs: missing rootfs path}"
 
   local fstype
   fstype="$(_pf_rfs_get_fstype "$rootfs" 2>/dev/null)" || true
@@ -373,10 +373,10 @@ preflight_rootfs_is_btrfs() {
   debug "PF-45: rootfs is Btrfs: $rootfs"
 }
 
-# preflight_rootfs_uuid_available ROOTFS
+# _preflight_rootfs_uuid_available ROOTFS
 #   PF-46: Verify the rootfs UUID is resolvable via findmnt + blkid.
-preflight_rootfs_uuid_available() {
-  local rootfs="${1:?preflight_rootfs_uuid_available: missing rootfs path}"
+_preflight_rootfs_uuid_available() {
+  local rootfs="${1:?_preflight_rootfs_uuid_available: missing rootfs path}"
 
   # Resolve the mount source device, stripping any Btrfs subvolume suffix
   local source
@@ -398,15 +398,15 @@ preflight_rootfs_uuid_available() {
   debug "PF-46: rootfs UUID is resolvable: $uuid ($rootfs)"
 }
 
-# preflight_rootfs_uuid_unique ROOTFS SOURCE_UUID
+# _preflight_rootfs_uuid_unique ROOTFS SOURCE_UUID
 #   PF-47: Verify the rootfs UUID has been changed from the source and is globally unique.
 #   SOURCE_UUID is required — if missing, this is a fatal error (the caller must
 #   have captured it before mutation).
 #   BREAKING CHANGE: SOURCE_UUID is now mandatory (was optional). Callers that
 #   previously relied on the warn-only fallback must now always supply it.
-preflight_rootfs_uuid_unique() {
-  local rootfs="${1:?preflight_rootfs_uuid_unique: missing rootfs path}"
-  local source_uuid="${2:?preflight_rootfs_uuid_unique: missing source UUID (must be captured before mutation)}"
+_preflight_rootfs_uuid_unique() {
+  local rootfs="${1:?_preflight_rootfs_uuid_unique: missing rootfs path}"
+  local source_uuid="${2:?_preflight_rootfs_uuid_unique: missing source UUID (must be captured before mutation)}"
 
   # Validate source UUID format
   if ! _pf_rfs_uuid_is_valid "$source_uuid" 2>/dev/null; then
@@ -455,16 +455,16 @@ preflight_rootfs_uuid_unique() {
   debug "PF-47: rootfs UUID $_PF_RFS_ID_UUID is unique and differs from source $source_uuid"
 }
 
-# preflight_rootfs_uuid_finalized ROOTFS PRE_MUTATION_UUID [EXPECTED_PARTUUID] [EXPECTED_DEVICE_MM]
+# _preflight_rootfs_uuid_finalized ROOTFS PRE_MUTATION_UUID [EXPECTED_PARTUUID] [EXPECTED_DEVICE_MM]
 #   PF-48: Verify the rootfs UUID has changed from the pre-mutation value.
 #   This enforces that btrfstune -u completed successfully before we
 #   proceed to boot generation.
 #   Optional parameters:
 #     EXPECTED_PARTUUID  - if provided, the PARTUUID must match (case-insensitive)
 #     EXPECTED_DEVICE_MM - if provided, the device MAJ:MIN must match exactly
-preflight_rootfs_uuid_finalized() {
-  local rootfs="${1:?preflight_rootfs_uuid_finalized: missing rootfs path}"
-  local pre_mutation_uuid="${2:?preflight_rootfs_uuid_finalized: missing pre_mutation_uuid}"
+_preflight_rootfs_uuid_finalized() {
+  local rootfs="${1:?_preflight_rootfs_uuid_finalized: missing rootfs path}"
+  local pre_mutation_uuid="${2:?_preflight_rootfs_uuid_finalized: missing pre_mutation_uuid}"
   local expected_partuuid="${3:-}"
   local expected_device_mm="${4:-}"
 
@@ -550,40 +550,40 @@ preflight_rootfs_validate() {
   debug "preflight_rootfs_validate: root=$rootfs source_uuid=${source_uuid:-<none>} device=${expected_device:-<none>} partuuid=${expected_partuuid:-<none>} skip_writable=$skip_writable"
 
   # 0. Basic existence checks — must pass before any other validation
-  preflight_rootfs_exists "$rootfs"
-  preflight_rootfs_is_directory "$rootfs"
-  preflight_rootfs_is_mounted "$rootfs"
+  _preflight_rootfs_exists "$rootfs"
+  _preflight_rootfs_is_directory "$rootfs"
+  _preflight_rootfs_is_mounted "$rootfs"
 
   # Resolve identity once (shared snapshot for all checks)
   _pf_rfs_resolve_identity "$rootfs"
 
   # 1. Btrfs filesystem check
-  preflight_rootfs_is_btrfs "$rootfs"
+  _preflight_rootfs_is_btrfs "$rootfs"
 
   # 2. Device identity (if expected device provided)
   if [[ -n "$expected_device" && -n "$expected_partuuid" ]]; then
-    preflight_rootfs_device_identity "$rootfs" "$expected_device" "$expected_partuuid"
+    _preflight_rootfs_device_identity "$rootfs" "$expected_device" "$expected_partuuid"
   fi
 
   # 3. UUID available
-  preflight_rootfs_uuid_available "$rootfs"
+  _preflight_rootfs_uuid_available "$rootfs"
 
   # 4. UUID mutation (if source UUID provided)
   if [[ -n "$source_uuid" ]]; then
-    preflight_rootfs_uuid_unique "$rootfs" "$source_uuid"
+    _preflight_rootfs_uuid_unique "$rootfs" "$source_uuid"
   fi
 
   # 5. UUID finalized (if source UUID provided)
   if [[ -n "$source_uuid" ]]; then
-    preflight_rootfs_uuid_finalized "$rootfs" "$source_uuid"
+    _preflight_rootfs_uuid_finalized "$rootfs" "$source_uuid"
   fi
 
   # 6. os-release validation
-  preflight_rootfs_os_release "$rootfs"
+  _preflight_rootfs_os_release "$rootfs"
 
   # 7. Writable probe (LAST — only if not skipped)
   if [[ "$skip_writable" != "true" ]]; then
-    preflight_rootfs_writable "$rootfs"
+    _preflight_rootfs_writable "$rootfs"
   else
     debug "preflight_rootfs_validate: write probe skipped (skip_writable=true)"
   fi

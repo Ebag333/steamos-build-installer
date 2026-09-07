@@ -193,7 +193,7 @@ _pf_signing_tool_available() {
 # Individual checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_bootconf_reset_policy CONF_DIR SLOT OPERATION_MODE [CURRENT_SLOT] [EFI_MOUNT] [SELECTED_SLOT]
+# _preflight_bootconf_reset_policy CONF_DIR SLOT OPERATION_MODE [CURRENT_SLOT] [EFI_MOUNT] [SELECTED_SLOT]
 #   PF-57: Enforce reset/creation policy constraints.
 #
 #   OPERATION_MODE must be one of:
@@ -217,10 +217,10 @@ _pf_signing_tool_available() {
 #   to resolve the current slot when CURRENT_SLOT is empty).
 #   SELECTED_SLOT is optional; when provided and mode is "replace" and
 #   SLOT equals SELECTED_SLOT, a warning is emitted.
-preflight_bootconf_reset_policy() {
-  local conf_dir="${1:?preflight_bootconf_reset_policy: missing conf directory}"
-  local slot="${2:?preflight_bootconf_reset_policy: missing slot label}"
-  local mode="${3:?preflight_bootconf_reset_policy: missing operation mode}"
+_preflight_bootconf_reset_policy() {
+  local conf_dir="${1:?_preflight_bootconf_reset_policy: missing conf directory}"
+  local slot="${2:?_preflight_bootconf_reset_policy: missing slot label}"
+  local mode="${3:?_preflight_bootconf_reset_policy: missing operation mode}"
   local current_slot="${4:-}"
   local efi_mount="${5:-}"
   local selected_slot="${6:-}"
@@ -280,7 +280,7 @@ preflight_bootconf_reset_policy() {
   esac
 }
 
-# preflight_bootconf_current_health CONF_DIR CURRENT_SLOT OPERATION_MODE SCENARIO [REPAIR_OVERRIDE] [EFI_MOUNT]
+# _preflight_bootconf_current_health CONF_DIR CURRENT_SLOT OPERATION_MODE SCENARIO [REPAIR_OVERRIDE] [EFI_MOUNT]
 #   PF-58: Verify the currently booted slot's bootconfig is parseable.
 #
 #   A corrupt or missing current-slot config means the system is running
@@ -297,9 +297,9 @@ preflight_bootconf_reset_policy() {
 #
 #   SCENARIO is optional; when "build", the check is skipped entirely
 #   (no booted slot exists in a build context).
-preflight_bootconf_current_health() {
-  local conf_dir="${1:?preflight_bootconf_current_health: missing conf directory}"
-  local current_slot="${2:?preflight_bootconf_current_health: missing current slot}"
+_preflight_bootconf_current_health() {
+  local conf_dir="${1:?_preflight_bootconf_current_health: missing conf directory}"
+  local current_slot="${2:?_preflight_bootconf_current_health: missing current slot}"
   local operation_mode="${3:-}"
   local scenario="${4:-}"
   local repair_override="${5:-}"
@@ -358,7 +358,7 @@ preflight_bootconf_current_health() {
   esac
 }
 
-# preflight_bootconf_secure_boot_compat SECURE_BOOT_POLICY
+# _preflight_bootconf_secure_boot_compat SECURE_BOOT_POLICY
 #   PF-59: Verify Secure Boot compatibility.
 #
 #   SECURE_BOOT_POLICY determines behavior:
@@ -373,7 +373,7 @@ preflight_bootconf_current_health() {
 #        a. signing tool available -> pass
 #        b. signing tool missing   -> die
 #     3. Secure Boot indeterminate -> warn and continue
-preflight_bootconf_secure_boot_compat() {
+_preflight_bootconf_secure_boot_compat() {
   local sb_policy="${1:-auto}"
 
   case "$sb_policy" in
@@ -527,18 +527,18 @@ preflight_bootconf_validate() {
   fi
 
   # --- PF-57: Reset/creation policy ---
-  preflight_bootconf_reset_policy "$conf_dir" "$slot" "$mode" "$current_slot" "$efi_mount" "$selected_slot"
+  _preflight_bootconf_reset_policy "$conf_dir" "$slot" "$mode" "$current_slot" "$efi_mount" "$selected_slot"
 
   # --- PF-58: Current-slot health ---
   # Only check when the conf directory exists (we cannot check a missing dir).
   if [[ -d "$conf_dir" && -n "$current_slot" ]]; then
-    preflight_bootconf_current_health "$conf_dir" "$current_slot" "$mode" "$scenario" "$repair_override" "$efi_mount"
+    _preflight_bootconf_current_health "$conf_dir" "$current_slot" "$mode" "$scenario" "$repair_override" "$efi_mount"
   elif [[ "$scenario" != "build" && -z "$current_slot" ]]; then
     warn "PF-58: current slot could not be resolved — skipping health check"
   fi
 
   # --- PF-59: Secure Boot compatibility ---
-  preflight_bootconf_secure_boot_compat "$sb_policy"
+  _preflight_bootconf_secure_boot_compat "$sb_policy"
 
   debug "preflight_bootconf_validate: all bootconf policy checks passed (slot=$slot mode=$mode)"
 }

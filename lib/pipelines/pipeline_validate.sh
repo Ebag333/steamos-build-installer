@@ -21,9 +21,9 @@ register_validate_pipeline() {
     "validate" \
     "report"
 
-  register_phase "discover" "phase_validate_discover" "Discover context and load config"
-  register_phase "validate" "phase_validate_run" "Run validation checks"
-  register_phase "report" "phase_validate_report" "Summarize results"
+  register_phase "discover" "_phase_validate_discover" "Discover context and load config"
+  register_phase "validate" "_phase_validate_run" "Run validation checks"
+  register_phase "report" "_phase_validate_report" "Summarize results"
 }
 
 # ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ _validate_skip() {
 # Phase: Discover
 # ---------------------------------------------------------------------------
 
-phase_validate_discover() {
+_phase_validate_discover() {
   stage_header "discovery"
   local root="${VALIDATE_ROOT:-/}"
 
@@ -122,7 +122,7 @@ phase_validate_discover() {
 # Phase: Validate
 # ---------------------------------------------------------------------------
 
-phase_validate_run() {
+_phase_validate_run() {
   stage_header "validation"
   local root="${OPT_ROOT:-/}"
 
@@ -175,6 +175,9 @@ _validate_all() {
 
   # Logitech HID source bundle
   _validate_hid_source_bundle "$root"
+
+  # Ledger state
+  _validate_ledger_state
 }
 
 # ---------------------------------------------------------------------------
@@ -895,6 +898,43 @@ _validate_hid_source_bundle() {
   fi
 }
 
+_validate_ledger_state() {
+  local state_root="${HOME}/.steamos-build/ledger"
+
+  if [[ ! -d "$state_root/runs" ]]; then
+    _validate_pass "system/ledger" "" "ledger" "no runs directory"
+    return
+  fi
+
+  local unresolved=0
+  local total=0
+  local run_dir
+  for run_dir in "$state_root/runs"/*/; do
+    [[ -d "$run_dir" ]] || continue
+    total=$((total + 1))
+
+    local manifest="$run_dir/manifest"
+    [[ -f "$manifest" ]] || continue
+
+    local run_state
+    run_state="$(grep -m1 '^run_state' "$manifest" 2>/dev/null | cut -f2)" || run_state=""
+
+    case "$run_state" in
+      ACTIVE | RECOVERING | BLOCKED)
+        unresolved=$((unresolved + 1))
+        ;;
+    esac
+  done
+
+  if ((total == 0)); then
+    _validate_pass "system/ledger" "" "ledger" "clean (no runs)"
+  elif ((unresolved > 0)); then
+    _validate_fail "system/ledger" "unresolved: $unresolved of $total incomplete run(s) — run cleanup or recovery"
+  else
+    _validate_pass "system/ledger" "" "ledger" "clean ($total run(s))"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Validation Helpers — Hardware Packages
 # ---------------------------------------------------------------------------
@@ -1108,7 +1148,7 @@ _validate_is_selected() {
 # Phase: Report
 # ---------------------------------------------------------------------------
 
-phase_validate_report() {
+_phase_validate_report() {
   stage_header "report"
   # If a config was loaded, cross-reference results against config selections.
   # Items not selected in the config are overridden to SKIP.

@@ -248,13 +248,13 @@ _pf_path_scan_transaction_artifacts() {
 # Individual checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_path_safety_not_symlink PATH LABEL
+# _preflight_path_safety_not_symlink PATH LABEL
 #   PF-55a: Verify the destination PATH is not a symlink.
 #   Symlinks are checked BEFORE realpath resolution to detect escapes.
 #   LABEL is used in diagnostic messages (e.g. "EFI", "ESP").
 #   Dies if the path is a symlink.
-preflight_path_safety_not_symlink() {
-  local target="${1:?preflight_path_safety_not_symlink: missing path}"
+_preflight_path_safety_not_symlink() {
+  local target="${1:?_preflight_path_safety_not_symlink: missing path}"
   local label="${2:-destination}"
 
   if [[ -L "$target" ]]; then
@@ -266,14 +266,14 @@ preflight_path_safety_not_symlink() {
   debug "PF-55a: $label path is not a symlink: $target"
 }
 
-# preflight_path_safety_within_mount PATH MOUNTPOINT LABEL
+# _preflight_path_safety_within_mount PATH MOUNTPOINT LABEL
 #   PF-55b: Verify the destination PATH resolves within the expected mount.
 #   Uses device ID comparison to detect cross-filesystem symlink escapes.
 #   LABEL is used in diagnostic messages (e.g. "EFI", "ESP").
 #   Dies if the path escapes the mount boundary.
-preflight_path_safety_within_mount() {
-  local target="${1:?preflight_path_safety_within_mount: missing path}"
-  local mountpoint="${2:?preflight_path_safety_within_mount: missing mountpoint}"
+_preflight_path_safety_within_mount() {
+  local target="${1:?_preflight_path_safety_within_mount: missing path}"
+  local mountpoint="${2:?_preflight_path_safety_within_mount: missing mountpoint}"
   local label="${3:-destination}"
 
   if ! _pf_path_within_mount "$target" "$mountpoint"; then
@@ -286,18 +286,18 @@ preflight_path_safety_within_mount() {
   debug "PF-55b: $label path is within mount: $target -> $mountpoint"
 }
 
-# preflight_path_safety_destination_safe PATH MOUNTPOINT LABEL
+# _preflight_path_safety_destination_safe PATH MOUNTPOINT LABEL
 #   PF-55: Combined destination safety check.
 #   Verifies the path is not a symlink (PF-55a) AND resolves within the
 #   expected mount (PF-55b).  The symlink check MUST happen before the
 #   realpath-based mount check so that symlink escapes are caught first.
-preflight_path_safety_destination_safe() {
-  local target="${1:?preflight_path_safety_destination_safe: missing path}"
-  local mountpoint="${2:?preflight_path_safety_destination_safe: missing mountpoint}"
+_preflight_path_safety_destination_safe() {
+  local target="${1:?_preflight_path_safety_destination_safe: missing path}"
+  local mountpoint="${2:?_preflight_path_safety_destination_safe: missing mountpoint}"
   local label="${3:-destination}"
 
   # PF-55a: Symlink check (must precede realpath resolution).
-  preflight_path_safety_not_symlink "$target" "$label"
+  _preflight_path_safety_not_symlink "$target" "$label"
 
   # PF-55c: Check intermediate path components are not symlinks.
   if ! _pf_path_intermediate_safe "$mountpoint" "$target"; then
@@ -305,20 +305,20 @@ preflight_path_safety_destination_safe() {
   fi
 
   # PF-55b: Mount boundary check (uses device ID comparison).
-  preflight_path_safety_within_mount "$target" "$mountpoint" "$label"
+  _preflight_path_safety_within_mount "$target" "$mountpoint" "$label"
 
   debug "PF-55: $label destination is safe: $target ($mountpoint)"
 }
 
-# preflight_path_safety_no_stale_transactions DIRECTORY [MAXDEPTH]
+# _preflight_path_safety_no_stale_transactions DIRECTORY [MAXDEPTH]
 #   PF-56: Verify no stale transaction files exist in the given directory.
 #   Checks the installer-owned transaction namespace first, then scans for
 #   legacy patterns (*.new, *.bak, *.tmp, *.transaction-*).
 #   Provides recovery guidance for installer-owned state and warns about
 #   ambiguity for legacy patterns.
 #   Dies if stale artifacts are found.
-preflight_path_safety_no_stale_transactions() {
-  local directory="${1:?preflight_path_safety_no_stale_transactions: missing directory}"
+_preflight_path_safety_no_stale_transactions() {
+  local directory="${1:?_preflight_path_safety_no_stale_transactions: missing directory}"
   local maxdepth="${2:-5}"
 
   if [[ ! -d "$directory" ]]; then
@@ -356,7 +356,7 @@ preflight_path_safety_no_stale_transactions() {
 # Orchestrators
 # ---------------------------------------------------------------------------
 
-# preflight_path_safety_validate_destinations EFI_MOUNT [ESP_MOUNT]
+# _preflight_path_safety_validate_destinations EFI_MOUNT [ESP_MOUNT]
 #   Validate destination path safety for EFI and optional ESP mounts.
 #   Checks that each managed destination path is not a symlink and resolves
 #   within its expected mount boundary.
@@ -373,12 +373,12 @@ preflight_path_safety_no_stale_transactions() {
 #   Instead, each destination path is validated against its own mount.
 #
 #   SLOT is required when ESP_MOUNT is provided (for conf path validation).
-preflight_path_safety_validate_destinations() {
-  local efi_mount="${1:?preflight_path_safety_validate_destinations: missing EFI mount}"
+_preflight_path_safety_validate_destinations() {
+  local efi_mount="${1:?_preflight_path_safety_validate_destinations: missing EFI mount}"
   local esp_mount="${2:-}"
   local slot="${3:-}"
 
-  debug "preflight_path_safety_validate_destinations: efi=$efi_mount esp=${esp_mount:-<none>} slot=${slot:-<none>}"
+  debug "_preflight_path_safety_validate_destinations: efi=$efi_mount esp=${esp_mount:-<none>} slot=${slot:-<none>}"
 
   # Verify required mount roots exist.
   if [[ ! -d "$efi_mount" ]]; then
@@ -386,9 +386,9 @@ preflight_path_safety_validate_destinations() {
   fi
 
   # --- Validate the mount roots themselves are real directories (not symlinks) ---
-  preflight_path_safety_not_symlink "$efi_mount" "EFI mount root"
+  _preflight_path_safety_not_symlink "$efi_mount" "EFI mount root"
   if [[ -n "$esp_mount" ]]; then
-    preflight_path_safety_not_symlink "$esp_mount" "ESP mount root"
+    _preflight_path_safety_not_symlink "$esp_mount" "ESP mount root"
   fi
 
   # --- Validate managed destinations under EFI_MOUNT ---
@@ -401,7 +401,7 @@ preflight_path_safety_validate_destinations() {
     while [[ ! -e "$parent" && "$parent" != "$efi_mount" ]]; do
       parent="$(dirname "$parent")"
     done
-    preflight_path_safety_destination_safe "$parent" "$efi_mount" "EFI"
+    _preflight_path_safety_destination_safe "$parent" "$efi_mount" "EFI"
   done
 
   # --- Validate managed destinations under ESP_MOUNT ---
@@ -411,37 +411,37 @@ preflight_path_safety_validate_destinations() {
       "$esp_mount/SteamOS/partsets" \
       "$esp_mount/SteamOS/conf"; do
       if [[ -d "$esp_dest" ]]; then
-        preflight_path_safety_destination_safe "$esp_dest" "$esp_mount" "ESP"
+        _preflight_path_safety_destination_safe "$esp_dest" "$esp_mount" "ESP"
       fi
     done
   else
-    debug "preflight_path_safety_validate_destinations: no ESP mount — skipping"
+    debug "_preflight_path_safety_validate_destinations: no ESP mount — skipping"
   fi
 
-  debug "preflight_path_safety_validate_destinations: all destination checks passed"
+  debug "_preflight_path_safety_validate_destinations: all destination checks passed"
 }
 
-# preflight_path_safety_validate_transactions EFI_MOUNT [ESP_MOUNT]
+# _preflight_path_safety_validate_transactions EFI_MOUNT [ESP_MOUNT]
 #   Validate no stale transaction artifacts exist in EFI and optional ESP
 #   mount directories.  Uses maxdepth of 5 for recursive scanning.
 #   Dies on the first failure.
-preflight_path_safety_validate_transactions() {
-  local efi_mount="${1:?preflight_path_safety_validate_transactions: missing EFI mount}"
+_preflight_path_safety_validate_transactions() {
+  local efi_mount="${1:?_preflight_path_safety_validate_transactions: missing EFI mount}"
   local esp_mount="${2:-}"
 
-  debug "preflight_path_safety_validate_transactions: efi=$efi_mount esp=${esp_mount:-<none>}"
+  debug "_preflight_path_safety_validate_transactions: efi=$efi_mount esp=${esp_mount:-<none>}"
 
   # EFI transaction scan (required).
-  preflight_path_safety_no_stale_transactions "$efi_mount"
+  _preflight_path_safety_no_stale_transactions "$efi_mount"
 
   # ESP transaction scan (optional — only when provided).
   if [[ -n "$esp_mount" ]]; then
-    preflight_path_safety_no_stale_transactions "$esp_mount"
+    _preflight_path_safety_no_stale_transactions "$esp_mount"
   else
-    debug "preflight_path_safety_validate_transactions: no ESP mount — skipping"
+    debug "_preflight_path_safety_validate_transactions: no ESP mount — skipping"
   fi
 
-  debug "preflight_path_safety_validate_transactions: all transaction checks passed"
+  debug "_preflight_path_safety_validate_transactions: all transaction checks passed"
 }
 
 # preflight_path_safety_validate EFI_MOUNT [ESP_MOUNT]
@@ -462,10 +462,10 @@ preflight_path_safety_validate() {
   debug "preflight_path_safety_validate: efi=$efi_mount esp=${esp_mount:-<none>}"
 
   # Destination safety (PF-55a + PF-55b).
-  preflight_path_safety_validate_destinations "$efi_mount" "$esp_mount"
+  _preflight_path_safety_validate_destinations "$efi_mount" "$esp_mount"
 
   # Stale transaction scan (PF-56).
-  preflight_path_safety_validate_transactions "$efi_mount" "$esp_mount"
+  _preflight_path_safety_validate_transactions "$efi_mount" "$esp_mount"
 
   debug "preflight_path_safety_validate: all path safety checks passed"
 }

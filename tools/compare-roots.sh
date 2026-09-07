@@ -21,7 +21,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ---- find rootfs partitions ----
-find_rootfs_parts() {
+_find_rootfs_parts() {
   local parts=()
   while IFS= read -r line; do
     local name partlabel
@@ -35,14 +35,14 @@ find_rootfs_parts() {
 }
 
 # ---- mount a partition read-only ----
-mount_ro() {
+_mount_ro() {
   local dev="$1" mnt="$2"
   mkdir -p "$mnt"
   mount -o ro "$dev" "$mnt" 2>/dev/null || return 1
 }
 
 # ---- compare a single file between roots ----
-compare_file() {
+_compare_file() {
   local rel_path="$1"
   local a_path="$ROOTFS_A/$rel_path"
   local b_path="$ROOTFS_B/$rel_path"
@@ -80,7 +80,7 @@ echo -e "${CYAN}=== SteamOS A/B Root Comparison ===${NC}"
 echo ""
 
 # Find rootfs partitions
-mapfile -t rootfs_parts < <(find_rootfs_parts | tr ' ' '\n')
+mapfile -t rootfs_parts < <(_find_rootfs_parts | tr ' ' '\n')
 
 if [[ ${#rootfs_parts[@]} -lt 2 ]]; then
   echo -e "${RED}Error: Could not find both rootfs-A and rootfs-B partitions.${NC}"
@@ -120,11 +120,11 @@ cleanup() { # lint-ignore: no-shadow
 trap cleanup EXIT
 
 echo "Mounting partitions read-only..."
-mount_ro "$PART_A" "$MNT_A" || {
+_mount_ro "$PART_A" "$MNT_A" || {
   echo "Failed to mount A"
   exit 1
 }
-mount_ro "$PART_B" "$MNT_B" || {
+_mount_ro "$PART_B" "$MNT_B" || {
   echo "Failed to mount B"
   exit 1
 }
@@ -136,30 +136,30 @@ ROOTFS_B="$MNT_B"
 if [[ $# -gt 0 ]]; then
   # Compare specific files
   for f in "$@"; do
-    compare_file "$f"
+    _compare_file "$f"
   done
 else
   # Compare common hotspots
   echo -e "${CYAN}Comparing configuration hotspots:${NC}"
   echo ""
 
-  compare_file "etc/mkinitcpio.conf"
-  compare_file "etc/mkinitcpio.conf.d/99-steamos-build.conf"
-  compare_file "etc/mkinitcpio.conf.d/20-steamdeck.conf"
-  compare_file "etc/modprobe.d/99-nvidia-patch.conf"
-  compare_file "etc/modprobe.d/steamos-build.conf"
-  compare_file "etc/dracut.conf.d/99-steamos-build.conf"
-  compare_file "etc/dracut.conf.d/steamos-image-recipes.conf"
-  compare_file "etc/default/grub"
-  compare_file "etc/pacman.conf"
-  compare_file "etc/pacman.d/mirrorlist"
-  compare_file "etc/udev/rules.d/98-thunderbolt-rescan.rules"
-  compare_file "etc/udev/rules.d/99-steamos-tb-autoauth.rules"
-  compare_file "home/.steamos-build/lib/driver.conf"
-  compare_file "home/.steamos-build/lib/repatch.sh"
-  compare_file "usr/bin/steamos-update"
-  compare_file "etc/systemd/system/multi-user.target.wants/bolt.service"
-  compare_file "home/deck/.config/steamos-manager/state.toml"
+  _compare_file "etc/mkinitcpio.conf"
+  _compare_file "etc/mkinitcpio.conf.d/99-steamos-build.conf"
+  _compare_file "etc/mkinitcpio.conf.d/20-steamdeck.conf"
+  _compare_file "etc/modprobe.d/99-nvidia-patch.conf"
+  _compare_file "etc/modprobe.d/steamos-build.conf"
+  _compare_file "etc/dracut.conf.d/99-steamos-build.conf"
+  _compare_file "etc/dracut.conf.d/steamos-image-recipes.conf"
+  _compare_file "etc/default/grub"
+  _compare_file "etc/pacman.conf"
+  _compare_file "etc/pacman.d/mirrorlist"
+  _compare_file "etc/udev/rules.d/98-thunderbolt-rescan.rules"
+  _compare_file "etc/udev/rules.d/99-steamos-tb-autoauth.rules"
+  _compare_file "home/.steamos-build/lib/driver.conf"
+  _compare_file "home/.steamos-build/lib/repatch.sh"
+  _compare_file "usr/bin/steamos-update"
+  _compare_file "etc/systemd/system/multi-user.target.wants/bolt.service"
+  _compare_file "home/deck/.config/steamos-manager/state.toml"
 
   echo ""
 

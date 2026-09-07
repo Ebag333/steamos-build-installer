@@ -416,7 +416,7 @@ flash_preflight() {
 # and comparing the SHA256 against the source image.
 # MUST be called BEFORE any post-write modifications (e.g. GPT relocation).
 # Args: $1 = image path, $2 = target device, $3 = image bytes, $4 = precomputed image SHA256
-flash_verify_raw() {
+_flash_verify_raw() {
   local img="$1" target="$2" img_bytes="$3" img_hash="$4"
 
   echo ""
@@ -499,7 +499,7 @@ flash_write() {
     echo "Unmounting $mount_count target partition(s)..."
     while IFS="" read -r mp; do
       [[ -n "$mp" ]] || continue
-      if umount "$mp" 2>/dev/null; then
+      if strict_unmount "$mp" "target before dd"; then
         echo "  ✓ $mp"
       else
         echo "  ✗ $mp — could not unmount target filesystem" >&2
@@ -592,7 +592,7 @@ flash_write() {
   blockdev --flushbufs "$target" 2>/dev/null || true
 
   # Verify the raw write BEFORE any post-write modifications.
-  flash_verify_raw "$img" "$target" "$img_bytes" "$img_hash" || return 1
+  _flash_verify_raw "$img" "$target" "$img_bytes" "$img_hash" || return 1
 
   echo ""
   stage_header "flash finalize"
@@ -687,7 +687,7 @@ flash_write() {
   if [[ -n "$home_part" ]]; then
     local mount_point="/run/media/${SUDO_USER:-deck}/home"
     mkdir -p "$mount_point"
-    if mount "$home_part" "$mount_point" 2>/dev/null; then
+    if cleanup_mount "$mount_point" "flash home" -- "$home_part"; then
       echo "  ✓ home mounted at $mount_point"
     else
       echo "  ⚠ Could not mount home partition (non-fatal)"

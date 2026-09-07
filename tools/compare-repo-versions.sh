@@ -31,7 +31,7 @@ done
 # ---------------------------------------------------------------------------
 # Extract package names from hw-packages.conf filtered by TYPE.
 # ---------------------------------------------------------------------------
-extract_packages() {
+_extract_packages() {
   local conf="$1"
   local type_filter="$2"
   awk -F'|' -v t="$type_filter" '!/^\s*(#|$)/ && $1 == t {print $2}' "$conf" | sort -u
@@ -44,7 +44,7 @@ extract_packages() {
 #
 # Prints "version" or "NOT FOUND".
 # ---------------------------------------------------------------------------
-query_version() {
+_query_version() {
   local pkg="$1"
   local extra_args="${2:-}"
   local raw
@@ -77,7 +77,7 @@ echo ""
 if [[ "$MODE" == "compare" ]]; then
   mapfile -t packages < <(
     {
-      extract_packages "$HW_PACKAGES_CONF" "pacman"
+      _extract_packages "$HW_PACKAGES_CONF" "pacman"
     } | sort -u
   )
 
@@ -101,8 +101,8 @@ if [[ "$MODE" == "compare" ]]; then
   both_missing=0
 
   for pkg in "${packages[@]}"; do
-    valve_ver=$(query_version "$pkg")
-    arch_ver=$(query_version "$pkg" "--config $ARCH_PACMAN_CONF --dbpath $ARCH_DBPATH")
+    valve_ver=$(_query_version "$pkg")
+    arch_ver=$(_query_version "$pkg" "--config $ARCH_PACMAN_CONF --dbpath $ARCH_DBPATH")
 
     if [[ "$valve_ver" == "NOT FOUND" && "$arch_ver" == "NOT FOUND" ]]; then
       status="BOTH MISSING"
@@ -148,7 +148,7 @@ elif [[ "$MODE" == "upgrades" ]]; then
   not_in_arch=0
 
   while IFS=' ' read -r pkg installed_ver; do
-    arch_ver=$(query_version "$pkg" "--config $ARCH_PACMAN_CONF --dbpath $ARCH_DBPATH")
+    arch_ver=$(_query_version "$pkg" "--config $ARCH_PACMAN_CONF --dbpath $ARCH_DBPATH")
 
     if [[ "$arch_ver" == "NOT FOUND" ]]; then
       printf "%-35s %-22s %-22s %s\n" "$pkg" "$installed_ver" "NOT IN ARCH" "-"

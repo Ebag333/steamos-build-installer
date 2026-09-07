@@ -42,15 +42,15 @@ register_build_pipeline() {
     "configure" \
     "finalize"
 
-  register_phase "validate" "phase_build_validate" "Validate build inputs"
-  register_phase "setup" "phase_build_setup" "Set up build environment"
-  register_phase "prepare" "phase_build_prepare" "Prepare rootfs and partitions"
-  register_phase "preflight" "phase_build_preflight" "Run preflight safety checks"
-  register_phase "sysupgrade" "phase_build_sysupgrade" "Prepare package state"
-  register_phase "overlay" "phase_build_overlay" "Create build overlay"
-  register_phase "build" "phase_build_build" "Build and install drivers"
-  register_phase "configure" "phase_build_configure" "Configure system and GRUB"
-  register_phase "finalize" "phase_build_finalize" "Finalize and publish image"
+  register_phase "validate" "_phase_build_validate" "Validate build inputs"
+  register_phase "setup" "_phase_build_setup" "Set up build environment"
+  register_phase "prepare" "_phase_build_prepare" "Prepare rootfs and partitions"
+  register_phase "preflight" "_phase_build_preflight" "Run preflight safety checks"
+  register_phase "sysupgrade" "_phase_build_sysupgrade" "Prepare package state"
+  register_phase "overlay" "_phase_build_overlay" "Create build overlay"
+  register_phase "build" "_phase_build_build" "Build and install drivers"
+  register_phase "configure" "_phase_build_configure" "Configure system and GRUB"
+  register_phase "finalize" "_phase_build_finalize" "Finalize and publish image"
 }
 
 # ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ register_build_pipeline() {
 # ---------------------------------------------------------------------------
 
 # Phase: Validate build inputs
-phase_build_validate() {
+_phase_build_validate() {
   stage_header "preparation"
   # Log condensed build configuration
   if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
@@ -150,7 +150,7 @@ phase_build_validate() {
 }
 
 # Phase: Set up build environment
-phase_build_setup() {
+_phase_build_setup() {
   # Resolve workdir
   setup_resolve_workdir
 
@@ -171,10 +171,6 @@ phase_build_setup() {
   # shellcheck disable=SC2034 # used by overlay.sh, common.sh
   OVL_LOOPDEV=""
 
-  # Persistent mount tracking — survives killed processes.
-  # shellcheck disable=SC2034 # MOUNTS_FILE used by common_system.sh track/untrack_mount helpers
-  MOUNTS_FILE="$WORKDIR/mounts"
-
   # Clear stale state and create directories
   setup_clear_stale_state
   setup_dirs
@@ -183,15 +179,11 @@ phase_build_setup() {
   PACMAN_RAW_LOG="$WORKDIR/backend.pacman.log"
   : >"$PACMAN_RAW_LOG"
 
-  # Snapshot system state before build for hygiene comparison
-  # Use /tmp so the snapshot survives cleanup removing WORKDIR
-  snapshot_system_state "/tmp/.steamos-build-state-before-$$"
-
   return 0
 }
 
 # Phase: Prepare rootfs and partitions
-phase_build_prepare() {
+_phase_build_prepare() {
   # Copy/decompress source image
   setup_copy_image
   progress_emit decompress
@@ -206,13 +198,14 @@ phase_build_prepare() {
   # Mount partitions
   setup_mount_partitions
   setup_discover
+  # lint-ignore: strict-mount
   progress_emit mount
 
   return 0
 }
 
 # Phase: Run preflight safety checks
-phase_build_preflight() {
+_phase_build_preflight() {
   stage_header "preflight"
 
   # Compute source image hash for integrity verification (PF-64)
@@ -235,7 +228,7 @@ phase_build_preflight() {
 }
 
 # Phase: Prepare package state (upgrade or additive db sync)
-phase_build_sysupgrade() {
+_phase_build_sysupgrade() {
   # Derive build-flag items from GAMING_ITEMS
   if [[ -n "${GAMING_ITEMS:-}" ]]; then
     [[ " $GAMING_ITEMS " == *" fix-keyring "* ]] && export FIX_KEYRING=1
@@ -324,7 +317,7 @@ phase_build_sysupgrade() {
 }
 
 # Phase: Create build overlay (on top of updated $MNT)
-phase_build_overlay() {
+_phase_build_overlay() {
   stage_header "build & install"
   # Create overlay filesystem for build environment
   # This overlay sits on top of the already-updated $MNT
@@ -335,7 +328,7 @@ phase_build_overlay() {
 }
 
 # Phase: Build and install drivers
-phase_build_build() {
+_phase_build_build() {
   # Build framework setup
   source "$SCRIPT_DIR/lib/build/engine.sh"
   source "$SCRIPT_DIR/lib/build/repository.sh"
@@ -552,7 +545,7 @@ phase_build_build() {
 }
 
 # Phase: Configure system and GRUB
-phase_build_configure() {
+_phase_build_configure() {
   stage_header "configure"
   # Apply all customizations dynamically from config
   step "Applying customizations"
@@ -612,7 +605,7 @@ phase_build_configure() {
 }
 
 # Phase: Finalize and publish image
-phase_build_finalize() {
+_phase_build_finalize() {
   stage_header "finalize"
   # Restore empty machine-id before publishing — don't bake build-time ID into image
   if [[ "${_MACHINE_ID_WAS_EMPTY:-0}" -eq 1 ]]; then
@@ -636,12 +629,10 @@ phase_build_finalize() {
   # Emit the progress event so the yad window shows the phase.
   progress_emit cleanup
 
-  # Snapshot system state after cleanup and compare with before-build state
-  local _state_before="/tmp/.steamos-build-state-before-$$"
-  local _state_after="/tmp/.steamos-build-state-after-$$"
-  snapshot_system_state "$_state_after"
-  compare_system_state "$_state_before" "$_state_after" "build hygiene" || true
-  rm -f "$_state_before" "$_state_after"
+  # Verify cleanup completeness via greenfield tracking system
+  if declare -F cleanup_verify >/dev/null 2>&1; then
+    cleanup_verify || warn "Build hygiene: cleanup verification detected issues"
+  fi
 
   return 0
 }

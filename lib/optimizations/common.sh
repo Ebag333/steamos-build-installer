@@ -32,12 +32,12 @@ get_root() {
 
 # Persist a kernel parameter to grub-steamos on live systems.
 # On chroot, this is a no-op — the pipeline flushes params later.
-# Usage: _persist_kernel_param_live PARAM
-_persist_kernel_param_live() {
+# Usage: persist_kernel_param_live PARAM
+persist_kernel_param_live() {
   local param="$1"
 
   if [[ -z "$param" ]]; then
-    warn "_persist_kernel_param_live called with empty parameter"
+    warn "persist_kernel_param_live called with empty parameter"
     return 1
   fi
 

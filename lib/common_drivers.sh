@@ -172,8 +172,8 @@ generate_payload_filelist() {
 # Register a custom payload file for inclusion in the image.
 # Build modules call this for files not owned by any pacman package.
 # Args: $1 = chroot-relative path (e.g. /usr/lib/dri/nvidia_drv_video.so)
-register_custom_payload_file() {
-  local path="${1:?register_custom_payload_file: missing path}"
+_register_custom_payload_file() {
+  local path="${1:?_register_custom_payload_file: missing path}"
   local custom="${WORKDIR:?WORKDIR not set}/custom-payload-files.txt"
   mkdir -p "$(dirname "$custom")"
   echo "$path" >>"$custom"
@@ -391,7 +391,7 @@ verify_propagated_package() {
 }
 
 # rsync the payload into the real image rootfs and register its packages.
-install_payload() {
+_install_payload() {
   log "Copying driver payload into the image rootfs"
   # shellcheck disable=SC2034
   # shellcheck disable=SC2153 # FILELIST is set in lib/common.sh
@@ -444,7 +444,7 @@ install_payload() {
   fi
 
   log "Restoring module autoloading in initramfs"
-  mount_chroot_fs "$MNT"
+  cleanup_mount_chroot "$MNT"
 
   # Only reconfigure initramfs if the user explicitly opted in.
   #   INITRAMFS_MODULES unset   → stock: leave initramfs alone
@@ -458,7 +458,7 @@ install_payload() {
     log "  Stock initramfs — not reconfiguring (use --initramfs to customize)"
   fi
 
-  umount_chroot_fs "$MNT" strict
+  cleanup_unmount_registered
 
   if nvidia_is_selected; then
     enable_nvidia_power_services "$MNT"

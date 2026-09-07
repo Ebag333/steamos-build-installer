@@ -163,9 +163,9 @@ setup_dirs() {
   log "  MERGED=$MERGED (exists: $([[ -d "$MERGED" ]] && echo yes || echo no))"
 }
 
-setup_udev_guard() {
+_setup_udev_guard() {
   if [[ -z "${LOOPDEV:-}" ]]; then
-    warn "setup_udev_guard called before LOOPDEV exists; skipping guard"
+    warn "_setup_udev_guard called before LOOPDEV exists; skipping guard"
     return 0
   fi
 
@@ -274,7 +274,9 @@ setup_loop_mount() {
   LOOPDEV="$(losetup -f --show "$OUT")" || die "Failed to attach loop device for $OUT"
   log "Loop device: $LOOPDEV"
 
-  setup_udev_guard
+  cleanup_track_loop "$LOOPDEV" "$OUT" "main image"
+
+  _setup_udev_guard
 
   # Now expose the partitions, with the guard already active.
   partx -a "$LOOPDEV" || die "Failed to register partition devices on $LOOPDEV"
@@ -382,17 +384,11 @@ setup_mount_partitions() {
   log "Loop device RO: $(blockdev --getro "$LOOPDEV")"
   log "Root partition RO: $(blockdev --getro "$ROOTPART")"
   log "Mounting rootfs ($ROOTPART) → $MNT"
-  mount -o compress-force=zstd:3 "$ROOTPART" "$MNT" \
-    || die "Failed to mount rootfs: $ROOTPART → $MNT"
-  cleanup_track_mount "$MNT"
+  cleanup_mount "$MNT" "rootfs" -- -o compress-force=zstd:3 "$ROOTPART"
   log "Mounting efi ($EFIPART) → $EFIMNT"
-  mount "$EFIPART" "$EFIMNT" \
-    || die "Failed to mount EFI partition: $EFIPART → $EFIMNT"
-  cleanup_track_mount "$EFIMNT"
+  cleanup_mount "$EFIMNT" "efi" -- "$EFIPART"
   log "Mounting home ($HOMEPART) → $HOMEMNT"
-  mount "$HOMEPART" "$HOMEMNT" \
-    || die "Failed to mount home partition: $HOMEPART → $HOMEMNT"
-  cleanup_track_mount "$HOMEMNT"
+  cleanup_mount "$HOMEMNT" "home" -- "$HOMEPART"
 
   log "Rootfs mount options: $(findmnt -no OPTIONS "$MNT")"
 

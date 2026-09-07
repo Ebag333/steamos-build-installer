@@ -215,7 +215,7 @@ _hw_quote_targets() {
 # ---------------------------------------------------------------------------
 
 # Check if we're installing into a chroot (build/rebuild) vs live system.
-_is_install_chroot() {
+is_install_chroot() {
   [[ -n "${MERGED:-}" && -d "${MERGED:-}" ]]
 }
 
@@ -223,7 +223,7 @@ _is_install_chroot() {
 # Chroot: runs via chroot $MERGED
 # Live: runs directly
 _run_in_root() {
-  if _is_install_chroot; then
+  if is_install_chroot; then
     chroot "$MERGED" /bin/bash -c "$*"
   else
     /bin/bash -c "$*"
@@ -267,17 +267,17 @@ _install_valve_hw_manifest() {
 # glibc than the pristine SteamOS image provides.
 #
 # Usage:
-#   check_arch_glibc_compat /host/path/to/downloaded/packages
+#   _check_arch_glibc_compat /host/path/to/downloaded/packages
 #
 # The directory must contain the complete package transaction downloaded by
 # pacman -Sw: explicitly requested packages plus any new/updated dependencies.
-check_arch_glibc_compat() {
+_check_arch_glibc_compat() {
   local pkgdir="${1:-}"
   local img_glibc scan max_glibc pkg subdir
   local -a pkg_files=()
 
   [[ -n "$pkgdir" ]] \
-    || die "check_arch_glibc_compat: package directory not specified"
+    || die "_check_arch_glibc_compat: package directory not specified"
   [[ -d "$pkgdir" ]] \
     || die "Arch package directory not found: $pkgdir"
 
@@ -401,13 +401,13 @@ _install_arch_hw_manifest() {
   txn_id="$$-$RANDOM"
   local needs_umount=0
 
-  if _is_install_chroot; then
+  if is_install_chroot; then
     arch_pkgdir_chroot="/tmp/arch-hw-pkgs.$txn_id"
     arch_pkgdir_host="${WORKDIR:?}/arch-hw-pkgs.$txn_id"
     rm -rf "$arch_pkgdir_host"
     mkdir -p "$arch_pkgdir_host"
     mkdir -p "$MERGED$arch_pkgdir_chroot"
-    mount --bind "$arch_pkgdir_host" "$MERGED$arch_pkgdir_chroot" \
+    cleanup_mount "$MERGED$arch_pkgdir_chroot" "arch pkgcache" -- --bind "$arch_pkgdir_host" \
       || die "Failed to bind-mount Arch package cache into chroot"
     needs_umount=1
   else
@@ -430,7 +430,8 @@ _install_arch_hw_manifest() {
   log "Downloading complete Arch hardware package transaction"
   # shellcheck disable=SC2086 # yes_flag and quoted_targets are intentionally word-split
   if ! pacman_download --config "$pacconf" --cachedir "$arch_pkgdir_chroot" $yes_flag -- $quoted_targets; then
-    ((needs_umount)) && umount "$MERGED$arch_pkgdir_chroot" 2>/dev/null
+    ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
+    cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
       rm -rf "$arch_pkgdir_host"
       die "Failed to download Arch hardware packages (required for NVIDIA driver)"
@@ -442,14 +443,15 @@ _install_arch_hw_manifest() {
   fi
 
   # glibc compatibility check — only meaningful in chroot (live system is native).
-  if _is_install_chroot; then
-    check_arch_glibc_compat "$arch_pkgdir_host"
+  if is_install_chroot; then
+    _check_arch_glibc_compat "$arch_pkgdir_host"
   fi
 
   log "Installing Arch hardware package transaction"
   # shellcheck disable=SC2086 # yes_flag and quoted_targets are intentionally word-split
   if ! pacman_install --config "$pacconf" --cachedir "$arch_pkgdir_chroot" $yes_flag -- $quoted_targets; then
-    ((needs_umount)) && umount "$MERGED$arch_pkgdir_chroot" 2>/dev/null
+    ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
+    cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
       rm -rf "$arch_pkgdir_host"
       die "Failed to install Arch hardware packages (required for NVIDIA driver)"
@@ -465,7 +467,7 @@ _install_arch_hw_manifest() {
   _run_in_root "pacman -Q nvidia-utils nvidia-open-dkms lib32-nvidia-utils linux-firmware 2>&1 || true"
   log "Pacman database:"
   _run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true"
-  if _is_install_chroot; then
+  if is_install_chroot; then
     local _chroot_dbpath
     _chroot_dbpath="$(resolve_pacman_dbpath "$MERGED")" && _chroot_dbpath="${_chroot_dbpath#"$MERGED"}" || _chroot_dbpath="/usr/lib/holo/pacmandb"
     log "NVIDIA local DB entries:"
@@ -497,7 +499,8 @@ _install_arch_hw_manifest() {
     fi
   done
 
-  ((needs_umount)) && umount "$MERGED$arch_pkgdir_chroot" 2>/dev/null
+  ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
+  cleanup_release "$MERGED$arch_pkgdir_chroot" || true
   rm -rf "$arch_pkgdir_host"
 }
 
@@ -567,13 +570,13 @@ _install_arch_hw_manifest_batch() {
   txn_id="$$-$RANDOM"
   local needs_umount=0
 
-  if _is_install_chroot; then
+  if is_install_chroot; then
     arch_pkgdir_chroot="/tmp/arch-hw-pkgs.$txn_id"
     arch_pkgdir_host="${WORKDIR:?}/arch-hw-pkgs.$txn_id"
     rm -rf "$arch_pkgdir_host"
     mkdir -p "$arch_pkgdir_host"
     mkdir -p "$MERGED$arch_pkgdir_chroot"
-    mount --bind "$arch_pkgdir_host" "$MERGED$arch_pkgdir_chroot" \
+    cleanup_mount "$MERGED$arch_pkgdir_chroot" "arch pkgcache batch" -- --bind "$arch_pkgdir_host" \
       || die "Failed to bind-mount Arch package cache into chroot"
     needs_umount=1
   else
@@ -596,7 +599,8 @@ _install_arch_hw_manifest_batch() {
   log "Downloading complete Arch hardware package transaction"
   # shellcheck disable=SC2086 # yes_flag and quoted_targets are intentionally word-split
   if ! pacman_download --config "$pacconf" --cachedir "$arch_pkgdir_chroot" $yes_flag -- $quoted_targets; then
-    ((needs_umount)) && umount "$MERGED$arch_pkgdir_chroot" 2>/dev/null
+    ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
+    cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
       rm -rf "$arch_pkgdir_host"
       die "Failed to download Arch hardware packages (required for NVIDIA driver)"
@@ -608,14 +612,15 @@ _install_arch_hw_manifest_batch() {
   fi
 
   # glibc compatibility check — only meaningful in chroot (live system is native).
-  if _is_install_chroot; then
-    check_arch_glibc_compat "$arch_pkgdir_host"
+  if is_install_chroot; then
+    _check_arch_glibc_compat "$arch_pkgdir_host"
   fi
 
   log "Installing Arch hardware package transaction"
   # shellcheck disable=SC2086 # yes_flag and quoted_targets are intentionally word-split
   if ! pacman_install --config "$pacconf" --cachedir "$arch_pkgdir_chroot" $yes_flag -- $quoted_targets; then
-    ((needs_umount)) && umount "$MERGED$arch_pkgdir_chroot" 2>/dev/null
+    ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
+    cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
       rm -rf "$arch_pkgdir_host"
       die "Failed to install Arch hardware packages (required for NVIDIA driver)"
@@ -631,7 +636,7 @@ _install_arch_hw_manifest_batch() {
   _run_in_root "pacman -Q nvidia-utils nvidia-open-dkms lib32-nvidia-utils linux-firmware 2>&1 || true"
   log "Pacman database:"
   _run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true"
-  if _is_install_chroot; then
+  if is_install_chroot; then
     local _chroot_dbpath
     _chroot_dbpath="$(resolve_pacman_dbpath "$MERGED")" && _chroot_dbpath="${_chroot_dbpath#"$MERGED"}" || _chroot_dbpath="/usr/lib/holo/pacmandb"
     log "NVIDIA local DB entries:"
@@ -663,7 +668,8 @@ _install_arch_hw_manifest_batch() {
     fi
   done
 
-  ((needs_umount)) && umount "$MERGED$arch_pkgdir_chroot" 2>/dev/null
+  ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
+  cleanup_release "$MERGED$arch_pkgdir_chroot" || true
   rm -rf "$arch_pkgdir_host"
 }
 
@@ -697,7 +703,7 @@ _install_pacman_hw_batch() {
   local -a orig_targets=("${targets[@]}")
   local -a orig_pkgs=("${pkgs[@]}")
   local interactive=0
-  _is_interactive && interactive=1
+  is_interactive && interactive=1
   # shellcheck disable=SC2034 # effective_mode is used via nameref in pacman_preflight_with_fallback
   local effective_mode="additive"
   local -a preflight_extra_args=()
@@ -776,7 +782,7 @@ _install_pacman_hw_batch() {
     _run_in_root "pacman -Q nvidia-utils nvidia-open-dkms lib32-nvidia-utils linux-firmware 2>&1 || true" >&2
     debug "Pacman database:"
     _run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true" >&2
-    if _is_install_chroot; then
+    if is_install_chroot; then
       local _chroot_dbpath
       _chroot_dbpath="$(resolve_pacman_dbpath "$MERGED")" && _chroot_dbpath="${_chroot_dbpath#"$MERGED"}" || _chroot_dbpath="/usr/lib/holo/pacmandb"
       debug "NVIDIA local DB entries:"
@@ -1085,7 +1091,7 @@ install_hw_libs() {
 
   # Install kernel headers BEFORE nvidia-open-dkms so the DKMS hook
   # sees a real kernel with headers when the package is installed.
-  if ((HW_NVIDIA_REQUESTED)) && _is_install_chroot; then
+  if ((HW_NVIDIA_REQUESTED)) && is_install_chroot; then
     # shellcheck disable=SC2153  # KVER is set by detect_kernel_version in common_modules.sh
     if [[ ! -e "$MERGED/usr/lib/modules/$KVER/build/Makefile" ]]; then
       log "Installing kernel headers for $KVER before nvidia-open-dkms"
@@ -1136,7 +1142,7 @@ install_hw_libs() {
   # build.  This block handles diagnostics, environment repair, and
   # post-build verification.
   if ((HW_NVIDIA_REQUESTED)); then
-    if _is_install_chroot; then
+    if is_install_chroot; then
       # shellcheck disable=SC2153  # KVER is set by detect_kernel_version in common_modules.sh
 
       # ── Discover NVIDIA version (diagnostic) ────────────────────────────
@@ -1246,7 +1252,7 @@ install_hw_libs() {
 
   # AMD verification: check that mesa and vulkan-radeon are installed if AMD was requested.
   if [[ -n "${HW_SUPPORT_ITEMS:-}" ]] && [[ " $HW_SUPPORT_ITEMS " == *" mesa "* || " $HW_SUPPORT_ITEMS " == *" vulkan-radeon "* ]]; then
-    if _is_install_chroot; then
+    if is_install_chroot; then
       log "AMD verification: checking Mesa and RADV Vulkan packages"
       local _amd_pkgs=("mesa" "lib32-mesa" "vulkan-radeon" "lib32-vulkan-radeon")
       local _amd_missing=0
@@ -1287,7 +1293,7 @@ install_hw_libs() {
 # Returns 0 if all packages are installed, 1 if any are missing.
 # Prints status for each package to stdout.
 
-# Cached package list for verify_hw_libs (populated on first use)
+# Cached package list for _verify_hw_libs (populated on first use)
 _VERIFY_HW_LIBS_PKG_CACHE=""
 _VERIFY_HW_LIBS_PKG_CACHE_READY=0
 
@@ -1297,21 +1303,21 @@ _verify_hw_libs_ensure_cache() {
   fi
 
   local _context="live"
-  _is_install_chroot && _context="chroot:$MERGED"
-  debug "  [verify_hw_libs] context=$_context"
+  is_install_chroot && _context="chroot:$MERGED"
+  debug "  [_verify_hw_libs] context=$_context"
 
   _VERIFY_HW_LIBS_PKG_CACHE="$(_run_in_root "pacman -Qq" 2>/dev/null)" || true
   _VERIFY_HW_LIBS_PKG_CACHE_READY=1
 
   if [[ -n "$_VERIFY_HW_LIBS_PKG_CACHE" ]]; then
-    debug "  [verify_hw_libs] installed packages:"
+    debug "  [_verify_hw_libs] installed packages:"
     while IFS= read -r _pkg; do
       debug "    $_pkg"
     done <<<"$_VERIFY_HW_LIBS_PKG_CACHE"
   fi
 }
 
-verify_hw_libs() {
+_verify_hw_libs() {
   local packages="${1:-}"
   local missing=0
 
@@ -1350,7 +1356,7 @@ verify_hw_libs() {
       local ver _reason
       ver="$(echo "$_info" | sed -n 's/^Version *: //p')"
       _reason="$(echo "$_info" | sed -n 's/^Install Reason *: //p')"
-      debug "  [verify_hw_libs] $pkg $ver — ${_reason:-unknown}"
+      debug "  [_verify_hw_libs] $pkg $ver — ${_reason:-unknown}"
       debug "  ✓ $pkg $ver"
       ((++_verify_present))
     else
@@ -1363,7 +1369,7 @@ verify_hw_libs() {
   # Check NVIDIA DKMS module if nvidia-open-dkms is installed
   if _run_in_root "pacman -Q nvidia-open-dkms" &>/dev/null; then
     local kver
-    if _is_install_chroot; then
+    if is_install_chroot; then
       kver="${KVER:-}"
     else
       kver="$(uname -r)"

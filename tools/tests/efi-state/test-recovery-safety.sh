@@ -58,7 +58,7 @@ trap test_harness_cleanup EXIT
 # Setup recovery fixture, snapshot A efi/bootconf before apply, apply
 # recovery state to B, verify A efi/bootconf byte-identical.
 # ============================================================================
-test_r02_rollback_slot_preserved() {
+_test_r02_rollback_slot_preserved() {
   recovery_scenario_setup || exit 1
 
   # Snapshot A-slot EFI grub.cfg checksum before apply
@@ -140,7 +140,7 @@ test_r02_rollback_slot_preserved() {
 # Setup recovery fixture with valid existing config, simulate update-grub
 # failure, verify direct patch succeeds.
 # ============================================================================
-test_r03a_update_grub_fallback() {
+_test_r03a_update_grub_fallback() {
   recovery_scenario_setup || exit 1
 
   # Setup: create a failing update-grub shim
@@ -209,7 +209,7 @@ test_r03a_update_grub_fallback() {
 # Setup recovery fixture with stale config (wrong UUID), simulate update-grub
 # failure, verify hard failure.
 # ============================================================================
-test_r03b_stale_config_rejected() {
+_test_r03b_stale_config_rejected() {
   recovery_scenario_setup || exit 1
 
   # Create a stale grub.cfg with a wrong UUID
@@ -281,7 +281,7 @@ test_r03b_stale_config_rejected() {
 # Setup recovery fixture, remove update-grub from PATH, verify preflight
 # failure.
 # ============================================================================
-test_r03c_missing_tool_caught() {
+_test_r03c_missing_tool_caught() {
   recovery_scenario_setup || exit 1
 
   # Save the original PATH
@@ -381,7 +381,7 @@ MISSING_EOF
 # Setup recovery fixture, apply recovery state, verify only B rootfs files
 # changed, verify params exactly once.
 # ============================================================================
-test_r07_persistent_defaults_reconciled() {
+_test_r07_persistent_defaults_reconciled() {
   recovery_scenario_setup || exit 1
 
   # Capture rootfs state before apply (B rootfs files)
@@ -496,7 +496,7 @@ test_r07_persistent_defaults_reconciled() {
 # Setup recovery fixture with existing B.conf, apply recovery state, verify
 # target config preserved unless authorized.
 # ============================================================================
-test_r08_bootconf_ownership() {
+_test_r08_bootconf_ownership() {
   recovery_scenario_setup || exit 1
 
   # Verify B.conf exists before apply
@@ -580,7 +580,7 @@ test_r08_bootconf_ownership() {
 #
 # Setup recovery fixture, apply recovery state, verify rootfs/efi/esp flushed.
 # ============================================================================
-test_r09_filesystems_flushed() {
+_test_r09_filesystems_flushed() {
   recovery_scenario_setup || exit 1
 
   # Apply recovery state
@@ -655,7 +655,7 @@ test_r09_filesystems_flushed() {
 # Setup recovery fixture, apply recovery state, inject failure, verify
 # prior artifacts survive.
 # ============================================================================
-test_r10_runtime_failure_rolls_back() {
+_test_r10_runtime_failure_rolls_back() {
   recovery_scenario_setup || exit 1
 
   # Apply recovery state first (so we have a valid post-apply state)
@@ -772,7 +772,7 @@ test_r10_runtime_failure_rolls_back() {
 # Setup recovery fixture, apply recovery state to B, verify no writes to
 # A rootfs/efi/bootconf.
 # ============================================================================
-test_r11_non_target_isolation() {
+_test_r11_non_target_isolation() {
   recovery_scenario_setup || exit 1
 
   # Snapshot all A-slot artifacts before apply
@@ -879,7 +879,7 @@ test_r11_non_target_isolation() {
 # Setup recovery fixture, apply recovery state twice, verify no duplicate
 # params or bootconf mutations.
 # ============================================================================
-test_r12_repatch_idempotency() {
+_test_r12_repatch_idempotency() {
   recovery_scenario_setup || exit 1
 
   # Apply recovery state (first time)
@@ -1016,70 +1016,70 @@ test_r12_repatch_idempotency() {
 
 # R-02
 test_harness_begin_test "R-02: Rollback slot preserved"
-(test_r02_rollback_slot_preserved) || true
+(_test_r02_rollback_slot_preserved) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-03a
 test_harness_begin_test "R-03a: Validated update-grub fallback"
-(test_r03a_update_grub_fallback) || true
+(_test_r03a_update_grub_fallback) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-03b
 test_harness_begin_test "R-03b: Stale existing config rejected"
-(test_r03b_stale_config_rejected) || true
+(_test_r03b_stale_config_rejected) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-03c
 test_harness_begin_test "R-03c: Missing tool caught early"
-(test_r03c_missing_tool_caught) || true
+(_test_r03c_missing_tool_caught) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-07
 test_harness_begin_test "R-07: Persistent defaults reconciled"
-(test_r07_persistent_defaults_reconciled) || true
+(_test_r07_persistent_defaults_reconciled) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-08
 test_harness_begin_test "R-08: Bootconf ownership respected"
-(test_r08_bootconf_ownership) || true
+(_test_r08_bootconf_ownership) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-09
 test_harness_begin_test "R-09: Filesystems flushed"
-(test_r09_filesystems_flushed) || true
+(_test_r09_filesystems_flushed) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-10
 test_harness_begin_test "R-10: Runtime failure rolls back"
-(test_r10_runtime_failure_rolls_back) || true
+(_test_r10_runtime_failure_rolls_back) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-11
 test_harness_begin_test "R-11: Non-target isolation"
-(test_r11_non_target_isolation) || true
+(_test_r11_non_target_isolation) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-12
 test_harness_begin_test "R-12: Repatch idempotency"
-(test_r12_repatch_idempotency) || true
+(_test_r12_repatch_idempotency) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi

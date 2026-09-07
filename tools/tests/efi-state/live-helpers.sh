@@ -1063,70 +1063,70 @@ verify_keep_list_exact_once() {
 # ============================================================================
 
 # Get the target rootfs UUID for the current live fixture
-# Usage: get_live_target_uuid
-get_live_target_uuid() {
+# Usage: _get_live_target_uuid
+_get_live_target_uuid() {
   if [[ -z "$LIVE_TARGET_UUID" ]]; then
-    echo "ERROR: get_live_target_uuid: LIVE_TARGET_UUID not set (call live_scenario_setup first)" >&2
+    echo "ERROR: _get_live_target_uuid: LIVE_TARGET_UUID not set (call live_scenario_setup first)" >&2
     return 1
   fi
   echo "$LIVE_TARGET_UUID"
 }
 
 # Get the current (slot A) rootfs UUID for the current live fixture
-# Usage: get_live_current_uuid
-get_live_current_uuid() {
+# Usage: _get_live_current_uuid
+_get_live_current_uuid() {
   if [[ -z "$LIVE_CURRENT_UUID" ]]; then
-    echo "ERROR: get_live_current_uuid: LIVE_CURRENT_UUID not set (call live_scenario_setup first)" >&2
+    echo "ERROR: _get_live_current_uuid: LIVE_CURRENT_UUID not set (call live_scenario_setup first)" >&2
     return 1
   fi
   echo "$LIVE_CURRENT_UUID"
 }
 
 # Get the EFI directory for the current live fixture
-# Usage: get_live_efi_dir
-get_live_efi_dir() {
+# Usage: _get_live_efi_dir
+_get_live_efi_dir() {
   if [[ -z "$LIVE_EFI_DIR" ]]; then
-    echo "ERROR: get_live_efi_dir: LIVE_EFI_DIR not set (call live_scenario_setup first)" >&2
+    echo "ERROR: _get_live_efi_dir: LIVE_EFI_DIR not set (call live_scenario_setup first)" >&2
     return 1
   fi
   echo "$LIVE_EFI_DIR"
 }
 
 # Get the rootfs directory for the current live fixture
-# Usage: get_live_rootfs_dir
-get_live_rootfs_dir() {
+# Usage: _get_live_rootfs_dir
+_get_live_rootfs_dir() {
   if [[ -z "$LIVE_ROOTFS_DIR" ]]; then
-    echo "ERROR: get_live_rootfs_dir: LIVE_ROOTFS_DIR not set (call live_scenario_setup first)" >&2
+    echo "ERROR: _get_live_rootfs_dir: LIVE_ROOTFS_DIR not set (call live_scenario_setup first)" >&2
     return 1
   fi
   echo "$LIVE_ROOTFS_DIR"
 }
 
 # Get the ESP directory for the current live fixture
-# Usage: get_live_esp_dir
-get_live_esp_dir() {
+# Usage: _get_live_esp_dir
+_get_live_esp_dir() {
   if [[ -z "$LIVE_ESP_DIR" ]]; then
-    echo "ERROR: get_live_esp_dir: LIVE_ESP_DIR not set (call live_scenario_setup first)" >&2
+    echo "ERROR: _get_live_esp_dir: LIVE_ESP_DIR not set (call live_scenario_setup first)" >&2
     return 1
   fi
   echo "$LIVE_ESP_DIR"
 }
 
 # Get the metadata directory for the current live fixture
-# Usage: get_live_metadata_dir
-get_live_metadata_dir() {
+# Usage: _get_live_metadata_dir
+_get_live_metadata_dir() {
   if [[ -z "$LIVE_METADATA_DIR" ]]; then
-    echo "ERROR: get_live_metadata_dir: LIVE_METADATA_DIR not set (call live_scenario_setup first)" >&2
+    echo "ERROR: _get_live_metadata_dir: LIVE_METADATA_DIR not set (call live_scenario_setup first)" >&2
     return 1
   fi
   echo "$LIVE_METADATA_DIR"
 }
 
 # Get the namespace for the current live fixture
-# Usage: get_live_namespace
-get_live_namespace() {
+# Usage: _get_live_namespace
+_get_live_namespace() {
   if [[ -z "$LIVE_NAMESPACE" ]]; then
-    echo "ERROR: get_live_namespace: LIVE_NAMESPACE not set (call live_scenario_setup first)" >&2
+    echo "ERROR: _get_live_namespace: LIVE_NAMESPACE not set (call live_scenario_setup first)" >&2
     return 1
   fi
   echo "$LIVE_NAMESPACE"

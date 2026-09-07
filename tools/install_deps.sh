@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-install_package() {
+_install_package() {
   local pkg="$1"
   if command -v pacman &>/dev/null; then
     sudo pacman -S --needed --noconfirm "$pkg"
@@ -27,6 +27,6 @@ install_package() {
 }
 
 echo "Installing lint dependencies..."
-install_package shellcheck
-install_package shfmt
+_install_package shellcheck
+_install_package shfmt
 echo "Done"

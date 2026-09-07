@@ -121,8 +121,8 @@ get_build_recipe() {
 # Args: $1 = item name
 # Output: version string (e.g., "latest", "5841e54418d3...")
 
-get_build_item_version() {
-  local item_name="${1:?get_build_item_version: missing item name}"
+_get_build_item_version() {
+  local item_name="${1:?_get_build_item_version: missing item name}"
   local conf="$CUSTOMIZATION_DIR/configs/hw-packages.conf"
 
   if [[ ! -r "$conf" ]]; then

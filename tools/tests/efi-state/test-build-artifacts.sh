@@ -55,7 +55,7 @@ source "$_SCRIPT_DIR/topology.sh"
 # Setup build fixture → apply EFI state → run all validators → verify pass.
 # ---------------------------------------------------------------------------
 
-test_b01_all_artifacts_pass_semantic_validation() {
+_test_b01_all_artifacts_pass_semantic_validation() {
   test_harness_begin_test "B-01: Happy path — all generated artifacts pass semantic validation"
 
   # Setup build fixture
@@ -100,7 +100,7 @@ test_b01_all_artifacts_pass_semantic_validation() {
 # valid PE, and contains the target UUID.
 # ---------------------------------------------------------------------------
 
-test_b02_efi_binary_generated_correctly() {
+_test_b02_efi_binary_generated_correctly() {
   test_harness_begin_test "B-02: EFI binary generated correctly"
 
   build_scenario_setup || {
@@ -167,7 +167,7 @@ test_b02_efi_binary_generated_correctly() {
 # and required params appear exactly once per entry.
 # ---------------------------------------------------------------------------
 
-test_b03_grub_configuration_generated_correctly() {
+_test_b03_grub_configuration_generated_correctly() {
   test_harness_begin_test "B-03: GRUB configuration generated correctly"
 
   build_scenario_setup || {
@@ -245,7 +245,7 @@ test_b03_grub_configuration_generated_correctly() {
 # files (not symlinks) and contain exact target PARTUUIDs.
 # ---------------------------------------------------------------------------
 
-test_b04_partsets_contain_target_identities() {
+_test_b04_partsets_contain_target_identities() {
   test_harness_begin_test "B-04: Partsets contain target identities"
 
   build_scenario_setup || {
@@ -394,7 +394,7 @@ test_b04_partsets_contain_target_identities() {
 # parseable, and contains expected build-state values.
 # ---------------------------------------------------------------------------
 
-test_b05_slot_a_bootconf_created() {
+_test_b05_slot_a_bootconf_created() {
   test_harness_begin_test "B-05: Slot-A bootconf created"
 
   build_scenario_setup || {
@@ -515,9 +515,9 @@ test_b05_slot_a_bootconf_created() {
 
 # shellcheck disable=SC2034  # BUILD_ARTIFACT_TESTS is part of the public API (read by consumers)
 BUILD_ARTIFACT_TESTS=(
-  test_b01_all_artifacts_pass_semantic_validation
-  test_b02_efi_binary_generated_correctly
-  test_b03_grub_configuration_generated_correctly
-  test_b04_partsets_contain_target_identities
-  test_b05_slot_a_bootconf_created
+  _test_b01_all_artifacts_pass_semantic_validation
+  _test_b02_efi_binary_generated_correctly
+  _test_b03_grub_configuration_generated_correctly
+  _test_b04_partsets_contain_target_identities
+  _test_b05_slot_a_bootconf_created
 )

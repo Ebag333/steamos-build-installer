@@ -13,11 +13,11 @@
 # Functions:
 #   generate_deterministic_uuid   - UUID from test ID + role
 #   generate_deterministic_partuuid - PARTUUID from test ID + partition
-#   create_topology_json          - write topology.json with all identities
-#   parse_topology_json           - read topology.json and export env vars
-#   get_partition_uuid            - query UUID for a partition
-#   get_partition_partuuid        - query PARTUUID for a partition
-#   get_slot_device               - device path for a slot's partition
+#   _create_topology_json          - write topology.json with all identities
+#   _parse_topology_json           - read topology.json and export env vars
+#   _get_partition_uuid            - query UUID for a partition
+#   _get_partition_partuuid        - query PARTUUID for a partition
+#   _get_slot_device               - device path for a slot's partition
 #
 # Topologies:
 #   single-slot (Build): rootfs-A, efi-A, var-A, esp
@@ -83,7 +83,7 @@ generate_deterministic_partuuid() {
 }
 
 # ── Topology JSON helpers ──────────────────────────────────────────────────
-# create_topology_json TEST_ID TOPOLOGY_TYPE OUTPUT_DIR
+# _create_topology_json TEST_ID TOPOLOGY_TYPE OUTPUT_DIR
 #
 #   TOPOLOGY_TYPE is "single-slot" or "dual-slot".
 #
@@ -98,17 +98,17 @@ generate_deterministic_partuuid() {
 #     }
 #
 #   Device paths follow the convention /dev/disk/by-partuuid/<partuuid>.
-create_topology_json() {
-  local test_id="${1:?create_topology_json: missing TEST_ID}"
-  local topology_type="${2:?create_topology_json: missing TOPOLOGY_TYPE}"
-  local output_dir="${3:?create_topology_json: missing OUTPUT_DIR}"
+_create_topology_json() {
+  local test_id="${1:?_create_topology_json: missing TEST_ID}"
+  local topology_type="${2:?_create_topology_json: missing TOPOLOGY_TYPE}"
+  local output_dir="${3:?_create_topology_json: missing OUTPUT_DIR}"
 
   local -a partitions
   case "$topology_type" in
     single-slot) partitions=("${_TOPOLOGY_SINGLE_SLOT_PARTITIONS[@]}") ;;
     dual-slot) partitions=("${_TOPOLOGY_DUAL_SLOT_PARTITIONS[@]}") ;;
     *)
-      echo "create_topology_json: unknown topology type: $topology_type" >&2
+      echo "_create_topology_json: unknown topology type: $topology_type" >&2
       return 1
       ;;
   esac
@@ -144,7 +144,7 @@ create_topology_json() {
 }
 
 # ── Topology JSON parsing ──────────────────────────────────────────────────
-# parse_topology_json TOPOLOGY_FILE
+# _parse_topology_json TOPOLOGY_FILE
 #
 #   Read a topology.json file and export shell variables:
 #     TOPOLOGY_TEST_ID          — the test ID
@@ -158,11 +158,11 @@ create_topology_json() {
 #   for shell variable safety (e.g. rootfs-A → rootfs_A).
 #
 #   Returns 0 on success, 1 on parse failure.
-parse_topology_json() {
-  local toppo_file="${1:?parse_topology_json: missing TOPOLOGY_FILE}"
+_parse_topology_json() {
+  local toppo_file="${1:?_parse_topology_json: missing TOPOLOGY_FILE}"
 
   if [[ ! -f "$toppo_file" ]]; then
-    echo "parse_topology_json: file not found: $toppo_file" >&2
+    echo "_parse_topology_json: file not found: $toppo_file" >&2
     return 1
   fi
 
@@ -174,7 +174,7 @@ parse_topology_json() {
   TOPOLOGY_TYPE="$(printf '%s' "$content" | grep -oP '"topology"\s*:\s*"\K[^"]*')"
 
   if [[ -z "$TOPOLOGY_TEST_ID" || -z "$TOPOLOGY_TYPE" ]]; then
-    echo "parse_topology_json: failed to extract test_id or topology from $toppo_file" >&2
+    echo "_parse_topology_json: failed to extract test_id or topology from $toppo_file" >&2
     return 1
   fi
 
@@ -219,7 +219,7 @@ parse_topology_json() {
     fi
   done <<<"$content"
 
-  # shellcheck disable=SC2034  # TOPOLOGY_PARTITIONS is part of parse_topology_json API contract
+  # shellcheck disable=SC2034  # TOPOLOGY_PARTITIONS is part of _parse_topology_json API contract
   TOPOLOGY_PARTITIONS="${parts[*]}"
 
   # Export per-partition variables.
@@ -249,27 +249,27 @@ parse_topology_json() {
 }
 
 # ── Query helpers ──────────────────────────────────────────────────────────
-# get_partition_uuid TEST_ID PARTITION
+# _get_partition_uuid TEST_ID PARTITION
 #   Print the UUID for the given partition.
-get_partition_uuid() {
-  local test_id="${1:?get_partition_uuid: missing TEST_ID}"
-  local partition="${2:?get_partition_uuid: missing PARTITION}"
+_get_partition_uuid() {
+  local test_id="${1:?_get_partition_uuid: missing TEST_ID}"
+  local partition="${2:?_get_partition_uuid: missing PARTITION}"
   generate_deterministic_uuid "$test_id" "$partition"
 }
 
-# get_partition_partuuid TEST_ID PARTITION
+# _get_partition_partuuid TEST_ID PARTITION
 #   Print the PARTUUID for the given partition.
-get_partition_partuuid() {
-  local test_id="${1:?get_partition_partuuid: missing TEST_ID}"
-  local partition="${2:?get_partition_partuuid: missing PARTITION}"
+_get_partition_partuuid() {
+  local test_id="${1:?_get_partition_partuuid: missing TEST_ID}"
+  local partition="${2:?_get_partition_partuuid: missing PARTITION}"
   generate_deterministic_partuuid "$test_id" "$partition"
 }
 
-# get_slot_device TEST_ID PARTITION
+# _get_slot_device TEST_ID PARTITION
 #   Print the device path (/dev/disk/by-partuuid/...) for the partition.
-get_slot_device() {
-  local test_id="${1:?get_slot_device: missing TEST_ID}"
-  local partition="${2:?get_slot_device: missing PARTITION}"
+_get_slot_device() {
+  local test_id="${1:?_get_slot_device: missing TEST_ID}"
+  local partition="${2:?_get_slot_device: missing PARTITION}"
   local partuuid
   partuuid="$(generate_deterministic_partuuid "$test_id" "$partition")"
   printf '/dev/disk/by-partuuid/%s' "$partuuid"

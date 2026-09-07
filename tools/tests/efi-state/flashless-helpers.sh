@@ -377,7 +377,7 @@ simulate_flashless_apply() {
   fi
 
   # 6. Activate (set B.conf image-invalid=0, mark active)
-  if ! simulate_flashless_activate "$esp_dir"; then
+  if ! _simulate_flashless_activate "$esp_dir"; then
     echo "ERROR: simulate_flashless_apply: activate failed" >&2
     rc=1
   fi
@@ -388,6 +388,7 @@ simulate_flashless_apply() {
 # ============================================================================
 # Internal: clear btrfs ro (make writable)
 # ============================================================================
+# lint-ignore: private-funcs
 _flashless_clear_btrfs_ro() {
   # In the flashless scenario, clear btrfs ro before writing to target slot.
   local ro_state="$FLASHLESS_FIXTURE_DIR/.btrfs-ro"
@@ -398,6 +399,7 @@ _flashless_clear_btrfs_ro() {
 # ============================================================================
 # Internal: restore btrfs ro after writing
 # ============================================================================
+# lint-ignore: private-funcs
 _flashless_restore_btrfs_ro() {
   # Restore btrfs ro to read-only after completing writes to target slot.
   local ro_state="$FLASHLESS_FIXTURE_DIR/.btrfs-ro"
@@ -448,6 +450,7 @@ simulate_flashless_format_target() {
 # ============================================================================
 # Internal: write EFI artifacts to target slot
 # ============================================================================
+# lint-ignore: private-funcs
 _flashless_write_efi_artifacts() {
   local rootfs_dir="$1"
   local efi_dir="$2"
@@ -644,7 +647,7 @@ BOOTCONF_B_EOF
 }
 
 # ============================================================================
-# simulate_flashless_activate
+# _simulate_flashless_activate
 #
 # Activate slot B by setting B.conf image-invalid=0 and marking active
 # via rauc status mark-active.
@@ -653,7 +656,7 @@ BOOTCONF_B_EOF
 # occur after validation confirms B is valid.
 #
 # Usage:
-#   simulate_flashless_activate [ESP_DIR]
+#   _simulate_flashless_activate [ESP_DIR]
 #
 # Arguments:
 #   ESP_DIR - ESP directory (default: FLASHLESS_ESP_DIR)
@@ -667,14 +670,14 @@ BOOTCONF_B_EOF
 #   0 - Activation completed successfully
 #   1 - Activation failed
 # ============================================================================
-simulate_flashless_activate() {
+_simulate_flashless_activate() {
   local esp_dir="${1:-$FLASHLESS_ESP_DIR}"
   local conf_dir="$esp_dir/SteamOS/conf"
   local b_conf="$conf_dir/B.conf"
 
   # 1. Verify B.conf exists
   if [[ ! -f "$b_conf" ]]; then
-    echo "ERROR: simulate_flashless_activate: B.conf not found: $b_conf" >&2
+    echo "ERROR: _simulate_flashless_activate: B.conf not found: $b_conf" >&2
     return 1
   fi
 
@@ -682,7 +685,7 @@ simulate_flashless_activate() {
   local current_invalid
   current_invalid="$(grep '^image-invalid=' "$b_conf" 2>/dev/null | cut -d= -f2)"
   if [[ "$current_invalid" != "1" ]]; then
-    echo "ERROR: simulate_flashless_activate: B.conf not in staging state (image-invalid='$current_invalid', expected '1')" >&2
+    echo "ERROR: _simulate_flashless_activate: B.conf not in staging state (image-invalid='$current_invalid', expected '1')" >&2
     return 1
   fi
 
@@ -1439,70 +1442,70 @@ verify_btrfs_ro_restored() {
 # ============================================================================
 
 # Get the target rootfs UUID for the current flashless fixture
-# Usage: get_flashless_target_uuid
-get_flashless_target_uuid() {
+# Usage: _get_flashless_target_uuid
+_get_flashless_target_uuid() {
   if [[ -z "$FLASHLESS_TARGET_UUID" ]]; then
-    echo "ERROR: get_flashless_target_uuid: FLASHLESS_TARGET_UUID not set (call flashless_scenario_setup first)" >&2
+    echo "ERROR: _get_flashless_target_uuid: FLASHLESS_TARGET_UUID not set (call flashless_scenario_setup first)" >&2
     return 1
   fi
   echo "$FLASHLESS_TARGET_UUID"
 }
 
 # Get the current (slot A) rootfs UUID for the current flashless fixture
-# Usage: get_flashless_current_uuid
-get_flashless_current_uuid() {
+# Usage: _get_flashless_current_uuid
+_get_flashless_current_uuid() {
   if [[ -z "$FLASHLESS_CURRENT_UUID" ]]; then
-    echo "ERROR: get_flashless_current_uuid: FLASHLESS_CURRENT_UUID not set (call flashless_scenario_setup first)" >&2
+    echo "ERROR: _get_flashless_current_uuid: FLASHLESS_CURRENT_UUID not set (call flashless_scenario_setup first)" >&2
     return 1
   fi
   echo "$FLASHLESS_CURRENT_UUID"
 }
 
 # Get the EFI directory for the current flashless fixture
-# Usage: get_flashless_efi_dir
-get_flashless_efi_dir() {
+# Usage: _get_flashless_efi_dir
+_get_flashless_efi_dir() {
   if [[ -z "$FLASHLESS_EFI_DIR" ]]; then
-    echo "ERROR: get_flashless_efi_dir: FLASHLESS_EFI_DIR not set (call flashless_scenario_setup first)" >&2
+    echo "ERROR: _get_flashless_efi_dir: FLASHLESS_EFI_DIR not set (call flashless_scenario_setup first)" >&2
     return 1
   fi
   echo "$FLASHLESS_EFI_DIR"
 }
 
 # Get the rootfs directory for the current flashless fixture
-# Usage: get_flashless_rootfs_dir
-get_flashless_rootfs_dir() {
+# Usage: _get_flashless_rootfs_dir
+_get_flashless_rootfs_dir() {
   if [[ -z "$FLASHLESS_ROOTFS_DIR" ]]; then
-    echo "ERROR: get_flashless_rootfs_dir: FLASHLESS_ROOTFS_DIR not set (call flashless_scenario_setup first)" >&2
+    echo "ERROR: _get_flashless_rootfs_dir: FLASHLESS_ROOTFS_DIR not set (call flashless_scenario_setup first)" >&2
     return 1
   fi
   echo "$FLASHLESS_ROOTFS_DIR"
 }
 
 # Get the ESP directory for the current flashless fixture
-# Usage: get_flashless_esp_dir
-get_flashless_esp_dir() {
+# Usage: _get_flashless_esp_dir
+_get_flashless_esp_dir() {
   if [[ -z "$FLASHLESS_ESP_DIR" ]]; then
-    echo "ERROR: get_flashless_esp_dir: FLASHLESS_ESP_DIR not set (call flashless_scenario_setup first)" >&2
+    echo "ERROR: _get_flashless_esp_dir: FLASHLESS_ESP_DIR not set (call flashless_scenario_setup first)" >&2
     return 1
   fi
   echo "$FLASHLESS_ESP_DIR"
 }
 
 # Get the metadata directory for the current flashless fixture
-# Usage: get_flashless_metadata_dir
-get_flashless_metadata_dir() {
+# Usage: _get_flashless_metadata_dir
+_get_flashless_metadata_dir() {
   if [[ -z "$FLASHLESS_METADATA_DIR" ]]; then
-    echo "ERROR: get_flashless_metadata_dir: FLASHLESS_METADATA_DIR not set (call flashless_scenario_setup first)" >&2
+    echo "ERROR: _get_flashless_metadata_dir: FLASHLESS_METADATA_DIR not set (call flashless_scenario_setup first)" >&2
     return 1
   fi
   echo "$FLASHLESS_METADATA_DIR"
 }
 
 # Get the namespace for the current flashless fixture
-# Usage: get_flashless_namespace
-get_flashless_namespace() {
+# Usage: _get_flashless_namespace
+_get_flashless_namespace() {
   if [[ -z "$FLASHLESS_NAMESPACE" ]]; then
-    echo "ERROR: get_flashless_namespace: FLASHLESS_NAMESPACE not set (call flashless_scenario_setup first)" >&2
+    echo "ERROR: _get_flashless_namespace: FLASHLESS_NAMESPACE not set (call flashless_scenario_setup first)" >&2
     return 1
   fi
   echo "$FLASHLESS_NAMESPACE"

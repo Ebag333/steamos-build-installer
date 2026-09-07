@@ -54,6 +54,7 @@ _pf_get_major_minor() {
 #     Device-mapper: dm-0 → resolves to actual backing disk
 #   Prints the parent disk basename (e.g. "nvme0n1", "sda").
 #   Dies if the parent cannot be determined.
+# lint-ignore: private-funcs
 _pf_resolve_parent_disk() {
   local device="${1:?_pf_resolve_parent_disk: missing device path}"
 
@@ -370,15 +371,15 @@ preflight_scenario_require_root() {
   debug "PF-26: running as root"
 }
 
-# preflight_build_efi_target_unambiguous EFI_DEV LOOP_DEV
+# _preflight_build_efi_target_unambiguous EFI_DEV LOOP_DEV
 #   PF-27: Verify the supplied EFI_DEV is a valid child partition of LOOP_DEV
 #   with the expected GPT label, and that no "efi-B" partition exists on the
 #   same loop image.
 #   Args: EFI_DEV — the EFI partition device to validate
 #         LOOP_DEV — the parent loop device the image is attached to
-preflight_build_efi_target_unambiguous() {
-  local efi_dev="${1:?preflight_build_efi_target_unambiguous: missing EFI_DEV}"
-  local loop_dev="${2:?preflight_build_efi_target_unambiguous: missing LOOP_DEV}"
+_preflight_build_efi_target_unambiguous() {
+  local efi_dev="${1:?_preflight_build_efi_target_unambiguous: missing EFI_DEV}"
+  local loop_dev="${2:?_preflight_build_efi_target_unambiguous: missing LOOP_DEV}"
 
   # --- Verify EFI_DEV is a block device ---
   [[ -b "$efi_dev" ]] \
@@ -427,17 +428,17 @@ preflight_build_efi_target_unambiguous() {
   debug "PF-27: efi target unambiguous (efi-A=$efi_dev, no efi-B on $loop_dev)"
 }
 
-# preflight_build_partitions_same_image ROOTFS_DEV EFI_DEV LOOP_DEV
+# _preflight_build_partitions_same_image ROOTFS_DEV EFI_DEV LOOP_DEV
 #   PF-28: Verify rootfs-A and efi-A are distinct child partitions of the
 #   supplied LOOP_DEV, have the expected GPT labels ("rootfs-A" and "efi-A"),
 #   and have valid PARTUUIDs.
 #   Args: ROOTFS_DEV — the rootfs partition device
 #         EFI_DEV    — the EFI partition device
 #         LOOP_DEV   — the parent loop device the image is attached to
-preflight_build_partitions_same_image() {
-  local rootfs_dev="${1:?preflight_build_partitions_same_image: missing ROOTFS_DEV}"
-  local efi_dev="${2:?preflight_build_partitions_same_image: missing EFI_DEV}"
-  local loop_dev="${3:?preflight_build_partitions_same_image: missing LOOP_DEV}"
+_preflight_build_partitions_same_image() {
+  local rootfs_dev="${1:?_preflight_build_partitions_same_image: missing ROOTFS_DEV}"
+  local efi_dev="${2:?_preflight_build_partitions_same_image: missing EFI_DEV}"
+  local loop_dev="${3:?_preflight_build_partitions_same_image: missing LOOP_DEV}"
 
   # --- Verify both are block devices ---
   [[ -b "$rootfs_dev" ]] \
@@ -482,7 +483,7 @@ preflight_build_partitions_same_image() {
   debug "PF-28: partitions on same image (rootfs=$rootfs_dev label=$rootfs_label partuuid=$rootfs_partuuid, efi=$efi_dev label=$efi_label partuuid=$efi_partuuid, parent=$loop_dev)"
 }
 
-# preflight_flashless_slot_sources_agree()
+# _preflight_flashless_slot_sources_agree()
 #   PF-29: Verify that steamos-bootconf "this-image" agrees with RAUC
 #   "booted".  Both must resolve to the same slot.
 #   RAUC booted=dev is a distinct scenario — it is NOT accepted as
@@ -495,7 +496,7 @@ preflight_build_partitions_same_image() {
 #   Sets: PF_SNAPSHOT_BOOTCONF_SLOT, PF_SNAPSHOT_RAUC_BOOTED,
 #         PF_SNAPSHOT_RAUC_SLOT, PF_SNAPSHOT_RAUC_IS_DEV.
 # shellcheck disable=SC2034 # PF_SNAPSHOT_* are set for downstream consumers
-preflight_flashless_slot_sources_agree() {
+_preflight_flashless_slot_sources_agree() {
   local bootconf_slot rauc_booted rauc_slot rauc_is_dev=0
 
   # --- Query bootconf once and validate it is exactly A or B ---
@@ -542,7 +543,7 @@ preflight_flashless_slot_sources_agree() {
   PF_SNAPSHOT_RAUC_IS_DEV="$rauc_is_dev"
 }
 
-# preflight_flashless_target_is_standby()
+# _preflight_flashless_target_is_standby()
 #   PF-30: Verify the target slot is NOT the currently booted slot.
 #   Overwriting the active slot would be catastrophic.
 #   Accepts explicit target slot and target devices as parameters to
@@ -562,8 +563,8 @@ preflight_flashless_slot_sources_agree() {
 #         $4 = declared target var device
 #   Returns the validated scenario descriptor (writes PF_CURRENT_SLOT,
 #   PF_TARGET_SLOT globals for backward compatibility).
-preflight_flashless_target_is_standby() {
-  local declared_target="${1:?preflight_flashless_target_is_standby: missing declared target slot}"
+_preflight_flashless_target_is_standby() {
+  local declared_target="${1:?_preflight_flashless_target_is_standby: missing declared target slot}"
   local declared_rootfs="${2:-}"
   local declared_efi="${3:-}"
   local declared_var="${4:-}"
@@ -660,7 +661,7 @@ preflight_flashless_target_is_standby() {
   debug "PF-30: target=$PF_TARGET_SLOT is standby (current=$PF_CURRENT_SLOT)"
 }
 
-# preflight_flashless_target_partitions_not_mounted()
+# _preflight_flashless_target_partitions_not_mounted()
 #   PF-31: Verify that ALL target partitions (EFI, rootfs, var) are not
 #   already mounted.  A mounted target partition would indicate a stale
 #   mount from a previous operation, which could corrupt the filesystem.
@@ -686,14 +687,14 @@ preflight_flashless_target_is_standby() {
 #         $2 = declared target rootfs device (optional; resolved from partsets if omitted)
 #         $3 = declared target EFI device (optional; resolved from partsets if omitted)
 #         $4 = declared target var device (optional; resolved from partsets if omitted)
-preflight_flashless_target_partitions_not_mounted() {
+_preflight_flashless_target_partitions_not_mounted() {
   local target_slot="${1:-}"
   local declared_rootfs="${2:-}"
   local declared_efi="${3:-}"
   local declared_var="${4:-}"
 
   if [[ -z "$target_slot" ]]; then
-    target_slot="${PF_TARGET_SLOT:?preflight_flashless_target_partitions_not_mounted: PF_TARGET_SLOT not set}"
+    target_slot="${PF_TARGET_SLOT:?_preflight_flashless_target_partitions_not_mounted: PF_TARGET_SLOT not set}"
   fi
 
   # --- Resolve target devices ---
@@ -768,7 +769,7 @@ preflight_flashless_target_partitions_not_mounted() {
   debug "PF-31: all target partitions not mounted (efi=$efi_dev rootfs=$rootfs_dev var=${var_dev:-<none>})"
 }
 
-# preflight_flashless_target_verity_not_active()
+# _preflight_flashless_target_verity_not_active()
 #   PF-31b: Verify that no device-mapper (verity/overlay) mappings are
 #   active on the target partitions.  An active dm device indicates an
 #   incomplete previous operation or an active encryption/verity layer
@@ -782,14 +783,14 @@ preflight_flashless_target_partitions_not_mounted() {
 #         $2 = declared target rootfs device (optional)
 #         $3 = declared target EFI device (optional)
 #         $4 = declared target var device (optional)
-preflight_flashless_target_verity_not_active() {
+_preflight_flashless_target_verity_not_active() {
   local target_slot="${1:-}"
   local declared_rootfs="${2:-}"
   local declared_efi="${3:-}"
   local declared_var="${4:-}"
 
   if [[ -z "$target_slot" ]]; then
-    target_slot="${PF_TARGET_SLOT:?preflight_flashless_target_verity_not_active: PF_TARGET_SLOT not set}"
+    target_slot="${PF_TARGET_SLOT:?_preflight_flashless_target_verity_not_active: PF_TARGET_SLOT not set}"
   fi
 
   # --- Require dmsetup ---
@@ -890,7 +891,7 @@ preflight_flashless_target_verity_not_active() {
   debug "PF-31b: no active verity/dm mappings on target partitions"
 }
 
-# preflight_flashless_no_pending_transition()
+# _preflight_flashless_no_pending_transition()
 #   PF-32: Verify there is no pending slot transition and that the RAUC
 #   state is compatible with a safe flashless install.
 #
@@ -908,7 +909,7 @@ preflight_flashless_target_verity_not_active() {
 #   Args: $1 = current slot (A or B) — from orchestrator snapshot
 #         $2 = target slot (A or B) — from orchestrator snapshot
 #         $3 = RAUC JSON response (raw) — from orchestrator snapshot
-preflight_flashless_no_pending_transition() {
+_preflight_flashless_no_pending_transition() {
   local current_slot="${1:-}"
   local target_slot="${2:-}"
   local rauc_json="${3:-}"
@@ -1038,16 +1039,16 @@ preflight_flashless_no_pending_transition() {
   debug "PF-32: no pending transition (selected=$selected == current=$current_slot, RAUC idle, target=$target_slot safe)"
 }
 
-# preflight_flashless_slot_values_valid()
+# _preflight_flashless_slot_values_valid()
 #   PF-33: Verify slot values are exactly A or B and that current != target.
 #   This function is independently callable — it validates both that the
 #   slot labels are well-formed (A or B) and that they are distinct
 #   (current must not equal target).  Overwriting the active slot would
 #   be catastrophic; this is a defense-in-depth check against callers
 #   that may have corrupted state.
-preflight_flashless_slot_values_valid() {
-  local current="${1:?preflight_flashless_slot_values_valid: missing current slot}"
-  local target="${2:?preflight_flashless_slot_values_valid: missing target slot}"
+_preflight_flashless_slot_values_valid() {
+  local current="${1:?_preflight_flashless_slot_values_valid: missing current slot}"
+  local target="${2:?_preflight_flashless_slot_values_valid: missing target slot}"
 
   case "$current" in
     A | B) ;;
@@ -1134,7 +1135,7 @@ _pf_verify_recovery_topology_descriptor() {
   debug "_pf_verify_recovery_topology_descriptor: descriptor valid (target=${descriptor[TARGET_SLOT]})"
 }
 
-# preflight_recovery_target_explicit()
+# _preflight_recovery_target_explicit()
 #   PF-34: Verify the recovery target slot was resolved independently
 #   (not inherited from a stale global).  Accepts a complete topology
 #   descriptor instead of just a slot label.
@@ -1155,8 +1156,8 @@ _pf_verify_recovery_topology_descriptor() {
 #   The descriptor is validated and stored immutably in PF_RECOVERY_DESCRIPTOR.
 #   Args: $1 = topology descriptor (KEY=VALUE pairs, one per argument)
 #   Sets: PF_TARGET_SLOT, PF_RECOVERY_DESCRIPTOR (globals).
-preflight_recovery_target_explicit() {
-  local explicit_target="${1:?preflight_recovery_target_explicit: missing topology descriptor}"
+_preflight_recovery_target_explicit() {
+  local explicit_target="${1:?_preflight_recovery_target_explicit: missing topology descriptor}"
 
   # Validate the descriptor contains all required fields.
   _pf_verify_recovery_topology_descriptor "$@"
@@ -1184,7 +1185,7 @@ preflight_recovery_target_explicit() {
   debug "PF-34: recovery target explicitly set: $PF_TARGET_SLOT (descriptor stored)"
 }
 
-# preflight_recovery_target_devices_agree()
+# _preflight_recovery_target_devices_agree()
 #   PF-35: Verify the recovery topology descriptor devices are co-located
 #   on the same parent disk, cross-check mounted rootfs and EFI against
 #   the descriptor, and verify all devices share the same parent.
@@ -1208,7 +1209,7 @@ preflight_recovery_target_explicit() {
 #              PF_RECOVERY_DESCRIPTOR is already set.
 #   Reads: PF_RECOVERY_DESCRIPTOR (global).
 #   Sets: PF_RECOVERY_DESCRIPTOR (if not already set).
-preflight_recovery_target_devices_agree() {
+_preflight_recovery_target_devices_agree() {
   # --- Accept descriptor from argument or pre-stored global ---
   if [[ $# -gt 0 ]]; then
     # Store the descriptor if not already set.
@@ -1224,7 +1225,7 @@ preflight_recovery_target_devices_agree() {
   fi
 
   if [[ ${#PF_RECOVERY_DESCRIPTOR[@]} -eq 0 ]]; then
-    die "PF-35: no topology descriptor available (pass descriptor or call preflight_recovery_target_explicit first)"
+    die "PF-35: no topology descriptor available (pass descriptor or call _preflight_recovery_target_explicit first)"
   fi
 
   local target_slot="${PF_RECOVERY_DESCRIPTOR[TARGET_SLOT]:-}"
@@ -1319,7 +1320,7 @@ preflight_recovery_target_devices_agree() {
   debug "PF-35: target devices on same disk: $rootfs_parent (rootfs=$rootfs_dev, efi=$efi_dev, var=$var_dev)"
 }
 
-# preflight_recovery_target_slot_permitted()
+# _preflight_recovery_target_slot_permitted()
 #   PF-35b: Verify the target slot is the permitted current/repatch slot.
 #
 #   Recovery scenario contract:
@@ -1345,8 +1346,8 @@ preflight_recovery_target_devices_agree() {
 #         $3 = current slot (A or B) — from orchestrator snapshot; if
 #              empty, queries bootconf (fallback for standalone use).
 #   Reads: PF_TARGET_SLOT (global).
-preflight_recovery_target_slot_permitted() {
-  local target_slot="${1:-${PF_TARGET_SLOT:?preflight_recovery_target_slot_permitted: PF_TARGET_SLOT not set}}"
+_preflight_recovery_target_slot_permitted() {
+  local target_slot="${1:-${PF_TARGET_SLOT:?_preflight_recovery_target_slot_permitted: PF_TARGET_SLOT not set}}"
   local recovery_mode="${2:-standby}"
   local current_slot="${3:-}"
 
@@ -1439,7 +1440,7 @@ _pf_is_device_mounted_at() {
   return 1 # device is not mounted at mount_point
 }
 
-# preflight_live_identity_sources_agree()
+# _preflight_live_identity_sources_agree()
 #   PF-36: Verify RAUC, bootconf, root, EFI, and ESP identity sources agree.
 #   All must resolve to the same slot.
 #   When RAUC returns "dev", trust bootconf (accept "dev" as agreement).
@@ -1454,7 +1455,7 @@ _pf_is_device_mounted_at() {
 #
 #   Args: $1 = bootconf slot (A or B) — from orchestrator snapshot
 #         $2 = RAUC booted value — from orchestrator snapshot
-preflight_live_identity_sources_agree() {
+_preflight_live_identity_sources_agree() {
   local bootconf_slot="${1:-}"
   local rauc_booted="${2:-}"
 
@@ -1630,10 +1631,10 @@ preflight_scenario_validate_build() {
   preflight_scenario_require_root
 
   # PF-27: EFI target unambiguous (no efi-B), validated against supplied devices.
-  preflight_build_efi_target_unambiguous "$efi_dev" "$loop_dev"
+  _preflight_build_efi_target_unambiguous "$efi_dev" "$loop_dev"
 
   # PF-28: rootfs-A and efi-A on same loop image, distinct devices with expected labels.
-  preflight_build_partitions_same_image "$rootfs_dev" "$efi_dev" "$loop_dev"
+  _preflight_build_partitions_same_image "$rootfs_dev" "$efi_dev" "$loop_dev"
 
   # PF-27b: rootfs and EFI are distinct from each other.
   if [[ "$rootfs_dev" == "$efi_dev" ]]; then
@@ -1781,7 +1782,7 @@ preflight_scenario_validate_flashless() {
   debug "PF-30: target=$PF_TARGET_SLOT is standby (current=$PF_CURRENT_SLOT)"
 
   # PF-33: Slot values are exactly A or B.
-  preflight_flashless_slot_values_valid "$PF_CURRENT_SLOT" "$PF_TARGET_SLOT"
+  _preflight_flashless_slot_values_valid "$PF_CURRENT_SLOT" "$PF_TARGET_SLOT"
 
   # PF-31: Target partitions (EFI, rootfs, var) not mounted.
   # Use snapshot — resolve from partsets using PF_TARGET_SLOT.
@@ -1792,15 +1793,15 @@ preflight_scenario_validate_flashless() {
     target_var_dev="$(readlink -f "/dev/disk/by-partsets/$PF_TARGET_SLOT/var" 2>/dev/null)" || target_var_dev=""
   fi
 
-  preflight_flashless_target_partitions_not_mounted "$PF_TARGET_SLOT" \
+  _preflight_flashless_target_partitions_not_mounted "$PF_TARGET_SLOT" \
     "$target_rootfs_dev" "$target_efi_dev" "$target_var_dev"
 
   # PF-31b: Target verity/device-mapper not active.
-  preflight_flashless_target_verity_not_active "$PF_TARGET_SLOT" \
+  _preflight_flashless_target_verity_not_active "$PF_TARGET_SLOT" \
     "$target_rootfs_dev" "$target_efi_dev" "$target_var_dev"
 
   # PF-32: No pending transition (pass snapshot to avoid re-querying).
-  preflight_flashless_no_pending_transition "$PF_CURRENT_SLOT" "$PF_TARGET_SLOT" "$rauc_json"
+  _preflight_flashless_no_pending_transition "$PF_CURRENT_SLOT" "$PF_TARGET_SLOT" "$rauc_json"
 
   debug "preflight_scenario_validate_flashless: all checks passed (current=$PF_CURRENT_SLOT, target=$PF_TARGET_SLOT)"
 }
@@ -1846,11 +1847,11 @@ preflight_scenario_validate_recovery() {
   preflight_scenario_require_root
 
   # PF-34: Validate and store the topology descriptor.
-  preflight_recovery_target_explicit "$@"
+  _preflight_recovery_target_explicit "$@"
 
   # PF-35: Cross-check mounted rootfs and EFI against descriptor;
   #         verify all devices on same parent disk.
-  preflight_recovery_target_devices_agree "$@"
+  _preflight_recovery_target_devices_agree "$@"
 
   # --- Query bootconf once for the current slot (single authoritative read) ---
   # Pass the snapshot to PF-35b so it does not re-query bootconf.
@@ -1862,7 +1863,7 @@ preflight_scenario_validate_recovery() {
   # PF-35b: Verify target slot is the permitted current/repatch slot.
   # Pass bootconf_slot snapshot to avoid duplicate query.
   local recovery_mode="${PF_RECOVERY_MODE:-standby}"
-  preflight_recovery_target_slot_permitted "$PF_TARGET_SLOT" "$recovery_mode" "$bootconf_slot"
+  _preflight_recovery_target_slot_permitted "$PF_TARGET_SLOT" "$recovery_mode" "$bootconf_slot"
 
   debug "preflight_scenario_validate_recovery: all checks passed (target=$PF_TARGET_SLOT, mode=$recovery_mode)"
 }
@@ -1926,7 +1927,7 @@ preflight_scenario_validate_live() {
   PF_SNAPSHOT_RAUC_BOOTED="$rauc_booted"
 
   # --- Phase 4: PF-36 — identity sources agree (pass snapshot, no re-query) ---
-  preflight_live_identity_sources_agree "$bootconf_slot" "$rauc_booted"
+  _preflight_live_identity_sources_agree "$bootconf_slot" "$rauc_booted"
 
   debug "preflight_scenario_validate_live: all checks passed (current=$PF_CURRENT_SLOT)"
 }

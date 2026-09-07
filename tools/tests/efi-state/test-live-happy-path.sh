@@ -60,7 +60,7 @@ trap test_harness_cleanup EXIT
 # Apply live state to current slot (A)
 # Verify grub.cfg has correct UUID, kernel paths, params
 # ============================================================================
-test_l01_current_slot_happy_path() {
+_test_l01_current_slot_happy_path() {
   live_scenario_setup || exit 1
 
   # Apply live state to current slot (A = target)
@@ -151,7 +151,7 @@ test_l01_current_slot_happy_path() {
 # Apply live state
 # Verify grub and grub-steamos contain each param exactly once
 # ============================================================================
-test_l04_persistent_defaults_patched() {
+_test_l04_persistent_defaults_patched() {
   live_scenario_setup || exit 1
 
   if ! simulate_live_apply; then
@@ -223,7 +223,7 @@ test_l04_persistent_defaults_patched() {
 # Apply live state
 # Verify required defaults appear exactly once in keep-list
 # ============================================================================
-test_l05_atomic_update_persistence() {
+_test_l05_atomic_update_persistence() {
   live_scenario_setup || exit 1
 
   if ! simulate_live_apply; then
@@ -254,7 +254,7 @@ test_l05_atomic_update_persistence() {
 # Apply live state
 # Verify update-grub was called (via shim tracking)
 # ============================================================================
-test_l06_update_grub_runs_directly() {
+_test_l06_update_grub_runs_directly() {
   live_scenario_setup || exit 1
 
   # Create a tracking shim for update-grub
@@ -304,7 +304,7 @@ SHIM_EOF
 # Apply live state
 # Verify every linux line has params exactly once
 # ============================================================================
-test_l07_authoritative_config_patch() {
+_test_l07_authoritative_config_patch() {
   live_scenario_setup || exit 1
 
   if ! simulate_live_apply; then
@@ -377,7 +377,7 @@ test_l07_authoritative_config_patch() {
 # Run all validators
 # Verify all pass
 # ============================================================================
-test_l08_complete_validation() {
+_test_l08_complete_validation() {
   live_scenario_setup || exit 1
 
   if ! simulate_live_apply; then
@@ -440,7 +440,7 @@ test_l08_complete_validation() {
 
 # L-01
 test_harness_begin_test "L-01: Current-slot happy path"
-(test_l01_current_slot_happy_path) || true
+(_test_l01_current_slot_happy_path) || true
 # Only pass if the function did not already fail
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
@@ -448,35 +448,35 @@ fi
 
 # L-04
 test_harness_begin_test "L-04: Persistent defaults patched"
-(test_l04_persistent_defaults_patched) || true
+(_test_l04_persistent_defaults_patched) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-05
 test_harness_begin_test "L-05: Atomic-update persistence maintained"
-(test_l05_atomic_update_persistence) || true
+(_test_l05_atomic_update_persistence) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-06
 test_harness_begin_test "L-06: update-grub runs directly"
-(test_l06_update_grub_runs_directly) || true
+(_test_l06_update_grub_runs_directly) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-07
 test_harness_begin_test "L-07: Authoritative config patch follows generation"
-(test_l07_authoritative_config_patch) || true
+(_test_l07_authoritative_config_patch) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # L-08
 test_harness_begin_test "L-08: Complete validation runs"
-(test_l08_complete_validation) || true
+(_test_l08_complete_validation) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi

@@ -19,12 +19,12 @@ echo "Starting test run..."
 # $1 = workdir path — may contain root-owned mounts/loop devices from
 # previous (possibly killed) builds.  Mirrors the cleanup order from
 # lib/overlay.sh overlay_cleanup() and lib/common.sh cleanup().
-cleanup_stale_state() {
+_cleanup_stale_state() {
   local workdir="${1:-}"
 
   # Require a non-empty workdir argument.
   if [[ -z "$workdir" ]]; then
-    echo "ERROR: cleanup_stale_state() requires a workdir path argument" >&2
+    echo "ERROR: _cleanup_stale_state() requires a workdir path argument" >&2
     return 1
   fi
 
@@ -53,7 +53,7 @@ cleanup_stale_state() {
       /tmp | /tmp/ | /var | /var/ | /usr | /usr/ | /etc | /etc/ | /proc | /proc/ | \
       /sys | /sys/ | /boot | /boot/ | /mnt | /mnt/ | /media | /media/ | \
       /opt | /opt/ | /run | /run/ | /snap | /snap/ | /srv | /srv/)
-      echo "ERROR: cleanup_stale_state() refuses to operate on critical path: $resolved" >&2
+      echo "ERROR: _cleanup_stale_state() refuses to operate on critical path: $resolved" >&2
       return 1
       ;;
   esac
@@ -160,7 +160,7 @@ cleanup_stale_state() {
 }
 
 # Clean up any stale state before starting (RAM workdir is always known)
-cleanup_stale_state "/dev/shm/steamos-build"
+_cleanup_stale_state "/dev/shm/steamos-build"
 
 # Load defaults from config file if present
 if [[ -f "$SCRIPT_DIR/run-tests.conf" ]]; then
@@ -223,8 +223,8 @@ _on_exit() {
   fi
   _CLEANUP_DONE=1
   echo "Signal $sig received — cleaning up stale build state..."
-  cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
-  cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
+  _cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+  _cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
   # If we arrived via a signal (not normal EXIT), re-raise so the parent
   # process sees the correct exit code.
   if [[ "$sig" != "EXIT" ]]; then
@@ -275,8 +275,8 @@ for conf in "$CONF_DIR"/*.conf; do
     echo "  ✗ BUILD FAILED — see $log_file"
     ((++failed))
     # Clean up stale state left by the failed build before the next test
-    cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
-    cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
+    _cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+    _cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
     continue
   fi
 
@@ -284,8 +284,8 @@ for conf in "$CONF_DIR"/*.conf; do
   if [[ ! -f "$out_img" ]]; then
     echo "  ✗ BUILD FAILED — output image not produced (DKMS/driver build error?) — see $log_file"
     ((++failed))
-    cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
-    cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
+    _cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+    _cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
     continue
   fi
   echo "  ✓ Build complete"
@@ -320,8 +320,8 @@ for conf in "$CONF_DIR"/*.conf; do
 done
 
 # Clean up any stale state left by the last test
-cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
-cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
+_cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
+_cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"

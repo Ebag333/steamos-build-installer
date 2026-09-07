@@ -106,12 +106,13 @@ _pacman_frozen_installed_args() {
 # ---------------------------------------------------------------------------
 # Internal: Execute pacman in the correct context.
 #
-# Handles chroot vs host execution based on _is_install_chroot or explicit flag.
+# Handles chroot vs host execution based on is_install_chroot or explicit flag.
 #
 # Args: $1 = "chroot" | "host" | "" (auto-detect)
 #       $2... = command to run
 # Returns: pacman's exit code
 # ---------------------------------------------------------------------------
+# lint-ignore: private-funcs
 _pacman_exec() {
   local context="${1:-auto}"
   shift
@@ -124,7 +125,7 @@ _pacman_exec() {
       /bin/bash -c "$*"
       ;;
     auto | *)
-      if _is_install_chroot 2>/dev/null; then
+      if is_install_chroot 2>/dev/null; then
         chroot "$MERGED" /bin/bash -c "$*"
       else
         /bin/bash -c "$*"
@@ -140,7 +141,7 @@ _pacman_exec() {
 # STEAMOS_INSTALLER_INTERACTIVE env var is set to 1.
 # Returns 1 (false) otherwise (background / repatch context).
 # ---------------------------------------------------------------------------
-_is_interactive() {
+is_interactive() {
   [[ "${STEAMOS_INSTALLER_INTERACTIVE:-0}" == "1" ]] && return 0
   [[ -t 0 ]] && [[ -t 1 ]]
 }
@@ -195,14 +196,14 @@ pacman_sync_db() {
   # shellcheck disable=SC2086 # word-splitting is intentional
   case "$context" in
     root)
-      _pacman_retry _pacman_run_in_root "$root" "pacman $config_args -Sy $noconfirm" \
-        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2) || sync_rc=$?
+      pacman_retry _pacman_run_in_root "$root" "pacman $config_args -Sy $noconfirm" \
+        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
       ;;
     *)
-      _pacman_retry _pacman_exec "$context" "pacman $config_args -Sy $noconfirm" \
-        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2) || sync_rc=$?
+      pacman_retry _pacman_exec "$context" "pacman $config_args -Sy $noconfirm" \
+        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
       ;;
   esac
 
@@ -215,14 +216,14 @@ pacman_sync_db() {
   # shellcheck disable=SC2086 # word-splitting is intentional
   case "$context" in
     root)
-      _pacman_retry _pacman_run_in_root "$root" "pacman $config_args -Fy $noconfirm" \
-        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
+      pacman_retry _pacman_run_in_root "$root" "pacman $config_args -Fy $noconfirm" \
+        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
       ;;
     *)
-      _pacman_retry _pacman_exec "$context" "pacman $config_args -Fy $noconfirm" \
-        > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
+      pacman_retry _pacman_exec "$context" "pacman $config_args -Fy $noconfirm" \
+        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
       ;;
   esac
 }
@@ -282,9 +283,9 @@ pacman_upgrade_all() {
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   _safe_extra="$(_shell_escape_args $extra)"
   set -o pipefail
-  _pacman_retry _pacman_exec "$context" "pacman $config_args -Syu $noconfirm $ask $_safe_extra" \
-    > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
+  pacman_retry _pacman_exec "$context" "pacman $config_args -Syu $noconfirm $ask $_safe_extra" \
+    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
   local _rc=${PIPESTATUS[0]}
   set +o pipefail
   if ((_rc != 0)); then
@@ -300,7 +301,7 @@ pacman_upgrade_all() {
 # Args: "$@" = the command to execute
 # Returns: 0 on success, 1 if all attempts fail
 # ---------------------------------------------------------------------------
-_pacman_retry() {
+pacman_retry() {
   local _attempt _ok=0
   for _attempt in 1 2 3; do
     if "$@"; then
@@ -402,9 +403,9 @@ pacman_install() {
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   local _safe_pkgs
   _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
-  _pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
-    > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
+  pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
+    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
 }
 
 # ---------------------------------------------------------------------------
@@ -467,9 +468,9 @@ pacman_install_local() {
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   local _safe_pkgs
   _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
-  _pacman_retry _pacman_exec "$context" "pacman $config_args -U $noconfirm $needed $_safe_pkgs" \
-    > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
+  pacman_retry _pacman_exec "$context" "pacman $config_args -U $noconfirm $needed $_safe_pkgs" \
+    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
 }
 
 # ---------------------------------------------------------------------------
@@ -556,9 +557,9 @@ pacman_download() {
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   local _safe_pkgs
   _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
-  _pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -Sw $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
-    > >(tee -a "$_raw_log" | _pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | _pacman_filter_stderr >&2)
+  pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -Sw $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
+    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
+    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
 }
 
 # ---------------------------------------------------------------------------
@@ -647,9 +648,9 @@ _pacman_load_provider_resolutions() {
 # emits ~111k times during upgrades when repo packages reference files that
 # don't exist in the local filesystem (e.g. man pages from split packages).
 #
-# Usage: 2> >(_pacman_filter_stderr)
+# Usage: 2> >(pacman_filter_stderr)
 # ---------------------------------------------------------------------------
-_pacman_filter_stderr() {
+pacman_filter_stderr() {
   awk '
     / downloading\.\.\.$/ && !/error:|failed|warning:|corrupted|timeout|could not resolve/ { next }
     /^warning: could not get file information for / { next }
@@ -675,9 +676,9 @@ _pacman_filter_stderr() {
 #
 # Preserves lines containing error indicators so failures remain visible.
 #
-# Usage: | _pacman_filter_stdout
+# Usage: | pacman_filter_stdout
 # ---------------------------------------------------------------------------
-_pacman_filter_stdout() {
+pacman_filter_stdout() {
   awk '
     / downloading\.\.\.$/ && !/error:|failed|warning:|corrupted|timeout|could not resolve/ { next }
     /^upgrading [^ ]+\.\.\.$/ && !/error:|failed|warning:|corrupted|timeout|could not resolve/ { next }
@@ -823,12 +824,12 @@ _pacman_check_single_pkg_file_conflicts() {
   if [[ -n "$chroot_dir" && -d "$chroot_dir" ]]; then
     local _safe_pkg
     _safe_pkg="$(printf '%q' "$pkg")"
-    _pacman_retry _pacman_run_in_root "$chroot_dir" \
+    pacman_retry _pacman_run_in_root "$chroot_dir" \
       "pacman $config_args -Fl --machinereadable $_safe_pkg 2>/dev/null" \
       >"$planned_raw_file" || true
   else
     # shellcheck disable=SC2086 # config_args is intentionally word-split
-    _pacman_retry pacman $config_args -Fl --machinereadable "$pkg" 2>/dev/null \
+    pacman_retry pacman $config_args -Fl --machinereadable "$pkg" 2>/dev/null \
       >"$planned_raw_file" || true
   fi
 
@@ -840,12 +841,12 @@ _pacman_check_single_pkg_file_conflicts() {
     # Fallback to non-machinereadable
     local planned_fallback_file="$WORKDIR/preflight-fl-fallback-${pkg//\//-}.txt"
     if [[ -n "$chroot_dir" && -d "$chroot_dir" ]]; then
-      _pacman_retry _pacman_run_in_root "$chroot_dir" \
+      pacman_retry _pacman_run_in_root "$chroot_dir" \
         "pacman $config_args -Fl $_safe_pkg 2>/dev/null" \
         >"$planned_fallback_file" || true
     else
       # shellcheck disable=SC2086 # config_args is intentionally word-split
-      _pacman_retry pacman $config_args -Fl "$pkg" 2>/dev/null \
+      pacman_retry pacman $config_args -Fl "$pkg" 2>/dev/null \
         >"$planned_fallback_file" || true
     fi
     if [[ -s "$planned_fallback_file" ]]; then
@@ -914,7 +915,7 @@ _pacman_check_single_pkg_file_conflicts() {
 #   - May uninstall packages via pacman -Rdd (for "uninstall" actions)
 #   - Logs all decisions for debugging
 # ---------------------------------------------------------------------------
-pacman_preflight_check() {
+_pacman_preflight_check() {
   # Redirect stdout to stderr so log() calls don't pollute command substitution.
   # The only stdout this function should produce is the final overwrite flags.
   exec 7>&1 1>&2
@@ -1151,7 +1152,7 @@ pacman_preflight_check() {
     local fl_rc=0
     local machine_readable=1
     # shellcheck disable=SC2086 # _safe_pkg_list is intentionally word-split
-    _pacman_retry _pacman_run_in_root "$chroot_dir" \
+    pacman_retry _pacman_run_in_root "$chroot_dir" \
       "pacman $config_args -Fl --machinereadable $_safe_pkg_list 2>/dev/null" \
       >"$planned_raw" 2>/dev/null || fl_rc=$?
 
@@ -1160,7 +1161,7 @@ pacman_preflight_check() {
       fl_rc=0
       # Fallback: regular -Fl output: "pkg path" → "pkg /path"
       # shellcheck disable=SC2086 # _safe_pkg_list is intentionally word-split
-      _pacman_retry _pacman_run_in_root "$chroot_dir" \
+      pacman_retry _pacman_run_in_root "$chroot_dir" \
         "pacman $config_args -Fl $_safe_pkg_list 2>/dev/null" \
         >"$planned_raw" 2>/dev/null || fl_rc=$?
     fi
@@ -1597,7 +1598,7 @@ pacman_preflight_with_fallback() {
     log "Pre-flight: checking system upgrade"
     local rc=0
     local preflight_output=""
-    preflight_output=$(pacman_preflight_check --root "${MERGED:-/}") || rc=$?
+    preflight_output=$(_pacman_preflight_check --root "${MERGED:-/}") || rc=$?
     if [[ -n "$preflight_output" ]]; then
       # Parse overwrite args and provider targets from output
       # Overwrite args are pairs: --overwrite <path>
@@ -1804,7 +1805,7 @@ pacman_preflight_with_fallback() {
     while IFS= read -r line; do debug "  $line"; done <"$bulk_stderr"
   fi
 
-  # Use pacman_preflight_check on the passing set
+  # Use _pacman_preflight_check on the passing set
   local -a final_packages=("${passing_packages[@]}")
   local max_iterations=${#final_packages[@]}
 
@@ -1814,7 +1815,7 @@ pacman_preflight_with_fallback() {
     fi
 
     local pf_rc=0
-    pacman_preflight_check --install -- "${final_packages[@]}" || pf_rc=$?
+    _pacman_preflight_check --install -- "${final_packages[@]}" || pf_rc=$?
 
     if ((pf_rc == 0)); then
       break
@@ -1894,13 +1895,13 @@ pacman_preflight_with_fallback() {
 # ---------------------------------------------------------------------------
 # Pre-flight check for upgrade transactions (no package list).
 #
-# Runs pacman_preflight_check and handles dep-breakage detection centrally.
+# Runs _pacman_preflight_check and handles dep-breakage detection centrally.
 # For interactive sessions, prompts the user to cancel or skip.
 # For non-interactive sessions, auto-skips on dep-breakage.
 #
 # Args:
 #   $1 = context label for messages (e.g. "System upgrade", "Build root sync")
-#   $2... = args passed to pacman_preflight_check (e.g. --root "$MNT", --host)
+#   $2... = args passed to _pacman_preflight_check (e.g. --root "$MNT", --host)
 #
 # Returns: 0 = proceed with upgrade, 1 = skip/cancel (caller should not proceed)
 # ---------------------------------------------------------------------------
@@ -1909,7 +1910,7 @@ pacman_upgrade_preflight() {
   shift
 
   local rc=0
-  pacman_preflight_check "$@" || rc=$?
+  _pacman_preflight_check "$@" || rc=$?
 
   if ((rc == 0)); then
     return 0
@@ -1918,7 +1919,7 @@ pacman_upgrade_preflight() {
   # Check if dep-breakages were the cause
   local dep_file="$WORKDIR/preflight-dep-breakages.txt"
   if [[ -s "$dep_file" ]]; then
-    if _is_interactive; then
+    if is_interactive; then
       echo "" >&2
       echo "$context_label blocked by dependency breakage:" >&2
       while IFS='|' read -r breaker dependents; do
@@ -1942,7 +1943,7 @@ pacman_upgrade_preflight() {
   fi
 
   # File conflicts — not skippable
-  if _is_interactive; then
+  if is_interactive; then
     echo "" >&2
     echo "$context_label blocked by unresolvable file conflicts." >&2
     echo "Check the build log for details." >&2

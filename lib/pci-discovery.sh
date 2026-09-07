@@ -11,7 +11,7 @@ fi
 
 # Translate a PCI class code to a human-readable category.
 # Args: $1 = class code (e.g. "0x030000")
-class_name() {
+_class_name() {
   local code="${1,,}"
   local major="${code:2:2}"
   case "$major" in
@@ -31,7 +31,7 @@ class_name() {
 
 # Get a short PCI device description from lspci.
 # Args: $1 = PCI address (e.g. "0000:2e:00.0")
-get_device_description() {
+_get_device_description() {
   local pci="$1"
   local desc
   desc="$(lspci -s "$pci" 2>/dev/null | sed 's/^[^ ]* //')" || true
@@ -40,7 +40,7 @@ get_device_description() {
 
 # Get the kernel driver currently bound to a PCI device.
 # Args: $1 = sysfs device directory
-get_bound_driver() {
+_get_bound_driver() {
   local devdir="$1"
   local driver_link="$devdir/driver"
   if [[ -L "$driver_link" ]]; then
@@ -57,7 +57,7 @@ get_bound_driver() {
 
 # Get a module description from modinfo.
 # Args: $1 = module name
-get_module_description() {
+_get_module_description() {
   local mod="$1"
   local desc
   desc="$(modinfo -F description "$mod" 2>/dev/null | head -1)" || true
@@ -66,7 +66,7 @@ get_module_description() {
 
 # Get the kernel module currently bound to a PCI device (from sysfs driver/module symlink).
 # Args: $1 = sysfs device directory
-get_bound_module() {
+_get_bound_module() {
   local devdir="$1"
   local mod_link="$devdir/driver/module"
   if [[ -L "$mod_link" ]]; then
@@ -99,11 +99,11 @@ pci_discover_modules() {
     local class class_type modalias device_desc bound_driver bound_module
     class="$(cat "$devdir/class" 2>/dev/null)"
     class="${class:-unknown}"
-    class_type="$(class_name "$class")"
+    class_type="$(_class_name "$class")"
     modalias="$(cat "$modalias_file" 2>/dev/null || true)"
-    device_desc="$(get_device_description "$pci")"
-    bound_driver="$(get_bound_driver "$devdir")"
-    bound_module="$(get_bound_module "$devdir")"
+    device_desc="$(_get_device_description "$pci")"
+    bound_driver="$(_get_bound_driver "$devdir")"
+    bound_module="$(_get_bound_module "$devdir")"
 
     # Union: bound module + modprobe -R results, deduplicated.
     local -a mods
@@ -124,7 +124,7 @@ pci_discover_modules() {
 
     for mod in "${mods[@]}"; do
       local mod_desc
-      mod_desc="$(get_module_description "$mod")"
+      mod_desc="$(_get_module_description "$mod")"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$pci" "$class" "$class_type" "$device_desc" "$bound_driver" "$mod" "$mod_desc"
     done

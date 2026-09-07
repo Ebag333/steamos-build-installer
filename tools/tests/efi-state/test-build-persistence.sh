@@ -342,7 +342,7 @@ _simulate_build_with_failure() {
 # Verifies that after applying EFI state, the grub-steamos file contains
 # each managed key exactly once, and that unrelated settings remain unchanged.
 # ============================================================================
-test_b06_persistent_defaults_patched() {
+_test_b06_persistent_defaults_patched() {
   test_harness_begin_test "B-06: Persistent defaults patched"
 
   # Setup
@@ -418,7 +418,7 @@ test_b06_persistent_defaults_patched() {
 # Verifies that after applying EFI state, the keep-list file exists and
 # contains all required GRUB files (exactly once each).
 # ============================================================================
-test_b07_keeplist_populated() {
+_test_b07_keeplist_populated() {
   test_harness_begin_test "B-07: Atomic-update keep-list populated"
 
   # Setup
@@ -502,7 +502,7 @@ test_b07_keeplist_populated() {
 # Verifies that after applying EFI state, function-created temp mountpoints
 # are gone, but caller-owned mounts still exist.
 # ============================================================================
-test_b08_function_mounts_cleaned() {
+_test_b08_function_mounts_cleaned() {
   test_harness_begin_test "B-08: Function-owned mounts cleaned"
 
   # Setup
@@ -605,7 +605,7 @@ test_b08_function_mounts_cleaned() {
 # Verifies that after applying EFI state, no function-created mounts remain
 # under rootfs/{proc,sys,dev,dev/pts,run}.
 # ============================================================================
-test_b09_chroot_mounts_cleaned() {
+_test_b09_chroot_mounts_cleaned() {
   test_harness_begin_test "B-09: Function-owned chroot mounts cleaned"
 
   # Setup
@@ -683,7 +683,7 @@ test_b09_chroot_mounts_cleaned() {
 #   2. Function-owned mounts are cleaned up
 #   3. Partial outputs are rolled back
 # ============================================================================
-test_b10_build_failure_cleanup() {
+_test_b10_build_failure_cleanup() {
   test_harness_begin_test "B-10: Runtime GRUB failure cleans up"
 
   # Setup
@@ -796,7 +796,7 @@ test_b10_build_failure_cleanup() {
 # Main: run all tests
 # ============================================================================
 
-run_build_persistence_tests() {
+_run_build_persistence_tests() {
   test_harness_init
   trap test_harness_cleanup EXIT
 
@@ -805,11 +805,11 @@ run_build_persistence_tests() {
   echo "═══════════════════════════════════════════════════════════"
   echo ""
 
-  test_b06_persistent_defaults_patched
-  test_b07_keeplist_populated
-  test_b08_function_mounts_cleaned
-  test_b09_chroot_mounts_cleaned
-  test_b10_build_failure_cleanup
+  _test_b06_persistent_defaults_patched
+  _test_b07_keeplist_populated
+  _test_b08_function_mounts_cleaned
+  _test_b09_chroot_mounts_cleaned
+  _test_b10_build_failure_cleanup
 
   test_harness_summary
   test_harness_exit_code
@@ -817,5 +817,5 @@ run_build_persistence_tests() {
 
 # Run if executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  run_build_persistence_tests "$@"
+  _run_build_persistence_tests "$@"
 fi

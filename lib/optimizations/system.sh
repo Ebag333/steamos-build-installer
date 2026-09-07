@@ -78,11 +78,11 @@ _apply_gamemode() {
 # Without a User= value, SDDM shows the login screen instead of auto-logging in.
 # Also sets Relogin=false to prevent auto re-login after session exit.
 #
-# Usage: sddm_disable_autologin ROOT
+# Usage: _sddm_disable_autologin ROOT
 #   ROOT - Root filesystem path (e.g. "/" or "/tmp/image/rootfs")
 
-sddm_disable_autologin() {
-  local root="${1:?sddm_disable_autologin: missing root}"
+_sddm_disable_autologin() {
+  local root="${1:?_sddm_disable_autologin: missing root}"
 
   local sddm_confs
   sddm_confs="$(find "$root/etc" -path "*/sddm.conf.d/steamos.conf" \( -type f -o -type l \) 2>/dev/null)"
@@ -159,7 +159,7 @@ EOF
 _apply_disable_autologin() {
   local root
   root="$(get_root)"
-  sddm_disable_autologin "$root"
+  _sddm_disable_autologin "$root"
 }
 
 # ---------------------------------------------------------------------------

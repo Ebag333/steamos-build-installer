@@ -282,12 +282,12 @@ BOOTCONF_A_EOF
 }
 
 # ============================================================================
-# simulate_grub_param_add
+# _simulate_grub_param_add
 #
 # Add parameters to grub.cfg (simulates reconcile_grub behavior).
 #
 # Usage:
-#   simulate_grub_param_add GRUB_CFG_PATH PARAM1 [PARAM2 ...]
+#   _simulate_grub_param_add GRUB_CFG_PATH PARAM1 [PARAM2 ...]
 #
 # Arguments:
 #   GRUB_CFG_PATH - Path to grub.cfg file
@@ -302,18 +302,18 @@ BOOTCONF_A_EOF
 #   0 - All parameters added successfully
 #   1 - Failed to add parameters
 # ============================================================================
-simulate_grub_param_add() {
-  local grub_cfg="${1:?simulate_grub_param_add: missing GRUB_CFG_PATH}"
+_simulate_grub_param_add() {
+  local grub_cfg="${1:?_simulate_grub_param_add: missing GRUB_CFG_PATH}"
   shift
   local -a params=("$@")
 
   if [[ ${#params[@]} -eq 0 ]]; then
-    echo "WARNING: simulate_grub_param_add: no parameters specified" >&2
+    echo "WARNING: _simulate_grub_param_add: no parameters specified" >&2
     return 0
   fi
 
   if [[ ! -f "$grub_cfg" ]]; then
-    echo "ERROR: simulate_grub_param_add: grub.cfg not found: $grub_cfg" >&2
+    echo "ERROR: _simulate_grub_param_add: grub.cfg not found: $grub_cfg" >&2
     return 1
   fi
 
@@ -342,12 +342,12 @@ simulate_grub_param_add() {
 }
 
 # ============================================================================
-# simulate_grub_param_add_idempotent
+# _simulate_grub_param_add_idempotent
 #
 # Add parameters twice and verify no duplicates result.
 #
 # Usage:
-#   simulate_grub_param_add_idempotent GRUB_CFG_PATH PARAM1 [PARAM2 ...]
+#   _simulate_grub_param_add_idempotent GRUB_CFG_PATH PARAM1 [PARAM2 ...]
 #
 # Arguments:
 #   GRUB_CFG_PATH - Path to grub.cfg file
@@ -362,30 +362,30 @@ simulate_grub_param_add() {
 #   0 - Idempotency verified (no duplicates)
 #   1 - Duplicates detected or operation failed
 # ============================================================================
-simulate_grub_param_add_idempotent() {
-  local grub_cfg="${1:?simulate_grub_param_add_idempotent: missing GRUB_CFG_PATH}"
+_simulate_grub_param_add_idempotent() {
+  local grub_cfg="${1:?_simulate_grub_param_add_idempotent: missing GRUB_CFG_PATH}"
   shift
   local -a params=("$@")
 
   if [[ ${#params[@]} -eq 0 ]]; then
-    echo "WARNING: simulate_grub_param_add_idempotent: no parameters specified" >&2
+    echo "WARNING: _simulate_grub_param_add_idempotent: no parameters specified" >&2
     return 0
   fi
 
   if [[ ! -f "$grub_cfg" ]]; then
-    echo "ERROR: simulate_grub_param_add_idempotent: grub.cfg not found: $grub_cfg" >&2
+    echo "ERROR: _simulate_grub_param_add_idempotent: grub.cfg not found: $grub_cfg" >&2
     return 1
   fi
 
   # First addition
-  if ! simulate_grub_param_add "$grub_cfg" "${params[@]}"; then
-    echo "ERROR: simulate_grub_param_add_idempotent: first addition failed" >&2
+  if ! _simulate_grub_param_add "$grub_cfg" "${params[@]}"; then
+    echo "ERROR: _simulate_grub_param_add_idempotent: first addition failed" >&2
     return 1
   fi
 
   # Second addition (should be idempotent)
-  if ! simulate_grub_param_add "$grub_cfg" "${params[@]}"; then
-    echo "ERROR: simulate_grub_param_add_idempotent: second addition failed" >&2
+  if ! _simulate_grub_param_add "$grub_cfg" "${params[@]}"; then
+    echo "ERROR: _simulate_grub_param_add_idempotent: second addition failed" >&2
     return 1
   fi
 
@@ -398,7 +398,7 @@ simulate_grub_param_add_idempotent() {
       [[ " ${_line%%#*} " == *" ${param} "* ]] && ((++count))
     done < <(grep 'linux' "$grub_cfg" 2>/dev/null)
     if [[ "$count" -gt 1 ]]; then
-      echo "ERROR: simulate_grub_param_add_idempotent: duplicate parameter '$param' found ($count occurrences)" >&2
+      echo "ERROR: _simulate_grub_param_add_idempotent: duplicate parameter '$param' found ($count occurrences)" >&2
       return 1
     fi
   done
@@ -480,13 +480,13 @@ SHIM_EOF
 _HOST_SNAPSHOT_BEFORE=""
 _HOST_SNAPSHOT_AFTER=""
 
-verify_host_isolation_before() {
-  local base_dir="${1:?verify_host_isolation_before: missing BASE_DIR}"
+_verify_host_isolation_before() {
+  local base_dir="${1:?_verify_host_isolation_before: missing BASE_DIR}"
   shift
   local -a exclude_patterns=("$@")
 
   if [[ ! -d "$base_dir" ]]; then
-    echo "ERROR: verify_host_isolation_before: base_dir not found: $base_dir" >&2
+    echo "ERROR: _verify_host_isolation_before: base_dir not found: $base_dir" >&2
     return 1
   fi
 
@@ -515,13 +515,13 @@ verify_host_isolation_before() {
   return 0
 }
 
-verify_host_isolation_after() {
-  local base_dir="${1:?verify_host_isolation_after: missing BASE_DIR}"
+_verify_host_isolation_after() {
+  local base_dir="${1:?_verify_host_isolation_after: missing BASE_DIR}"
   shift
   local -a exclude_patterns=("$@")
 
   if [[ ! -d "$base_dir" ]]; then
-    echo "ERROR: verify_host_isolation_after: base_dir not found: $base_dir" >&2
+    echo "ERROR: _verify_host_isolation_after: base_dir not found: $base_dir" >&2
     return 1
   fi
 
@@ -547,7 +547,7 @@ verify_host_isolation_after() {
 
   # Compare snapshots
   if [[ -z "$_HOST_SNAPSHOT_BEFORE" || ! -f "$_HOST_SNAPSHOT_BEFORE" ]]; then
-    echo "ERROR: verify_host_isolation_after: before snapshot not available" >&2
+    echo "ERROR: _verify_host_isolation_after: before snapshot not available" >&2
     return 1
   fi
 
@@ -769,12 +769,12 @@ verify_single_slot_no_B() {
 }
 
 # ============================================================================
-# inject_stale_transaction
+# _inject_stale_transaction
 #
 # Create stale .new/.bak/.tmp files for testing transaction cleanup.
 #
 # Usage:
-#   inject_stale_transaction EFI_DIR [ESP_DIR]
+#   _inject_stale_transaction EFI_DIR [ESP_DIR]
 #
 # Arguments:
 #   EFI_DIR  - EFI directory to inject stale files into
@@ -791,12 +791,12 @@ verify_single_slot_no_B() {
 #   0 - Stale files created successfully
 #   1 - Failed to create stale files
 # ============================================================================
-inject_stale_transaction() {
-  local efi_dir="${1:?inject_stale_transaction: missing EFI_DIR}"
+_inject_stale_transaction() {
+  local efi_dir="${1:?_inject_stale_transaction: missing EFI_DIR}"
   local esp_dir="${2:-}"
 
   if [[ ! -d "$efi_dir" ]]; then
-    echo "ERROR: inject_stale_transaction: efi_dir not found: $efi_dir" >&2
+    echo "ERROR: _inject_stale_transaction: efi_dir not found: $efi_dir" >&2
     return 1
   fi
 
@@ -886,50 +886,50 @@ create_sentinel_files() {
 # ============================================================================
 
 # Get the target rootfs UUID for the current build fixture
-# Usage: get_build_target_uuid
-get_build_target_uuid() {
+# Usage: _get_build_target_uuid
+_get_build_target_uuid() {
   if [[ -z "$BUILD_TARGET_UUID" ]]; then
-    echo "ERROR: get_build_target_uuid: BUILD_TARGET_UUID not set (call build_scenario_setup first)" >&2
+    echo "ERROR: _get_build_target_uuid: BUILD_TARGET_UUID not set (call build_scenario_setup first)" >&2
     return 1
   fi
   echo "$BUILD_TARGET_UUID"
 }
 
 # Get the EFI directory for the current build fixture
-# Usage: get_build_efi_dir
-get_build_efi_dir() {
+# Usage: _get_build_efi_dir
+_get_build_efi_dir() {
   if [[ -z "$BUILD_EFI_DIR" ]]; then
-    echo "ERROR: get_build_efi_dir: BUILD_EFI_DIR not set (call build_scenario_setup first)" >&2
+    echo "ERROR: _get_build_efi_dir: BUILD_EFI_DIR not set (call build_scenario_setup first)" >&2
     return 1
   fi
   echo "$BUILD_EFI_DIR"
 }
 
 # Get the rootfs directory for the current build fixture
-# Usage: get_build_rootfs_dir
-get_build_rootfs_dir() {
+# Usage: _get_build_rootfs_dir
+_get_build_rootfs_dir() {
   if [[ -z "$BUILD_ROOTFS_DIR" ]]; then
-    echo "ERROR: get_build_rootfs_dir: BUILD_ROOTFS_DIR not set (call build_scenario_setup first)" >&2
+    echo "ERROR: _get_build_rootfs_dir: BUILD_ROOTFS_DIR not set (call build_scenario_setup first)" >&2
     return 1
   fi
   echo "$BUILD_ROOTFS_DIR"
 }
 
 # Get the ESP directory for the current build fixture
-# Usage: get_build_esp_dir
-get_build_esp_dir() {
+# Usage: _get_build_esp_dir
+_get_build_esp_dir() {
   if [[ -z "$BUILD_ESP_DIR" ]]; then
-    echo "ERROR: get_build_esp_dir: BUILD_ESP_DIR not set (call build_scenario_setup first)" >&2
+    echo "ERROR: _get_build_esp_dir: BUILD_ESP_DIR not set (call build_scenario_setup first)" >&2
     return 1
   fi
   echo "$BUILD_ESP_DIR"
 }
 
 # Get the metadata directory for the current build fixture
-# Usage: get_build_metadata_dir
-get_build_metadata_dir() {
+# Usage: _get_build_metadata_dir
+_get_build_metadata_dir() {
   if [[ -z "$BUILD_METADATA_DIR" ]]; then
-    echo "ERROR: get_build_metadata_dir: BUILD_METADATA_DIR not set (call build_scenario_setup first)" >&2
+    echo "ERROR: _get_build_metadata_dir: BUILD_METADATA_DIR not set (call build_scenario_setup first)" >&2
     return 1
   fi
   echo "$BUILD_METADATA_DIR"

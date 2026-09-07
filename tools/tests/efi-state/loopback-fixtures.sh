@@ -10,9 +10,9 @@
 #
 # Usage:
 #   source tools/tests/efi-state/loopback-fixtures.sh
-#   create_loopback_fixture "$TEST_ID" "dual-slot"
+#   _create_loopback_fixture "$TEST_ID" "dual-slot"
 #   # ... run tests against real block devices ...
-#   destroy_loopback_fixture
+#   _destroy_loopback_fixture
 #
 # Dependencies:
 #   - topology.sh (deterministic UUID/PARTUUID generation)
@@ -82,7 +82,7 @@ _LOOPBACK_IMAGE_PATHS=()
 _LOOPBACK_CREATED_DIRS=()
 
 # ============================================================================
-# loopback_check_prerequisites
+# _loopback_check_prerequisites
 #
 # Verify that all required tools are available for loopback fixture creation.
 #
@@ -98,7 +98,7 @@ _LOOPBACK_CREATED_DIRS=()
 #   0 - All prerequisites satisfied
 #   1 - One or more prerequisites missing
 # ============================================================================
-loopback_check_prerequisites() {
+_loopback_check_prerequisites() {
   local rc=0
   local -a missing=()
 
@@ -115,11 +115,11 @@ loopback_check_prerequisites() {
   if [[ $EUID -ne 0 ]]; then
     # Not fatal — some operations may work without root in certain
     # environments (e.g. fakeroot, user namespaces). Record warning.
-    echo "WARNING: loopback_check_prerequisites: not running as root (some operations may fail)" >&2
+    echo "WARNING: _loopback_check_prerequisites: not running as root (some operations may fail)" >&2
   fi
 
   if [[ "$rc" -ne 0 ]]; then
-    echo "ERROR: loopback_check_prerequisites: missing commands: ${missing[*]}" >&2
+    echo "ERROR: _loopback_check_prerequisites: missing commands: ${missing[*]}" >&2
     return 1
   fi
 
@@ -130,7 +130,7 @@ loopback_check_prerequisites() {
 # Internal: _loopback_register_cleanup
 #
 # Register a cleanup handler. Cleanup handlers are called in reverse
-# registration order during destroy_loopback_fixture.
+# registration order during _destroy_loopback_fixture.
 # ============================================================================
 _loopback_register_cleanup() {
   local handler="${1:?_loopback_register_cleanup: missing handler}"
@@ -223,13 +223,13 @@ _loopback_cleanup_handler_remove_dirs() {
 }
 
 # ============================================================================
-# create_loopback_image
+# _create_loopback_image
 #
 # Create a sparse GPT image file with the correct partition layout for the
 # specified topology.
 #
 # Usage:
-#   create_loopback_image TEST_ID TOPOLOGY_TYPE
+#   _create_loopback_image TEST_ID TOPOLOGY_TYPE
 #
 # Arguments:
 #   TEST_ID        - Test identifier for deterministic UUIDs
@@ -242,9 +242,9 @@ _loopback_cleanup_handler_remove_dirs() {
 #   0 - Image created successfully
 #   1 - Image creation failed
 # ============================================================================
-create_loopback_image() {
-  local test_id="${1:?create_loopback_image: missing TEST_ID}"
-  local topology_type="${2:?create_loopback_image: missing TOPOLOGY_TYPE}"
+_create_loopback_image() {
+  local test_id="${1:?_create_loopback_image: missing TEST_ID}"
+  local topology_type="${2:?_create_loopback_image: missing TOPOLOGY_TYPE}"
 
   # Determine partition layout based on topology
   local -a partitions=()
@@ -256,7 +256,7 @@ create_loopback_image() {
       partitions=(esp efi-A rootfs-A var-A efi-B rootfs-B var-B)
       ;;
     *)
-      echo "ERROR: create_loopback_image: unknown topology type: $topology_type" >&2
+      echo "ERROR: _create_loopback_image: unknown topology type: $topology_type" >&2
       return 1
       ;;
   esac
@@ -284,7 +284,7 @@ create_loopback_image() {
 
   # Create sparse image
   if ! dd if=/dev/zero of="$image_path" bs=1M count=0 seek="$total_size_mb" 2>/dev/null; then
-    echo "ERROR: create_loopback_image: failed to create sparse image" >&2
+    echo "ERROR: _create_loopback_image: failed to create sparse image" >&2
     return 1
   fi
 
@@ -335,7 +335,7 @@ create_loopback_image() {
 
   # Apply partition table
   if ! printf '%s' "$sfdisk_script" | sfdisk --quiet --no-reread "$image_path" >/dev/null 2>&1; then
-    echo "ERROR: create_loopback_image: sfdisk partitioning failed" >&2
+    echo "ERROR: _create_loopback_image: sfdisk partitioning failed" >&2
     return 1
   fi
 
@@ -344,12 +344,12 @@ create_loopback_image() {
 }
 
 # ============================================================================
-# attach_loopback_image
+# _attach_loopback_image
 #
 # Attach the image to a loop device with partition scanning.
 #
 # Usage:
-#   attach_loopback_image [IMAGE_PATH]
+#   _attach_loopback_image [IMAGE_PATH]
 #
 # Arguments:
 #   IMAGE_PATH - Path to the image file (default: LOOPBACK_IMAGE_PATH)
@@ -363,12 +363,12 @@ create_loopback_image() {
 #   0 - Loop device attached successfully
 #   1 - Attachment failed
 # ============================================================================
-# shellcheck disable=SC2120  # attach_loopback_image takes an optional argument with a default
-attach_loopback_image() {
+# shellcheck disable=SC2120  # _attach_loopback_image takes an optional argument with a default
+_attach_loopback_image() {
   local image_path="${1:-$LOOPBACK_IMAGE_PATH}"
 
   if [[ -z "$image_path" || ! -f "$image_path" ]]; then
-    echo "ERROR: attach_loopback_image: image not found: $image_path" >&2
+    echo "ERROR: _attach_loopback_image: image not found: $image_path" >&2
     return 1
   fi
 
@@ -376,20 +376,20 @@ attach_loopback_image() {
   local loop_dev
   loop_dev="$(losetup -f)" 2>/dev/null
   if [[ -z "$loop_dev" ]]; then
-    echo "ERROR: attach_loopback_image: no free loop device available" >&2
+    echo "ERROR: _attach_loopback_image: no free loop device available" >&2
     return 1
   fi
 
   # Attach with partition scanning
   if ! losetup -fP "$image_path" 2>/dev/null; then
-    echo "ERROR: attach_loopback_image: losetup failed for $image_path" >&2
+    echo "ERROR: _attach_loopback_image: losetup failed for $image_path" >&2
     return 1
   fi
 
   # Verify attachment
   loop_dev="$(losetup -j "$image_path" 2>/dev/null | head -1 | cut -d: -f1)"
   if [[ -z "$loop_dev" || ! -b "$loop_dev" ]]; then
-    echo "ERROR: attach_loopback_image: loop device not found after attach" >&2
+    echo "ERROR: _attach_loopback_image: loop device not found after attach" >&2
     return 1
   fi
 
@@ -413,12 +413,12 @@ attach_loopback_image() {
 }
 
 # ============================================================================
-# detach_loopback_image
+# _detach_loopback_image
 #
 # Detach the loop device, unmounting any mounted partitions first.
 #
 # Usage:
-#   detach_loopback_image [LOOP_DEVICE]
+#   _detach_loopback_image [LOOP_DEVICE]
 #
 # Arguments:
 #   LOOP_DEVICE - Loop device to detach (default: LOOPBACK_LOOP_DEVICE)
@@ -427,7 +427,7 @@ attach_loopback_image() {
 #   0 - Loop device detached successfully
 #   1 - Detach failed (best-effort)
 # ============================================================================
-detach_loopback_image() {
+_detach_loopback_image() {
   local loop_dev="${1:-$LOOPBACK_LOOP_DEVICE}"
 
   if [[ -z "$loop_dev" ]]; then
@@ -453,12 +453,12 @@ detach_loopback_image() {
 }
 
 # ============================================================================
-# format_loopback_partitions
+# _format_loopback_partitions
 #
 # Format all partitions on the loop device with deterministic UUIDs.
 #
 # Usage:
-#   format_loopback_partitions TEST_ID TOPOLOGY_TYPE [LOOP_DEVICE]
+#   _format_loopback_partitions TEST_ID TOPOLOGY_TYPE [LOOP_DEVICE]
 #
 # Arguments:
 #   TEST_ID        - Test identifier for deterministic UUIDs
@@ -473,13 +473,13 @@ detach_loopback_image() {
 #   0 - All partitions formatted successfully
 #   1 - Formatting failed
 # ============================================================================
-format_loopback_partitions() {
-  local test_id="${1:?format_loopback_partitions: missing TEST_ID}"
-  local topology_type="${2:?format_loopback_partitions: missing TOPOLOGY_TYPE}"
+_format_loopback_partitions() {
+  local test_id="${1:?_format_loopback_partitions: missing TEST_ID}"
+  local topology_type="${2:?_format_loopback_partitions: missing TOPOLOGY_TYPE}"
   local loop_dev="${3:-$LOOPBACK_LOOP_DEVICE}"
 
   if [[ -z "$loop_dev" || ! -b "$loop_dev" ]]; then
-    echo "ERROR: format_loopback_partitions: invalid loop device: $loop_dev" >&2
+    echo "ERROR: _format_loopback_partitions: invalid loop device: $loop_dev" >&2
     return 1
   fi
 
@@ -489,7 +489,7 @@ format_loopback_partitions() {
     single-slot) partitions=(esp efi-A rootfs-A var-A) ;;
     dual-slot) partitions=(esp efi-A rootfs-A var-A efi-B rootfs-B var-B) ;;
     *)
-      echo "ERROR: format_loopback_partitions: unknown topology: $topology_type" >&2
+      echo "ERROR: _format_loopback_partitions: unknown topology: $topology_type" >&2
       return 1
       ;;
   esac
@@ -500,7 +500,7 @@ format_loopback_partitions() {
   for part in "${partitions[@]}"; do
     local part_dev="${loop_dev}p${part_num}"
     if [[ ! -b "$part_dev" ]]; then
-      echo "ERROR: format_loopback_partitions: partition device not found: $part_dev" >&2
+      echo "ERROR: _format_loopback_partitions: partition device not found: $part_dev" >&2
       rc=1
       part_num=$((part_num + 1))
       continue
@@ -517,14 +517,14 @@ format_loopback_partitions() {
         local vol_id="${fs_uuid//-/}"
         vol_id="${vol_id:0:8}"
         if ! mkfs.vfat -F 32 -i "$vol_id" -n "${part^^}" "$part_dev" >/dev/null 2>&1; then
-          echo "ERROR: format_loopback_partitions: mkfs.vfat failed for $part" >&2
+          echo "ERROR: _format_loopback_partitions: mkfs.vfat failed for $part" >&2
           rc=1
         fi
         ;;
       rootfs-* | var-*)
         # Format as btrfs with deterministic UUID
         if ! mkfs.btrfs -f -U "$fs_uuid" -L "$part" "$part_dev" >/dev/null 2>&1; then
-          echo "ERROR: format_loopback_partitions: mkfs.btrfs failed for $part" >&2
+          echo "ERROR: _format_loopback_partitions: mkfs.btrfs failed for $part" >&2
           rc=1
         fi
         ;;
@@ -537,12 +537,12 @@ format_loopback_partitions() {
 }
 
 # ============================================================================
-# mount_loopback_partitions
+# _mount_loopback_partitions
 #
 # Mount all partitions under MOUNT_BASE/<TEST_ID>/.
 #
 # Usage:
-#   mount_loopback_partitions TEST_ID TOPOLOGY_TYPE [LOOP_DEVICE]
+#   _mount_loopback_partitions TEST_ID TOPOLOGY_TYPE [LOOP_DEVICE]
 #
 # Arguments:
 #   TEST_ID        - Test identifier
@@ -562,13 +562,13 @@ format_loopback_partitions() {
 #   0 - All partitions mounted successfully
 #   1 - Mounting failed
 # ============================================================================
-mount_loopback_partitions() {
-  local test_id="${1:?mount_loopback_partitions: missing TEST_ID}"
-  local topology_type="${2:?mount_loopback_partitions: missing TOPOLOGY_TYPE}"
+_mount_loopback_partitions() {
+  local test_id="${1:?_mount_loopback_partitions: missing TEST_ID}"
+  local topology_type="${2:?_mount_loopback_partitions: missing TOPOLOGY_TYPE}"
   local loop_dev="${3:-$LOOPBACK_LOOP_DEVICE}"
 
   if [[ -z "$loop_dev" || ! -b "$loop_dev" ]]; then
-    echo "ERROR: mount_loopback_partitions: invalid loop device: $loop_dev" >&2
+    echo "ERROR: _mount_loopback_partitions: invalid loop device: $loop_dev" >&2
     return 1
   fi
 
@@ -578,7 +578,7 @@ mount_loopback_partitions() {
     single-slot) partitions=(esp efi-A rootfs-A var-A) ;;
     dual-slot) partitions=(esp efi-A rootfs-A var-A efi-B rootfs-B var-B) ;;
     *)
-      echo "ERROR: mount_loopback_partitions: unknown topology: $topology_type" >&2
+      echo "ERROR: _mount_loopback_partitions: unknown topology: $topology_type" >&2
       return 1
       ;;
   esac
@@ -593,7 +593,7 @@ mount_loopback_partitions() {
   for part in "${partitions[@]}"; do
     local part_dev="${loop_dev}p${part_num}"
     if [[ ! -b "$part_dev" ]]; then
-      echo "ERROR: mount_loopback_partitions: partition device not found: $part_dev" >&2
+      echo "ERROR: _mount_loopback_partitions: partition device not found: $part_dev" >&2
       rc=1
       part_num=$((part_num + 1))
       continue
@@ -619,7 +619,7 @@ mount_loopback_partitions() {
     # Mount the partition
     # shellcheck disable=SC2086
     if ! mount $mount_opts "$part_dev" "$mount_point" 2>/dev/null; then
-      echo "ERROR: mount_loopback_partitions: mount failed for $part ($part_dev → $mount_point)" >&2
+      echo "ERROR: _mount_loopback_partitions: mount failed for $part ($part_dev → $mount_point)" >&2
       rc=1
     fi
 
@@ -632,7 +632,7 @@ mount_loopback_partitions() {
     && mountpoint -q "$mount_base/var-A" 2>/dev/null; then
     # Bind-mount var-A into rootfs-A/var
     if ! mount --bind "$mount_base/var-A" "$mount_base/rootfs-A/var" 2>/dev/null; then
-      echo "WARNING: mount_loopback_partitions: bind mount var-A into rootfs-A/var failed" >&2
+      echo "WARNING: _mount_loopback_partitions: bind mount var-A into rootfs-A/var failed" >&2
     else
       _LOOPBACK_MOUNT_POINTS+=("$mount_base/rootfs-A/var")
     fi
@@ -642,7 +642,7 @@ mount_loopback_partitions() {
     if mountpoint -q "$mount_base/rootfs-B" 2>/dev/null \
       && mountpoint -q "$mount_base/var-B" 2>/dev/null; then
       if ! mount --bind "$mount_base/var-B" "$mount_base/rootfs-B/var" 2>/dev/null; then
-        echo "WARNING: mount_loopback_partitions: bind mount var-B into rootfs-B/var failed" >&2
+        echo "WARNING: _mount_loopback_partitions: bind mount var-B into rootfs-B/var failed" >&2
       else
         _LOOPBACK_MOUNT_POINTS+=("$mount_base/rootfs-B/var")
       fi
@@ -654,12 +654,12 @@ mount_loopback_partitions() {
 }
 
 # ============================================================================
-# unmount_loopback_partitions
+# _unmount_loopback_partitions
 #
 # Unmount all partitions in reverse order (deepest first).
 #
 # Usage:
-#   unmount_loopback_partitions [TEST_ID]
+#   _unmount_loopback_partitions [TEST_ID]
 #
 # Arguments:
 #   TEST_ID - Test identifier (default: LOOPBACK_TEST_ID)
@@ -668,11 +668,11 @@ mount_loopback_partitions() {
 #   0 - All partitions unmounted successfully
 #   1 - Some unmounts failed (best-effort)
 # ============================================================================
-unmount_loopback_partitions() {
+_unmount_loopback_partitions() {
   local test_id="${1:-$LOOPBACK_TEST_ID}"
 
   if [[ -z "$test_id" ]]; then
-    echo "WARNING: unmount_loopback_partitions: no test ID" >&2
+    echo "WARNING: _unmount_loopback_partitions: no test ID" >&2
     return 0
   fi
 
@@ -739,12 +739,12 @@ unmount_loopback_partitions() {
 }
 
 # ============================================================================
-# populate_loopback_esp
+# _populate_loopback_esp
 #
 # Create bootconf files (A.conf, B.conf) on the ESP partition.
 #
 # Usage:
-#   populate_loopback_esp TEST_ID TOPOLOGY_TYPE
+#   _populate_loopback_esp TEST_ID TOPOLOGY_TYPE
 #
 # Arguments:
 #   TEST_ID        - Test identifier
@@ -758,13 +758,13 @@ unmount_loopback_partitions() {
 #   0 - ESP populated successfully
 #   1 - Population failed
 # ============================================================================
-populate_loopback_esp() {
-  local test_id="${1:?populate_loopback_esp: missing TEST_ID}"
-  local topology_type="${2:?populate_loopback_esp: missing TOPOLOGY_TYPE}"
+_populate_loopback_esp() {
+  local test_id="${1:?_populate_loopback_esp: missing TEST_ID}"
+  local topology_type="${2:?_populate_loopback_esp: missing TOPOLOGY_TYPE}"
 
   local esp_dir="$LOOPBACK_MOUNT_BASE/$test_id/esp"
   if [[ ! -d "$esp_dir" ]]; then
-    echo "ERROR: populate_loopback_esp: ESP directory not mounted: $esp_dir" >&2
+    echo "ERROR: _populate_loopback_esp: ESP directory not mounted: $esp_dir" >&2
     return 1
   fi
 
@@ -793,12 +793,12 @@ BOOTCONF_B_EOF
 }
 
 # ============================================================================
-# populate_loopback_efi
+# _populate_loopback_efi
 #
 # Create EFI partition content: grub.cfg, grubx64.efi, and partset files.
 #
 # Usage:
-#   populate_loopback_efi TEST_ID TOPOLOGY_TYPE SLOT [TARGET_SLOT]
+#   _populate_loopback_efi TEST_ID TOPOLOGY_TYPE SLOT [TARGET_SLOT]
 #
 # Arguments:
 #   TEST_ID        - Test identifier
@@ -815,15 +815,15 @@ BOOTCONF_B_EOF
 #   0 - EFI partition populated successfully
 #   1 - Population failed
 # ============================================================================
-populate_loopback_efi() {
-  local test_id="${1:?populate_loopback_efi: missing TEST_ID}"
-  local topology_type="${2:?populate_loopback_efi: missing TOPOLOGY_TYPE}"
-  local slot="${3:?populate_loopback_efi: missing SLOT}"
+_populate_loopback_efi() {
+  local test_id="${1:?_populate_loopback_efi: missing TEST_ID}"
+  local topology_type="${2:?_populate_loopback_efi: missing TOPOLOGY_TYPE}"
+  local slot="${3:?_populate_loopback_efi: missing SLOT}"
   local target_slot="${4:-$slot}"
 
   local efi_dir="$LOOPBACK_MOUNT_BASE/$test_id/efi-${slot}"
   if [[ ! -d "$efi_dir" ]]; then
-    echo "ERROR: populate_loopback_efi: EFI directory not mounted: $efi_dir" >&2
+    echo "ERROR: _populate_loopback_efi: EFI directory not mounted: $efi_dir" >&2
     return 1
   fi
 
@@ -876,12 +876,12 @@ PARTSET_SLOT_EOF
 }
 
 # ============================================================================
-# populate_loopback_rootfs
+# _populate_loopback_rootfs
 #
 # Create rootfs content: kernel, initramfs, GRUB configs, os-release.
 #
 # Usage:
-#   populate_loopback_rootfs TEST_ID SLOT [KERNEL_VERSION]
+#   _populate_loopback_rootfs TEST_ID SLOT [KERNEL_VERSION]
 #
 # Arguments:
 #   TEST_ID         - Test identifier
@@ -901,14 +901,14 @@ PARTSET_SLOT_EOF
 #   0 - Rootfs populated successfully
 #   1 - Population failed
 # ============================================================================
-populate_loopback_rootfs() {
-  local test_id="${1:?populate_loopback_rootfs: missing TEST_ID}"
-  local slot="${2:?populate_loopback_rootfs: missing SLOT}"
+_populate_loopback_rootfs() {
+  local test_id="${1:?_populate_loopback_rootfs: missing TEST_ID}"
+  local slot="${2:?_populate_loopback_rootfs: missing SLOT}"
   local kernel_version="${3:-$LOOPBACK_KERNEL_VERSION}"
 
   local rootfs_dir="$LOOPBACK_MOUNT_BASE/$test_id/rootfs-${slot}"
   if [[ ! -d "$rootfs_dir" ]]; then
-    echo "ERROR: populate_loopback_rootfs: rootfs directory not mounted: $rootfs_dir" >&2
+    echo "ERROR: _populate_loopback_rootfs: rootfs directory not mounted: $rootfs_dir" >&2
     return 1
   fi
 
@@ -923,13 +923,13 @@ populate_loopback_rootfs() {
 }
 
 # ============================================================================
-# create_loopback_fixture
+# _create_loopback_fixture
 #
 # High-level orchestrator: create a complete loopback fixture with real
 # GPT image, filesystems, and populated content.
 #
 # Usage:
-#   create_loopback_fixture TEST_ID TOPOLOGY_TYPE [TARGET_SLOT]
+#   _create_loopback_fixture TEST_ID TOPOLOGY_TYPE [TARGET_SLOT]
 #
 # Arguments:
 #   TEST_ID        - Test identifier for deterministic UUIDs
@@ -956,9 +956,9 @@ populate_loopback_rootfs() {
 #   0 - Fixture created successfully
 #   1 - Fixture creation failed
 # ============================================================================
-create_loopback_fixture() {
-  local test_id="${1:?create_loopback_fixture: missing TEST_ID}"
-  local topology_type="${2:?create_loopback_fixture: missing TOPOLOGY_TYPE}"
+_create_loopback_fixture() {
+  local test_id="${1:?_create_loopback_fixture: missing TEST_ID}"
+  local topology_type="${2:?_create_loopback_fixture: missing TOPOLOGY_TYPE}"
   local target_slot="${3:-}"
 
   # Determine default target slot
@@ -970,7 +970,7 @@ create_loopback_fixture() {
   fi
 
   # Check prerequisites
-  if ! loopback_check_prerequisites; then
+  if ! _loopback_check_prerequisites; then
     return 1
   fi
 
@@ -994,66 +994,66 @@ create_loopback_fixture() {
   LOOPBACK_TOPOLOGY="$topology_type"
 
   # 1. Create sparse GPT image
-  if ! create_loopback_image "$test_id" "$topology_type"; then
-    echo "ERROR: create_loopback_fixture: image creation failed" >&2
+  if ! _create_loopback_image "$test_id" "$topology_type"; then
+    echo "ERROR: _create_loopback_fixture: image creation failed" >&2
     _loopback_run_cleanup
     return 1
   fi
 
   # 2. Attach loop device
-  # shellcheck disable=SC2119  # attach_loopback_image intentionally uses default (LOOPBACK_IMAGE_PATH)
-  if ! attach_loopback_image; then
-    echo "ERROR: create_loopback_fixture: loop device attachment failed" >&2
+  # shellcheck disable=SC2119  # _attach_loopback_image intentionally uses default (LOOPBACK_IMAGE_PATH)
+  if ! _attach_loopback_image; then
+    echo "ERROR: _create_loopback_fixture: loop device attachment failed" >&2
     _loopback_run_cleanup
     return 1
   fi
 
   # 3. Format partitions with deterministic UUIDs
-  if ! format_loopback_partitions "$test_id" "$topology_type"; then
-    echo "ERROR: create_loopback_fixture: partition formatting failed" >&2
+  if ! _format_loopback_partitions "$test_id" "$topology_type"; then
+    echo "ERROR: _create_loopback_fixture: partition formatting failed" >&2
     _loopback_run_cleanup
     return 1
   fi
 
   # 4. Mount partitions
-  if ! mount_loopback_partitions "$test_id" "$topology_type"; then
-    echo "ERROR: create_loopback_fixture: partition mounting failed" >&2
+  if ! _mount_loopback_partitions "$test_id" "$topology_type"; then
+    echo "ERROR: _create_loopback_fixture: partition mounting failed" >&2
     _loopback_run_cleanup
     return 1
   fi
 
   # 5. Populate ESP (bootconf files)
-  if ! populate_loopback_esp "$test_id" "$topology_type"; then
-    echo "ERROR: create_loopback_fixture: ESP population failed" >&2
+  if ! _populate_loopback_esp "$test_id" "$topology_type"; then
+    echo "ERROR: _create_loopback_fixture: ESP population failed" >&2
     _loopback_run_cleanup
     return 1
   fi
 
   # 6. Populate EFI partitions
-  if ! populate_loopback_efi "$test_id" "$topology_type" "A" "$target_slot"; then
-    echo "ERROR: create_loopback_fixture: EFI-A population failed" >&2
+  if ! _populate_loopback_efi "$test_id" "$topology_type" "A" "$target_slot"; then
+    echo "ERROR: _create_loopback_fixture: EFI-A population failed" >&2
     _loopback_run_cleanup
     return 1
   fi
 
   if [[ "$topology_type" == "dual-slot" ]]; then
-    if ! populate_loopback_efi "$test_id" "$topology_type" "B" "$target_slot"; then
-      echo "ERROR: create_loopback_fixture: EFI-B population failed" >&2
+    if ! _populate_loopback_efi "$test_id" "$topology_type" "B" "$target_slot"; then
+      echo "ERROR: _create_loopback_fixture: EFI-B population failed" >&2
       _loopback_run_cleanup
       return 1
     fi
   fi
 
   # 7. Populate rootfs partitions
-  if ! populate_loopback_rootfs "$test_id" "A"; then
-    echo "ERROR: create_loopback_fixture: rootfs-A population failed" >&2
+  if ! _populate_loopback_rootfs "$test_id" "A"; then
+    echo "ERROR: _create_loopback_fixture: rootfs-A population failed" >&2
     _loopback_run_cleanup
     return 1
   fi
 
   if [[ "$topology_type" == "dual-slot" ]]; then
-    if ! populate_loopback_rootfs "$test_id" "B"; then
-      echo "ERROR: create_loopback_fixture: rootfs-B population failed" >&2
+    if ! _populate_loopback_rootfs "$test_id" "B"; then
+      echo "ERROR: _create_loopback_fixture: rootfs-B population failed" >&2
       _loopback_run_cleanup
       return 1
     fi
@@ -1063,12 +1063,12 @@ create_loopback_fixture() {
 }
 
 # ============================================================================
-# destroy_loopback_fixture
+# _destroy_loopback_fixture
 #
 # High-level cleanup: unmount, detach, remove image, remove directories.
 #
 # Usage:
-#   destroy_loopback_fixture [TEST_ID]
+#   _destroy_loopback_fixture [TEST_ID]
 #
 # Arguments:
 #   TEST_ID - Test identifier (default: LOOPBACK_TEST_ID)
@@ -1079,7 +1079,7 @@ create_loopback_fixture() {
 # Returns:
 #   0 - Cleanup completed (best-effort)
 # ============================================================================
-destroy_loopback_fixture() {
+_destroy_loopback_fixture() {
   local test_id="${1:-$LOOPBACK_TEST_ID}"
 
   # Run all registered cleanup handlers in reverse order
@@ -1089,24 +1089,24 @@ destroy_loopback_fixture() {
   LOOPBACK_IMAGE_PATH=""
   LOOPBACK_LOOP_DEVICE=""
   LOOPBACK_TEST_ID=""
-  # shellcheck disable=SC2034  # LOOPBACK_TOPOLOGY is part of the public API (set in create_loopback_fixture)
+  # shellcheck disable=SC2034  # LOOPBACK_TOPOLOGY is part of the public API (set in _create_loopback_fixture)
   LOOPBACK_TOPOLOGY=""
   LOOPBACK_MOUNT_BASE=""
-  # shellcheck disable=SC2034  # LOOPBACK_IS_PRIVATE_NS is part of the public API (set in enter_private_mount_namespace)
+  # shellcheck disable=SC2034  # LOOPBACK_IS_PRIVATE_NS is part of the public API (set in _enter_private_mount_namespace)
   LOOPBACK_IS_PRIVATE_NS=0
 
   return 0
 }
 
 # ============================================================================
-# enter_private_mount_namespace
+# _enter_private_mount_namespace
 #
 # Enter a private mount namespace using unshare. This isolates mount
 # operations from the parent process, preventing test mounts from
 # leaking into the host system.
 #
 # Usage:
-#   enter_private_mount_namespace
+#   _enter_private_mount_namespace
 #
 # After calling this function, all mount/unmount operations are confined
 # to the new namespace and will not affect the parent's mount table.
@@ -1121,15 +1121,15 @@ destroy_loopback_fixture() {
 # Note: This function calls exec to replace the current process.
 #       It does not return on success.
 # ============================================================================
-enter_private_mount_namespace() {
+_enter_private_mount_namespace() {
   if ! command -v unshare >/dev/null 2>&1; then
-    echo "ERROR: enter_private_mount_namespace: unshare not found" >&2
+    echo "ERROR: _enter_private_mount_namespace: unshare not found" >&2
     return 1
   fi
 
   # Verify that unshare supports mount namespace
   if ! unshare --mount --propagation private echo test >/dev/null 2>&1; then
-    echo "ERROR: enter_private_mount_namespace: unshare --mount not supported" >&2
+    echo "ERROR: _enter_private_mount_namespace: unshare --mount not supported" >&2
     return 1
   fi
 

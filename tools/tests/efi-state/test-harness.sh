@@ -24,14 +24,14 @@
 #   test_harness_begin_test           — Begin a new test case
 #   test_harness_pass                 — Mark current test as passed
 #   test_harness_fail                 — Mark current test as failed
-#   test_harness_skip                 — Mark current test as skipped
+#   _test_harness_skip                 — Mark current test as skipped
 #   test_harness_assert_eq            — Assert two values are equal
 #   test_harness_assert_file_exists   — Assert file exists
-#   test_harness_assert_file_not_exists — Assert file does not exist
+#   _test_harness_assert_file_not_exists — Assert file does not exist
 #   test_harness_assert_dir_exists    — Assert directory exists
 #   test_harness_assert_contains      — Assert string contains substring
 #   test_harness_assert_not_contains  — Assert string does not contain substring
-#   test_harness_run_in_subshell      — Run a function in an isolated subshell
+#   _test_harness_run_in_subshell      — Run a function in an isolated subshell
 #   test_harness_summary              — Print test results summary
 #   test_harness_exit_code            — Return 0 if all passed, 1 otherwise
 
@@ -175,16 +175,16 @@ test_harness_fail() {
 }
 
 # ---------------------------------------------------------------------------
-# test_harness_skip [reason]
+# _test_harness_skip [reason]
 #
 # Mark the current test as skipped, with an optional reason.
 # ---------------------------------------------------------------------------
 
-test_harness_skip() {
+_test_harness_skip() {
   local reason="${1:-skipped}"
 
   if [[ -z "$_TEST_HARNESS_CURRENT_TEST" ]]; then
-    echo "WARNING: test_harness_skip called without a test in progress" >&2
+    echo "WARNING: _test_harness_skip called without a test in progress" >&2
     return 1
   fi
 
@@ -231,13 +231,13 @@ test_harness_assert_file_exists() {
 }
 
 # ---------------------------------------------------------------------------
-# test_harness_assert_file_not_exists <path>
+# _test_harness_assert_file_not_exists <path>
 #
 # Assert that a file does NOT exist at the given path.
 # ---------------------------------------------------------------------------
 
-test_harness_assert_file_not_exists() {
-  local path="${1:?test_harness_assert_file_not_exists requires a path}"
+_test_harness_assert_file_not_exists() {
+  local path="${1:?_test_harness_assert_file_not_exists requires a path}"
 
   if [[ ! -f "$path" ]]; then
     return 0
@@ -303,7 +303,7 @@ test_harness_assert_not_contains() {
 }
 
 # ---------------------------------------------------------------------------
-# test_harness_run_in_subshell <function_name> [args...]
+# _test_harness_run_in_subshell <function_name> [args...]
 #
 # Run a function in an isolated subshell. The function and all its
 # effects (file creation, variable changes, etc.) are confined to
@@ -313,12 +313,12 @@ test_harness_assert_not_contains() {
 # exist, returns 1.
 # ---------------------------------------------------------------------------
 
-test_harness_run_in_subshell() {
-  local func="${1:?test_harness_run_in_subshell requires a function name}"
+_test_harness_run_in_subshell() {
+  local func="${1:?_test_harness_run_in_subshell requires a function name}"
   shift
 
   if ! declare -f "$func" >/dev/null 2>&1; then
-    echo "ERROR: test_harness_run_in_subshell: '$func' is not a function" >&2
+    echo "ERROR: _test_harness_run_in_subshell: '$func' is not a function" >&2
     return 1
   fi
 

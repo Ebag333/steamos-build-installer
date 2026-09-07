@@ -52,7 +52,7 @@ if [[ ! -f "$GRUB_FILE" ]]; then
   exit 1
 fi
 
-if ! _add_params_to_grub_steamos "$GRUB_FILE" "thunderbolt.host_reset=0"; then
+if ! add_params_to_grub_steamos "$GRUB_FILE" "thunderbolt.host_reset=0"; then
   echo "ERROR: Failed to add thunderbolt.host_reset=0 to $GRUB_FILE" >&2
   exit 1
 fi

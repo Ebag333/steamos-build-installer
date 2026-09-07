@@ -97,11 +97,11 @@ _PF_GEN_ALLOWED_STATIC_ARTIFACTS=(
 # Preflight checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_generation_rootfs_uuid ROOTFS
+# _preflight_generation_rootfs_uuid ROOTFS
 #   PF-16: Verify the rootfs UUID is obtainable via findmnt + blkid.
 #   Dies on failure.
-preflight_generation_rootfs_uuid() {
-  local rootfs="${1:?preflight_generation_rootfs_uuid: missing rootfs path}"
+_preflight_generation_rootfs_uuid() {
+  local rootfs="${1:?_preflight_generation_rootfs_uuid: missing rootfs path}"
 
   # Resolve rootfs device (shared)
   local rootfs_device
@@ -120,14 +120,14 @@ preflight_generation_rootfs_uuid() {
   debug "PF-16: rootfs UUID resolved: $current_uuid ($rootfs)"
 }
 
-# preflight_generation_uuid_mutation_complete ROOTFS [EXPECTED_UUID]
+# _preflight_generation_uuid_mutation_complete ROOTFS [EXPECTED_UUID]
 #   PF-17: Verify the resolved UUID is non-empty, has valid format,
 #   is unique among all visible Btrfs filesystems, and (when
 #   EXPECTED_UUID is provided) matches it — confirming that a UUID
 #   mutation (e.g. during image cloning) has completed.
 #   Dies on failure.
-preflight_generation_uuid_mutation_complete() {
-  local rootfs="${1:?preflight_generation_uuid_mutation_complete: missing rootfs path}"
+_preflight_generation_uuid_mutation_complete() {
+  local rootfs="${1:?_preflight_generation_uuid_mutation_complete: missing rootfs path}"
   local expected_uuid="${2:-}"
 
   # Resolve rootfs device (shared helper)
@@ -185,11 +185,11 @@ preflight_generation_uuid_mutation_complete() {
   debug "PF-17: rootfs UUID is $current_uuid (unique, valid)"
 }
 
-# preflight_generation_grub_mkimage ROOTFS
+# _preflight_generation_grub_mkimage ROOTFS
 #   PF-18: Verify grub-mkimage exists and is executable in the rootfs.
 #   Dies on failure.
-preflight_generation_grub_mkimage() {
-  local rootfs="${1:?preflight_generation_grub_mkimage: missing rootfs path}"
+_preflight_generation_grub_mkimage() {
+  local rootfs="${1:?_preflight_generation_grub_mkimage: missing rootfs path}"
 
   if ! _pf_gen_command_available "$rootfs" "grub-mkimage"; then
     die "PF-18: grub-mkimage not found or not executable in rootfs: $rootfs"
@@ -198,12 +198,12 @@ preflight_generation_grub_mkimage() {
   debug "PF-18: grub-mkimage is available in rootfs: $rootfs"
 }
 
-# preflight_generation_grub_platform_files ROOTFS
+# _preflight_generation_grub_platform_files ROOTFS
 #   PF-19: Verify /usr/lib/grub/x86_64-efi/ exists in the rootfs and
 #   contains key EFI modules (linux.efi, normal.mod).
 #   Dies on failure.
-preflight_generation_grub_platform_files() {
-  local rootfs="${1:?preflight_generation_grub_platform_files: missing rootfs path}"
+_preflight_generation_grub_platform_files() {
+  local rootfs="${1:?_preflight_generation_grub_platform_files: missing rootfs path}"
 
   local grub_dir="$rootfs/usr/lib/grub/x86_64-efi"
 
@@ -233,11 +233,11 @@ preflight_generation_grub_platform_files() {
   debug "PF-19: GRUB platform files present: $grub_dir"
 }
 
-# preflight_generation_update_grub ROOTFS
+# _preflight_generation_update_grub ROOTFS
 #   PF-20: Verify update-grub exists and is executable in the rootfs.
 #   Dies on failure.
-preflight_generation_update_grub() {
-  local rootfs="${1:?preflight_generation_update_grub: missing rootfs path}"
+_preflight_generation_update_grub() {
+  local rootfs="${1:?_preflight_generation_update_grub: missing rootfs path}"
 
   if ! _pf_gen_command_available "$rootfs" "update-grub"; then
     die "PF-20: update-grub not found or not executable in rootfs: $rootfs"
@@ -246,12 +246,12 @@ preflight_generation_update_grub() {
   debug "PF-20: update-grub is available in rootfs: $rootfs"
 }
 
-# preflight_generation_boot_payload ROOTFS
+# _preflight_generation_boot_payload ROOTFS
 #   PF-21: Verify at least one vmlinuz-* kernel image exists in the rootfs
 #   /boot directory and has a matching initramfs-*.img companion.
 #   Dies on failure.
-preflight_generation_boot_payload() {
-  local rootfs="${1:?preflight_generation_boot_payload: missing rootfs path}"
+_preflight_generation_boot_payload() {
+  local rootfs="${1:?_preflight_generation_boot_payload: missing rootfs path}"
 
   local boot_dir="$rootfs/boot"
 
@@ -333,11 +333,11 @@ preflight_generation_boot_payload() {
   fi
 }
 
-# preflight_generation_steamos_partsets ROOTFS
+# _preflight_generation_steamos_partsets ROOTFS
 #   PF-22: Verify steamos-partsets exists and is executable in the rootfs.
 #   Dies on failure.
-preflight_generation_steamos_partsets() {
-  local rootfs="${1:?preflight_generation_steamos_partsets: missing rootfs path}"
+_preflight_generation_steamos_partsets() {
+  local rootfs="${1:?_preflight_generation_steamos_partsets: missing rootfs path}"
 
   if ! _pf_gen_command_available "$rootfs" "steamos-partsets"; then
     die "PF-22: steamos-partsets not found or not executable in rootfs: $rootfs"
@@ -346,11 +346,11 @@ preflight_generation_steamos_partsets() {
   debug "PF-22: steamos-partsets is available in rootfs: $rootfs"
 }
 
-# preflight_generation_steamos_bootconf ROOTFS
+# _preflight_generation_steamos_bootconf ROOTFS
 #   PF-23: Verify steamos-bootconf exists and is executable in the rootfs.
 #   Dies on failure.
-preflight_generation_steamos_bootconf() {
-  local rootfs="${1:?preflight_generation_steamos_bootconf: missing rootfs path}"
+_preflight_generation_steamos_bootconf() {
+  local rootfs="${1:?_preflight_generation_steamos_bootconf: missing rootfs path}"
 
   if ! _pf_gen_command_available "$rootfs" "steamos-bootconf"; then
     die "PF-23: steamos-bootconf not found or not executable in rootfs: $rootfs"
@@ -359,14 +359,14 @@ preflight_generation_steamos_bootconf() {
   debug "PF-23: steamos-bootconf is available in rootfs: $rootfs"
 }
 
-# preflight_generation_source_artifacts SOURCE_EFI_MOUNT
+# _preflight_generation_source_artifacts SOURCE_EFI_MOUNT
 #   PF-24: Check that a source EFI binary is available at the given mount.
 #   This check is advisory — source artifacts are NOT portable and their
 #   absence must NOT prevent generation.  Only warns on failure.
 #
 #   Note: ROOTFS was previously accepted as the first parameter but never
 #   used.  It has been removed from the signature for clarity.
-preflight_generation_source_artifacts() {
+_preflight_generation_source_artifacts() {
   local source_efi="${1:-}"
 
   if [[ -z "$source_efi" ]]; then
@@ -427,12 +427,12 @@ preflight_generation_source_artifacts() {
   debug "PF-24: source EFI artifacts present: $source_efi"
 }
 
-# preflight_generation_source_allowlist ROOTFS SOURCE_EFI_MOUNT
+# _preflight_generation_source_allowlist ROOTFS SOURCE_EFI_MOUNT
 #   PF-25: Verify the source EFI does not contain known non-portable paths
 #   (grub.cfg, grubx64.efi, partsets/) that should be excluded from copy.
 #   This check is advisory — only warns on failure.
-preflight_generation_source_allowlist() {
-  local rootfs="${1:?preflight_generation_source_allowlist: missing rootfs path}"
+_preflight_generation_source_allowlist() {
+  local rootfs="${1:?_preflight_generation_source_allowlist: missing rootfs path}"
   local source_efi="${2:-}"
 
   if [[ -z "$source_efi" ]]; then
@@ -485,14 +485,14 @@ preflight_generation_source_allowlist() {
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-# preflight_generation_tool_available ROOTFS TOOL [REASON]
+# _preflight_generation_tool_available ROOTFS TOOL [REASON]
 #   PF-18: Verify TOOL exists and is executable in the rootfs chroot.
 #   REASON is an optional human-readable description of why the tool is
 #   needed, included in the error message for easier debugging.
 #   Dies on failure.
-preflight_generation_tool_available() {
-  local rootfs="${1:?preflight_generation_tool_available: missing rootfs path}"
-  local tool="${2:?preflight_generation_tool_available: missing tool name}"
+_preflight_generation_tool_available() {
+  local rootfs="${1:?_preflight_generation_tool_available: missing rootfs path}"
+  local tool="${2:?_preflight_generation_tool_available: missing tool name}"
   local reason="${3:-}"
 
   local reason_msg=""
@@ -539,51 +539,51 @@ preflight_generation_validate() {
   debug "preflight_generation_validate: root=$rootfs source=${source_efi_dir:-<none>} uuid=${expected_uuid:-<none>} binary=$generate_binary config=$generate_config partsets=$generate_partsets bootconf=$generate_bootconf"
 
   # PF-16: Rootfs UUID is valid (always required for Btrfs rootfs validation)
-  preflight_generation_rootfs_uuid "$rootfs"
+  _preflight_generation_rootfs_uuid "$rootfs"
 
   # PF-17: UUID mutation completed (when expected UUID is provided)
   if [[ -n "$expected_uuid" ]]; then
-    preflight_generation_uuid_mutation_complete "$rootfs" "$expected_uuid"
+    _preflight_generation_uuid_mutation_complete "$rootfs" "$expected_uuid"
   fi
 
   # PF-18: Required tools available — only check tools that will be used
   if [[ "$generate_binary" == "true" ]]; then
-    preflight_generation_tool_available "$rootfs" "grub-mkimage" "required for binary generation"
+    _preflight_generation_tool_available "$rootfs" "grub-mkimage" "required for binary generation"
   fi
   if [[ "$generate_config" == "true" ]]; then
-    preflight_generation_tool_available "$rootfs" "update-grub" "required for config generation"
+    _preflight_generation_tool_available "$rootfs" "update-grub" "required for config generation"
   fi
   if [[ "$generate_partsets" == "true" ]]; then
-    preflight_generation_tool_available "$rootfs" "steamos-partsets" "required for partset generation"
+    _preflight_generation_tool_available "$rootfs" "steamos-partsets" "required for partset generation"
   fi
   if [[ "$generate_bootconf" == "true" ]]; then
-    preflight_generation_tool_available "$rootfs" "steamos-bootconf" "required for bootconf generation"
+    _preflight_generation_tool_available "$rootfs" "steamos-bootconf" "required for bootconf generation"
   fi
 
   # PF-19: GRUB modules present (when binary generation is needed)
   if [[ "$generate_binary" == "true" ]]; then
-    preflight_generation_grub_platform_files "$rootfs"
+    _preflight_generation_grub_platform_files "$rootfs"
   fi
 
   # PF-20/21: Boot payload valid (when config generation is needed)
   if [[ "$generate_config" == "true" ]]; then
-    preflight_generation_boot_payload "$rootfs"
+    _preflight_generation_boot_payload "$rootfs"
   fi
 
   # PF-22: GRUB directory structure (when binary generation is needed)
   if [[ "$generate_binary" == "true" ]]; then
-    preflight_generation_steamos_partsets "$rootfs"
+    _preflight_generation_steamos_partsets "$rootfs"
   fi
 
   # PF-23: GRUB environment (when config generation is needed)
   if [[ "$generate_config" == "true" ]]; then
-    preflight_generation_steamos_bootconf "$rootfs"
+    _preflight_generation_steamos_bootconf "$rootfs"
   fi
 
   # PF-24/25: Source EFI artifacts (only when source is provided)
   if [[ -n "$source_efi_dir" ]]; then
-    preflight_generation_source_artifacts "$source_efi_dir"
-    preflight_generation_source_allowlist "$rootfs" "$source_efi_dir"
+    _preflight_generation_source_artifacts "$source_efi_dir"
+    _preflight_generation_source_allowlist "$rootfs" "$source_efi_dir"
   fi
 
   debug "preflight_generation_validate: all generation prerequisites satisfied"

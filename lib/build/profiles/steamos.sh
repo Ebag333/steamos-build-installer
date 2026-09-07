@@ -21,7 +21,7 @@ _BUILD_STEAMOS_PROFILE_LOADED=1
 # Get SteamOS version from a root.
 # Args: $1 = root path
 # Prints: version string
-steamos_get_version() {
+_steamos_get_version() {
   local root="${1:?}"
 
   if [[ -f "$root/etc/os-release" ]]; then
@@ -32,7 +32,7 @@ steamos_get_version() {
 # Get SteamOS build ID from a root.
 # Args: $1 = root path
 # Prints: build ID
-steamos_get_build_id() {
+_steamos_get_build_id() {
   local root="${1:?}"
 
   if [[ -f "$root/etc/os-release" ]]; then
@@ -43,7 +43,7 @@ steamos_get_build_id() {
 # Get the kernel version from a root.
 # Args: $1 = root path
 # Prints: kernel version
-steamos_get_kernel_version() {
+_steamos_get_kernel_version() {
   local root="${1:?}"
 
   # Try from the installed kernel package
@@ -87,9 +87,9 @@ steamos_derive_profile() {
 
   # Add SteamOS-specific metadata
   local version build_id kernel
-  version="$(steamos_get_version "$root")"
-  build_id="$(steamos_get_build_id "$root")"
-  kernel="$(steamos_get_kernel_version "$root")"
+  version="$(_steamos_get_version "$root")"
+  build_id="$(_steamos_get_build_id "$root")"
+  kernel="$(_steamos_get_kernel_version "$root")"
 
   # Write with shell-safe quoting so that values containing spaces,
   # quotes, #, backslashes, or newlines don't corrupt the file.

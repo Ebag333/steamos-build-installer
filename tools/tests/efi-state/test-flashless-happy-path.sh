@@ -65,7 +65,7 @@ trap test_harness_cleanup EXIT
 # Verify B binary/config, partsets, persistent defaults, bootconf
 # reach intended state
 # ============================================================================
-test_f01_standby_deployment_happy_path() {
+_test_f01_standby_deployment_happy_path() {
   flashless_scenario_setup || exit 1
 
   # Apply flashless state to target B (standby)
@@ -192,7 +192,7 @@ test_f01_standby_deployment_happy_path() {
 # Apply flashless state
 # Verify self=B, other=A, exact PARTUUIDs
 # ============================================================================
-test_f03_target_partsets_correct() {
+_test_f03_target_partsets_correct() {
   flashless_scenario_setup || exit 1
 
   if ! simulate_flashless_apply; then
@@ -263,7 +263,7 @@ test_f03_target_partsets_correct() {
 # Apply flashless state
 # Verify valid PE, contains B UUID, no A/source UUID
 # ============================================================================
-test_f04_target_efi_binary_valid() {
+_test_f04_target_efi_binary_valid() {
   flashless_scenario_setup || exit 1
 
   if ! simulate_flashless_apply; then
@@ -289,7 +289,7 @@ test_f04_target_efi_binary_valid() {
 # Apply flashless state
 # Verify search/menu uses B UUID, kernels exist, params exactly once
 # ============================================================================
-test_f05_target_grub_config_valid() {
+_test_f05_target_grub_config_valid() {
   flashless_scenario_setup || exit 1
 
   if ! simulate_flashless_apply; then
@@ -379,7 +379,7 @@ test_f05_target_grub_config_valid() {
 # Apply flashless state
 # Verify B.conf parseable, staging state
 # ============================================================================
-test_f06_missing_b_bootconf_initialized() {
+_test_f06_missing_b_bootconf_initialized() {
   flashless_scenario_setup || exit 1
 
   # Remove B.conf to simulate a missing bootconf
@@ -418,7 +418,7 @@ test_f06_missing_b_bootconf_initialized() {
 # Apply flashless state
 # Verify no mkfs, sentinels unchanged
 # ============================================================================
-test_f08_valid_target_efi_preserved() {
+_test_f08_valid_target_efi_preserved() {
   flashless_scenario_setup || exit 1
 
   # Place sentinel files to track whether mkfs is run
@@ -482,7 +482,7 @@ test_f08_valid_target_efi_preserved() {
 # Apply flashless state
 # Verify B valid/active only after all validation
 # ============================================================================
-test_f10_activation_occurs_last() {
+_test_f10_activation_occurs_last() {
   flashless_scenario_setup || exit 1
 
   # Apply flashless state (includes activation at the end)
@@ -540,7 +540,7 @@ test_f10_activation_occurs_last() {
 # Apply flashless state
 # Mount efi-B and inspect files directly
 # ============================================================================
-test_f12_on_disk_partsets_independently_verified() {
+_test_f12_on_disk_partsets_independently_verified() {
   flashless_scenario_setup || exit 1
 
   if ! simulate_flashless_apply; then
@@ -685,7 +685,7 @@ test_f12_on_disk_partsets_independently_verified() {
 # Apply flashless state
 # Verify B verity data regenerated/disabled
 # ============================================================================
-test_f14_verity_policy_completed() {
+_test_f14_verity_policy_completed() {
   flashless_scenario_setup || exit 1
 
   if ! simulate_flashless_apply; then
@@ -779,7 +779,7 @@ test_f14_verity_policy_completed() {
 
 # F-01
 test_harness_begin_test "F-01: Standby deployment happy path"
-(test_f01_standby_deployment_happy_path) || true
+(_test_f01_standby_deployment_happy_path) || true
 # Only pass if the function did not already fail
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
@@ -787,56 +787,56 @@ fi
 
 # F-03
 test_harness_begin_test "F-03: Target partsets correct"
-(test_f03_target_partsets_correct) || true
+(_test_f03_target_partsets_correct) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-04
 test_harness_begin_test "F-04: Target EFI binary valid"
-(test_f04_target_efi_binary_valid) || true
+(_test_f04_target_efi_binary_valid) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-05
 test_harness_begin_test "F-05: Target GRUB configuration valid"
-(test_f05_target_grub_config_valid) || true
+(_test_f05_target_grub_config_valid) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-06
 test_harness_begin_test "F-06: Missing B bootconf initialized"
-(test_f06_missing_b_bootconf_initialized) || true
+(_test_f06_missing_b_bootconf_initialized) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-08
 test_harness_begin_test "F-08: Valid target EFI preserved"
-(test_f08_valid_target_efi_preserved) || true
+(_test_f08_valid_target_efi_preserved) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-10
 test_harness_begin_test "F-10: Activation occurs last"
-(test_f10_activation_occurs_last) || true
+(_test_f10_activation_occurs_last) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-12
 test_harness_begin_test "F-12: On-disk partsets independently verified"
-(test_f12_on_disk_partsets_independently_verified) || true
+(_test_f12_on_disk_partsets_independently_verified) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # F-14
 test_harness_begin_test "F-14: Verity policy completed"
-(test_f14_verity_policy_completed) || true
+(_test_f14_verity_policy_completed) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi

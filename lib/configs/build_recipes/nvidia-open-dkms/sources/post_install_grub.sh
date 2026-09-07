@@ -40,10 +40,10 @@ if [[ ! -f "$GRUB_FILE" ]]; then
 fi
 
 # NVIDIA_CMDLINE_ADD is defined by common_drivers.sh (loaded via the loader).
-# Add each parameter idempotently — _add_params_to_grub_steamos skips
+# Add each parameter idempotently — add_params_to_grub_steamos skips
 # parameters that are already present.
 # shellcheck disable=SC2086  # word splitting intentional: each param is a separate arg
-_add_params_to_grub_steamos "$GRUB_FILE" $NVIDIA_CMDLINE_ADD
+add_params_to_grub_steamos "$GRUB_FILE" $NVIDIA_CMDLINE_ADD
 
 # ── 4. Patch EFI grub.cfg with NVIDIA kernel parameters ──────────────────
 # When EFIMNT is available and the EFI grub.cfg exists, idempotently add the
@@ -52,7 +52,7 @@ _add_params_to_grub_steamos "$GRUB_FILE" $NVIDIA_CMDLINE_ADD
 if [[ -n "${EFIMNT:-}" && -f "$EFIMNT/EFI/steamos/grub.cfg" ]]; then
   echo "Patching EFI grub.cfg at $EFIMNT/EFI/steamos/grub.cfg"
   # shellcheck disable=SC2086  # word splitting intentional: each param is a separate arg
-  _add_params_to_efi_grub_cfg "$EFIMNT/EFI/steamos/grub.cfg" $NVIDIA_CMDLINE_ADD
+  add_params_to_efi_grub_cfg "$EFIMNT/EFI/steamos/grub.cfg" $NVIDIA_CMDLINE_ADD
 elif [[ -n "${EFIMNT:-}" ]]; then
   echo "EFI grub.cfg not found at $EFIMNT/EFI/steamos/grub.cfg — skipping EFI write"
 fi

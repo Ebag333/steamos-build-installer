@@ -100,8 +100,8 @@ nvidia_modules_valid() {
 # without knowing which subsystem produced each module.
 declare -ag BUILT_MODULE_FILES=()
 
-register_built_module() {
-  local module="${1:?register_built_module: missing module path}"
+_register_built_module() {
+  local module="${1:?_register_built_module: missing module path}"
   local existing
 
   # Keep one canonical relative form.
@@ -112,7 +112,7 @@ register_built_module() {
   fi
 
   [[ "$module" != usr/lib/modules/* ]] \
-    || die "register_built_module: path belongs to a different/unknown kernel: $module"
+    || die "_register_built_module: path belongs to a different/unknown kernel: $module"
 
   for existing in "${BUILT_MODULE_FILES[@]}"; do
     [[ "$existing" == "$module" ]] && return 0
@@ -221,11 +221,11 @@ verify_built_modules() {
 }
 
 # Compatibility helper for existing repatch/install code.  New module builders
-# should register their outputs with register_built_module() and use
+# should register their outputs with _register_built_module() and use
 # verify_built_modules() instead.
-verify_hid_modules() {
-  local root="${1:?verify_hid_modules: missing root}"
-  local kver="${2:?verify_hid_modules: missing kver}"
+_verify_hid_modules() {
+  local root="${1:?_verify_hid_modules: missing root}"
+  local kver="${2:?_verify_hid_modules: missing kver}"
   local on_fail="${3:-warn}"
 
   local -a hid_modules=(

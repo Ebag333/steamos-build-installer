@@ -181,13 +181,13 @@ MANGOHUD_DEFAULT_LOG="${XDG_CONFIG_HOME:-$HOME/.config}/MangoHud"
 
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; } # lint-ignore: no-shadow
 
-gpu_snapshot() {
+_gpu_snapshot() {
   nvidia-smi -i "$GPU_ID" \
     --query-gpu=name,driver_version,memory.total,power.limit \
     --format=csv,noheader 2>/dev/null || echo "unknown"
 }
 
-gpu_telemetry_line() {
+_gpu_telemetry_line() {
   nvidia-smi -i "$GPU_ID" \
     --query-gpu=utilization.gpu,utilization.memory,clocks.gr,clocks.mem,memory.used,power.draw,temperature.gpu \
     --format=csv,noheader,nounits 2>/dev/null || echo "?,?,?,?,?,?,?"
@@ -195,7 +195,7 @@ gpu_telemetry_line() {
 
 # Telemetry sampler — writes CSV rows to $1 while process $2 is alive.
 # Stops 2 seconds after the game exits (to catch tail-end GPU state).
-sample_telemetry() {
+_sample_telemetry() {
   local out_csv="$1"
   local watch_pid="$2"
   local ts line gpu_util mem_util gfx vram pwr temp
@@ -204,7 +204,7 @@ sample_telemetry() {
 
   while kill -0 "$watch_pid" 2>/dev/null; do
     ts="$(date '+%T.%3N')"
-    line="$(gpu_telemetry_line)"
+    line="$(_gpu_telemetry_line)"
     IFS=',' read -r gpu_util mem_util gfx _ vram pwr temp <<<"$line"
     echo "${ts},${gpu_util},${mem_util},${gfx},${vram},${pwr},${temp}" >>"$out_csv"
     sleep 1
@@ -213,7 +213,7 @@ sample_telemetry() {
   # A couple more samples after exit to capture final state.
   for _ in 1 2; do
     ts="$(date '+%T.%3N')"
-    line="$(gpu_telemetry_line)"
+    line="$(_gpu_telemetry_line)"
     IFS=',' read -r gpu_util mem_util gfx _ vram pwr temp <<<"$line"
     echo "${ts},${gpu_util},${mem_util},${gfx},${vram},${pwr},${temp}" >>"$out_csv"
     sleep 1
@@ -222,7 +222,7 @@ sample_telemetry() {
 
 # Parse MangoHud CSV output for frame-time stats.
 # MangoHud CSV columns vary by config; we look for common ones.
-summarize_mangohud() {
+_summarize_mangohud() {
   local csv="$1"
   [[ -f "$csv" ]] || return
 
@@ -274,7 +274,7 @@ for key in ('fps_avg', 'fps_1%', 'fps_min', 'fps_max', 'ft_avg', 'ft_p99', 'ft_m
 }
 
 # Compute summary stats from a telemetry CSV.
-summarize_csv() {
+_summarize_csv() {
   local csv="$1"
   python3 -c "
 import csv, statistics, sys
@@ -325,7 +325,7 @@ print(','.join([
 # Fetch launch options from ProtonDB
 # ---------------------------------------------------------------------------
 
-fetch_launch_options() {
+_fetch_launch_options() {
   log "Fetching ProtonDB launch options for appid $APPID ..."
   python3 "$PROTONDB_SCRIPT" "$APPID" \
     --json \
@@ -350,7 +350,7 @@ ${snippet}
 PYEOF
 }
 
-extract_top_candidates() {
+_extract_top_candidates() {
   _with_candidates "
 for c in candidates[:8]:
     canon = c.get('canonical', '')
@@ -369,7 +369,7 @@ declare -a CASE_LABELS=()
 declare -a CASE_ENVS=()
 declare -a CASE_ARGS=()
 
-add_case() {
+_add_case() {
   local label="$1" envs="$2" args="$3"
   CASE_LABELS+=("$label")
   CASE_ENVS+=("$envs")
@@ -380,18 +380,18 @@ add_case() {
 # Build test matrix
 # ---------------------------------------------------------------------------
 
-build_cases() {
+_build_cases() {
   log "Building test cases ..."
 
-  add_case "baseline" "" ""
-  add_case "PROTON_NO_UPLOAD_HVV=1" "PROTON_NO_UPLOAD_HVV=1" ""
-  add_case "VKD3D_CONFIG=no_upload_hvv" "VKD3D_CONFIG=no_upload_hvv" ""
-  add_case "DXVK_ASYNC=1" "DXVK_ASYNC=1" ""
-  add_case "PROTON_NO_UPLOAD_HVV=1 + DXVK_ASYNC=1" \
+  _add_case "baseline" "" ""
+  _add_case "PROTON_NO_UPLOAD_HVV=1" "PROTON_NO_UPLOAD_HVV=1" ""
+  _add_case "VKD3D_CONFIG=no_upload_hvv" "VKD3D_CONFIG=no_upload_hvv" ""
+  _add_case "DXVK_ASYNC=1" "DXVK_ASYNC=1" ""
+  _add_case "PROTON_NO_UPLOAD_HVV=1 + DXVK_ASYNC=1" \
     "PROTON_NO_UPLOAD_HVV=1 DXVK_ASYNC=1" ""
 
   if ((!SKIP_FETCH)); then
-    fetch_launch_options
+    _fetch_launch_options
   elif [[ -f "$OPTIONS_JSON" ]]; then
     log "Using cached $OPTIONS_JSON"
   else
@@ -418,11 +418,11 @@ build_cases() {
       fi
     done
 
-    add_case "protondb #$count (score ${score})" "$env_str" "$arg_str"
-  done <<<"$(extract_top_candidates)"
+    _add_case "protondb #$count (score ${score})" "$env_str" "$arg_str"
+  done <<<"$(_extract_top_candidates)"
 
   for custom in "${EXTRA_CASES[@]}"; do
-    add_case "custom: $custom" "$custom" ""
+    _add_case "custom: $custom" "$custom" ""
   done
 
   log "${#CASE_LABELS[@]} test cases defined"
@@ -432,7 +432,7 @@ build_cases() {
 # Run one benchmark iteration
 # ---------------------------------------------------------------------------
 
-run_one() {
+_run_one() {
   local case_idx="$1"
   local round="$2"
   local label="${CASE_LABELS[$case_idx]}"
@@ -491,7 +491,7 @@ MANGOCONF
   local game_pid=$!
 
   # Start telemetry sampler watching the game PID.
-  sample_telemetry "$telemetry" "$game_pid" &
+  _sample_telemetry "$telemetry" "$game_pid" &
   local telem_pid=$!
 
   # Wait for game to finish.
@@ -503,7 +503,7 @@ MANGOCONF
   wait "$telem_pid" 2>/dev/null || true
 
   # Summarize nvidia-smi telemetry.
-  summarize_csv "$telemetry" >"$summary"
+  _summarize_csv "$telemetry" >"$summary"
 
   # Summarize MangoHud data if available.
   if ((USE_MANGOHUD)); then
@@ -513,7 +513,7 @@ MANGOCONF
     if [[ -n "$mh_csv" && "$mh_csv" != "$telemetry" ]]; then
       mv "$mh_csv" "$mangohud_csv" 2>/dev/null || true
     fi
-    summarize_mangohud "$mangohud_csv" >"$mangohud_summary"
+    _summarize_mangohud "$mangohud_csv" >"$mangohud_summary"
     log "    mangohud -> $mangohud_summary"
   fi
 
@@ -524,7 +524,7 @@ MANGOCONF
 # Generate comparison report
 # ---------------------------------------------------------------------------
 
-generate_report() {
+_generate_report() {
   log "Generating comparison report ..."
 
   {
@@ -533,7 +533,7 @@ generate_report() {
     echo "============================================================"
     echo "AppID:        $APPID"
     echo "Game:         $GAME_NAME"
-    echo "GPU:          $(gpu_snapshot)"
+    echo "GPU:          $(_gpu_snapshot)"
     echo "Rounds:       $ROUNDS"
     echo "MangoHud:     $( ((USE_MANGOHUD)) && echo "enabled" || echo "disabled")"
     echo "Command:      $GAME_CMD"
@@ -688,9 +688,9 @@ main() {
   echo "============================================================"
   echo
 
-  log "GPU: $(gpu_snapshot)"
+  log "GPU: $(_gpu_snapshot)"
 
-  build_cases
+  _build_cases
 
   GAME_NAME="$(python3 -c "
 import json, sys
@@ -717,7 +717,7 @@ print(data.get('name', sys.argv[2]))
     for i in "${!CASE_LABELS[@]}"; do
       ((++run_num))
       log "[$run_num/$total_runs] Case $((i + 1))/${#CASE_LABELS[@]}, round $r/$ROUNDS ..."
-      run_one "$i" "$r"
+      _run_one "$i" "$r"
 
       if ((run_num < total_runs)); then
         log "  Cooling down ${COOLDOWN}s ..."
@@ -726,7 +726,7 @@ print(data.get('name', sys.argv[2]))
     done
   done
 
-  generate_report
+  _generate_report
   log "All done. Results in: $RUN_DIR"
 }
 

@@ -55,7 +55,7 @@ trap test_harness_cleanup EXIT
 # Verify B binary/config match B UUID and kernel
 # Verify params present
 # ============================================================================
-test_r01_staged_slot_happy_path() {
+_test_r01_staged_slot_happy_path() {
   recovery_scenario_setup || exit 1
 
   # Apply recovery state to target B
@@ -134,7 +134,7 @@ test_r01_staged_slot_happy_path() {
 # Verify valid EFI binary with B UUID
 # Verify A UUID absent from binary
 # ============================================================================
-test_r04_target_binary_regenerated() {
+_test_r04_target_binary_regenerated() {
   recovery_scenario_setup || exit 1
 
   # Apply recovery state to target B
@@ -207,7 +207,7 @@ test_r04_target_binary_regenerated() {
 # Verify B UUID and kernel paths correct
 # Verify required params exactly once per entry
 # ============================================================================
-test_r05_target_grub_config_regenerated() {
+_test_r05_target_grub_config_regenerated() {
   recovery_scenario_setup || exit 1
 
   # Apply recovery state to target B
@@ -312,7 +312,7 @@ test_r05_target_grub_config_regenerated() {
 # Verify self=B, other=A
 # Verify PARTUUIDs match
 # ============================================================================
-test_r06_target_partsets_regenerated() {
+_test_r06_target_partsets_regenerated() {
   recovery_scenario_setup || exit 1
 
   # Apply recovery state to target B
@@ -441,7 +441,7 @@ test_r06_target_partsets_regenerated() {
 
 # R-01
 test_harness_begin_test "R-01: Staged-slot happy path"
-(test_r01_staged_slot_happy_path) || true
+(_test_r01_staged_slot_happy_path) || true
 # Only pass if the function did not already fail
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
@@ -449,21 +449,21 @@ fi
 
 # R-04
 test_harness_begin_test "R-04: Target binary regenerated"
-(test_r04_target_binary_regenerated) || true
+(_test_r04_target_binary_regenerated) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-05
 test_harness_begin_test "R-05: Target GRUB config regenerated"
-(test_r05_target_grub_config_regenerated) || true
+(_test_r05_target_grub_config_regenerated) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi
 
 # R-06
 test_harness_begin_test "R-06: Target partsets regenerated"
-(test_r06_target_partsets_regenerated) || true
+(_test_r06_target_partsets_regenerated) || true
 if [[ "$_TEST_HARNESS_CURRENT_TEST_FAILED" -eq 0 ]]; then
   test_harness_pass
 fi

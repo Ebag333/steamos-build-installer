@@ -26,6 +26,7 @@ _BUILD_OVERLAY_LOADED=1
 # casefold issues on SteamOS's /home partition.
 # Args: $1 = name, $2 = profile dir
 # Prints: path to build root directory (to stdout)
+# lint-ignore: private-funcs
 _build_overlay_create_root() {
   local name="${1:?}"
   # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
@@ -56,38 +57,31 @@ _build_overlay_create_root() {
     warn "Failed to attach loop device for overlay workspace" >&2
     return 1
   }
+  cleanup_track_loop "$ovl_loop" "$ovl_img" "build overlay workspace"
 
-  mount -t ext4 "$ovl_loop" "$ovl_mnt" || {
+  cleanup_mount "$ovl_mnt" "build ext4 workspace" -- -t ext4 "$ovl_loop" || {
     warn "Failed to mount overlay workspace" >&2
-    losetup -d "$ovl_loop" 2>/dev/null
+    strict_detach_loop "$ovl_loop"
     return 1
   }
-  cleanup_track_mount "$ovl_mnt"
 
   mkdir -p "$ovl_mnt/upper" "$ovl_mnt/ovlwork"
 
   # Mount overlay
-  mount -t overlay overlay \
-    -o "lowerdir=$profile_root,upperdir=$ovl_mnt/upper,workdir=$ovl_mnt/ovlwork" \
-    "$merged" || {
+  cleanup_mount "$merged" "build overlay" -- -t overlay overlay \
+    -o "lowerdir=$profile_root,upperdir=$ovl_mnt/upper,workdir=$ovl_mnt/ovlwork" || {
     warn "Failed to mount overlay" >&2
-    umount "$ovl_mnt" 2>/dev/null
-    losetup -d "$ovl_loop" 2>/dev/null
+    strict_unmount "$ovl_mnt" "build ext4 workspace (rollback)"
+    strict_detach_loop "$ovl_loop"
     return 1
   }
-  cleanup_track_mount "$merged"
 
   # Mount essential filesystems
-  mount --bind /dev "$merged/dev" || true
-  cleanup_track_mount "$merged/dev"
-  mount --bind /dev/pts "$merged/dev/pts" || true
-  cleanup_track_mount "$merged/dev/pts"
-  mount --bind /dev/shm "$merged/dev/shm" || true
-  cleanup_track_mount "$merged/dev/shm"
-  mount --bind /proc "$merged/proc" || true
-  cleanup_track_mount "$merged/proc"
-  mount --bind /sys "$merged/sys" || true
-  cleanup_track_mount "$merged/sys"
+  cleanup_mount "$merged/dev" "build dev" -- --bind /dev "$merged/dev" || true
+  cleanup_mount "$merged/dev/pts" "build dev/pts" -- --bind /dev/pts "$merged/dev/pts" || true
+  cleanup_mount "$merged/dev/shm" "build dev/shm" -- --bind /dev/shm "$merged/dev/shm" || true
+  cleanup_mount "$merged/proc" "build proc" -- --bind /proc "$merged/proc" || true
+  cleanup_mount "$merged/sys" "build sys" -- --bind /sys "$merged/sys" || true
 
   log "  Overlay build root created" >&2
   echo "$build_dir"
@@ -97,6 +91,7 @@ _build_overlay_create_root() {
 # Uses strict cleanup: refuses to proceed if unmount fails, waits for
 # ext4 superblock release, and verifies loop detachment.
 # Args: $1 = build root directory
+# lint-ignore: private-funcs
 _build_overlay_destroy_root() {
   local build_dir="${1:?}"
 
@@ -131,7 +126,7 @@ _build_overlay_destroy_root() {
       [[ -e "$m" ]] || continue
       if mountpoint -q "$m" 2>/dev/null; then
         if strict_unmount "$m" "build root child"; then
-          untrack_mount "$m" 2>/dev/null || true
+          :
         else
           rc=1
         fi
@@ -149,7 +144,7 @@ _build_overlay_destroy_root() {
   # ------------------------------------------------------------
   if mountpoint -q "$merged" 2>/dev/null; then
     if strict_unmount "$merged" "build root overlay"; then
-      untrack_mount "$merged" 2>/dev/null || true
+      :
     else
       rc=1
     fi
@@ -165,7 +160,7 @@ _build_overlay_destroy_root() {
   # ------------------------------------------------------------
   if mountpoint -q "$ovl_mnt" 2>/dev/null; then
     if strict_unmount "$ovl_mnt" "build root workspace"; then
-      untrack_mount "$ovl_mnt" 2>/dev/null || true
+      :
     else
       rc=1
     fi
@@ -189,7 +184,7 @@ _build_overlay_destroy_root() {
     if ! wait_ext4_gone "$loop"; then
       warn "_build_overlay_destroy_root: $loop ext4 superblock still alive after timeout (jbd2 journal thread)"
       warn "_build_overlay_destroy_root: attempting losetup -d anyway — unmount already succeeded"
-      if ! losetup -d "$loop" 2>/dev/null; then
+      if ! strict_detach_loop "$loop"; then
         warn "_build_overlay_destroy_root: losetup -d failed for $loop"
         rc=1
       else
@@ -221,85 +216,9 @@ _build_overlay_destroy_root() {
   return "$rc"
 }
 
-# Force destroy a build root (aggressive cleanup for failed builds).
-# This function is more aggressive than _build_overlay_destroy_root:
-# - Kills all processes in the chroot
-# - Forces unmount even if busy
-# - Removes build directory regardless of cleanup status
-# Args: $1 = build root directory
-_build_overlay_force_destroy_root() {
-  local build_dir="${1:?}"
-
-  [[ -d "$build_dir" ]] || return 0
-  [[ -d "$build_dir/merged" ]] || {
-    warn "_build_overlay_force_destroy_root: $build_dir does not look like a build root (no merged/)"
-    return 1
-  }
-
-  warn "  Force destroying build root: $build_dir" >&2
-
-  local merged="$build_dir/merged"
-  local ovl_mnt="$build_dir/overlay-mnt"
-  local ovl_img="$build_dir/overlay-work.img"
-
-  # Kill all processes in the chroot
-  if [[ -d "$merged" ]]; then
-    fuser -k "$merged" 2>/dev/null || true
-    sleep 1
-  fi
-
-  # Force unmount child mounts
-  for m in \
-    "$merged/dev/pts" \
-    "$merged/dev/shm" \
-    "$merged/dev" \
-    "$merged/sys" \
-    "$merged/proc" \
-    "$merged/tmp" \
-    "$merged"; do
-    [[ -e "$m" ]] || continue
-    if mountpoint -q "$m" 2>/dev/null; then
-      warn "  Force unmounting (lazy): $m"
-      umount -l "$m" 2>/dev/null || true
-      untrack_mount "$m" 2>/dev/null || true
-    fi
-  done
-
-  # Force unmount overlay workspace
-  if mountpoint -q "$ovl_mnt" 2>/dev/null; then
-    umount -l "$ovl_mnt" 2>/dev/null || true
-  fi
-
-  # Detach loop devices
-  local loops=""
-  if [[ -f "$ovl_img" ]]; then
-    sync 2>/dev/null || true
-    loops="$(losetup -j "$ovl_img" 2>/dev/null | cut -d: -f1)"
-    while IFS="" read -r loop; do
-      [[ -n "$loop" ]] || continue
-      losetup -d "$loop" 2>/dev/null || true
-    done <<<"$loops"
-  fi
-
-  # Verify loops are actually gone
-  if [[ -f "$ovl_img" ]]; then
-    local remaining_loops
-    remaining_loops="$(losetup -j "$ovl_img" 2>/dev/null | cut -d: -f1)"
-    if [[ -n "$remaining_loops" ]]; then
-      warn "  Force destroy: loop devices still attached to $ovl_img:"
-      printf '    %s\n' "$remaining_loops" >&2
-    fi
-  fi
-
-  # Force remove build directory
-  rm -rf "$build_dir" 2>/dev/null || true
-
-  warn "  Force cleanup completed" >&2
-  return 0
-}
-
 # Sync build root with profile (update repos, install build deps).
 # Args: $1 = build root directory
+# lint-ignore: private-funcs
 _build_overlay_sync_root() {
   local build_dir="${1:?}"
   local root="$build_dir/merged"
@@ -337,7 +256,7 @@ _build_overlay_sync_root() {
     sed -i '/^\[extra\]/,/^\[/ { /^\[extra\]/d; /^Server.*geo.mirror.pkgbuild.com/d; }' "$root/etc/pacman.conf"
     sed -i '/^\[multilib\]/,/^\[/ { /^\[multilib\]/d; /^Server.*geo.mirror.pkgbuild.com/d; }' "$root/etc/pacman.conf"
 
-    sync_output="$(_pacman_retry chroot "$root" pacman -Sy 2>&1)" || true
+    sync_output="$(pacman_retry chroot "$root" pacman -Sy 2>&1)" || true
     mv "$conf_backup" "$root/etc/pacman.conf"
 
     if echo "$sync_output" | grep -q "core-3.8\|holo-3.8\|jupiter-3.8"; then
@@ -375,6 +294,7 @@ _build_overlay_rename_source_dir() {
 
 # Inject recipe sources into build root.
 # Args: $1 = build root directory, $2 = recipe directory
+# lint-ignore: private-funcs
 _build_overlay_inject_sources() {
   local build_dir="${1:?}"
   local recipe_dir="${2:?}"
@@ -710,6 +630,7 @@ _build_overlay_diagnostics() {
 
 # Run the build using makepkg or direct install command.
 # Args: $1 = build root directory, $2 = recipe directory, $3 = output directory
+# lint-ignore: private-funcs
 _build_overlay_run() {
   local build_dir="${1:?}"
   local recipe_dir="${2:?}"

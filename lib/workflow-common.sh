@@ -148,8 +148,8 @@ ensure_flatpak_service() {
 # Args: $1 = target root path, $2 = callback function name (optional)
 #   If a callback is provided, it is called as: callback PKG "ok"|"fail"
 # Returns 0 if all packages succeeded, 1 if any failed
-install_flatpak_packages() {
-  local root="${1:?install_flatpak_packages: missing root}"
+_install_flatpak_packages() {
+  local root="${1:?_install_flatpak_packages: missing root}"
   local callback="${2:-}"
   local rc=0
 
@@ -201,8 +201,8 @@ install_flatpak_packages() {
 # Expand btrfs filesystem to fill partition.
 # Args: $1 = root path, $2 = mount point (optional)
 # Returns 0 on success, 1 on failure
-expand_rootfs_to_fill() {
-  local root="${1:?expand_rootfs_to_fill: missing root}"
+_expand_rootfs_to_fill() {
+  local root="${1:?_expand_rootfs_to_fill: missing root}"
   local mount_point="${2:-$root}"
 
   # Check if btrfs
@@ -294,8 +294,8 @@ restore_rootfs_readonly() {
 # Initialize pacman keyring.
 # Args: $1 = root path, $2 = keyring type (archlinux|holo|both)
 # Returns 0 on success, 1 on failure
-init_pacman_keyring() {
-  local root="${1:?init_pacman_keyring: missing root}"
+_init_pacman_keyring() {
+  local root="${1:?_init_pacman_keyring: missing root}"
   local keyring="${2:-both}"
 
   log "Initializing pacman keyring ($keyring)"

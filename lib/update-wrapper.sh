@@ -26,18 +26,18 @@ if [[ $EUID -eq 0 ]]; then
   fi
 fi
 
-ulog() {
+_ulog() {
   printf '[steamos-build-update] %s\n' "$*" | tee -a "$LOG" >&2
   logger -t steamos-build-update -- "$*" 2>/dev/null || true
 }
 
 [[ -f "$REAL" && -x "$REAL" ]] || {
-  ulog "ERROR: Valve updater is missing or not executable: $REAL"
+  _ulog "ERROR: Valve updater is missing or not executable: $REAL"
   exit 127
 }
 
-ulog "Starting Valve updater: $REAL $*"
+_ulog "Starting Valve updater: $REAL $*"
 "$REAL" "$@"
 rc=$?
-ulog "Valve updater returned rc=$rc (atomupd layer owns staged-slot repatch)"
+_ulog "Valve updater returned rc=$rc (atomupd layer owns staged-slot repatch)"
 exit "$rc"

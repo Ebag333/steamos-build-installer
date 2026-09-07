@@ -88,16 +88,16 @@ EOF
 # ---------------------------------------------------------------------------
 # Host dependency/setup helpers.
 # ---------------------------------------------------------------------------
-setup_command() {
+_setup_command() {
   local q
   printf -v q '%q' "${BASH_SOURCE[0]}"
   printf 'bash %s --setup' "$q"
 }
 
-show_setup_required() {
+_show_setup_required() {
   local missing="$1"
   local cmd text
-  cmd="$(setup_command)"
+  cmd="$(_setup_command)"
   text="Required dependencies are missing:\n\n$missing\n\nRun this once to install them:\n\n$cmd"
 
   # Prefer an already-available GUI notifier.  YAD itself may be the missing
@@ -121,7 +121,7 @@ show_setup_required() {
   return 1
 }
 
-missing_commands() {
+_missing_commands() {
   local cmd
   local -a missing=()
   for cmd in "$@"; do
@@ -130,26 +130,26 @@ missing_commands() {
   ((${#missing[@]})) && printf '%s\n' "${missing[*]}"
 }
 
-require_action_dependencies() {
+_require_action_dependencies() {
   local action="$1"
   local missing_cmds=""
 
   case "$action" in
     gui)
-      missing_cmds="$(missing_commands yad || true)"
+      missing_cmds="$(_missing_commands yad || true)"
       ;;
     build)
-      missing_cmds="$(missing_commands \
+      missing_cmds="$(_missing_commands \
         losetup blkid btrfs bzip2 gzip xz pv rsync curl depmod sed awk tar \
         zstd pacman pactree python3 readelf sgdisk sfdisk partx unshare lspci modinfo || true)"
       ;;
     flash)
-      missing_cmds="$(missing_commands \
+      missing_cmds="$(_missing_commands \
         lsblk blockdev findmnt mountpoint sgdisk sfdisk pv udevadm || true)"
       ;;
     configure)
       # post-install configuration is GUI-driven.
-      missing_cmds="$(missing_commands yad || true)"
+      missing_cmds="$(_missing_commands yad || true)"
       ;;
     validate)
       # validate has minimal dependencies
@@ -157,14 +157,14 @@ require_action_dependencies() {
     reboot | list-images | list-devices | is-system-disk | preflight) ;;
   esac
 
-  [[ -z "$missing_cmds" ]] || show_setup_required "$missing_cmds"
+  [[ -z "$missing_cmds" ]] || _show_setup_required "$missing_cmds"
 }
 
-# ensure_user_password
+# _ensure_user_password
 #   Check whether the current user has a password set.  If not, prompt them
 #   to create one interactively via passwd.  Returns 1 if the account is
 #   locked or password setup fails.
-ensure_user_password() {
+_ensure_user_password() {
   local user="${SUDO_USER:-${USER:-deck}}"
   local status
 
@@ -206,7 +206,7 @@ ensure_user_password() {
   esac
 }
 
-run_setup() {
+_run_setup() {
   local self="${BASH_SOURCE[0]}"
 
   if [[ $EUID -ne 0 ]]; then
@@ -216,7 +216,7 @@ run_setup() {
     fi
 
     # Ensure the user has a password so sudo can work.
-    ensure_user_password || exit 1
+    _ensure_user_password || exit 1
 
     # Now sudo should accept the password they just set.
     exec sudo bash "$self" --setup
@@ -297,14 +297,14 @@ if [[ "$SETUP_MODE" -eq 1 ]]; then
     echo "--setup cannot be combined with --action." >&2
     exit 2
   }
-  run_setup
+  _run_setup
   exit 0
 fi
 
 # ---------------------------------------------------------------------------
 # Backend invocation helpers.
 # ---------------------------------------------------------------------------
-build_backend_args() {
+_build_backend_args() {
   BACKEND_ARGS=(--action "$ACTION")
 
   [[ -n "$IMG" ]] && BACKEND_ARGS+=(--image "$IMG")
@@ -318,7 +318,7 @@ build_backend_args() {
   return 0
 }
 
-backend_needs_root() {
+_backend_needs_root() {
   case "$1" in
     build | flash | flashless | validate | reboot) return 0 ;;
     *) return 1 ;;
@@ -329,12 +329,12 @@ backend_needs_root() {
 # and chroot mounts never leak into the desktop session.  Flash must NOT use
 # namespace isolation — the flasher needs to unmount target partitions from the
 # desktop's namespace.
-backend_needs_mount_namespace() {
+_backend_needs_mount_namespace() {
   [[ "$1" == "build" ]]
 }
 
 # Extract --action value from a set of backend arguments.
-backend_action_from_args() {
+_backend_action_from_args() {
   local prev="" arg
   for arg in "$@"; do
     if [[ "$prev" == "--action" ]]; then
@@ -346,11 +346,11 @@ backend_action_from_args() {
   return 1
 }
 
-run_backend_cli() {
-  build_backend_args
+_run_backend_cli() {
+  _build_backend_args
   echo "[cli] ACTION=$ACTION EUID=$EUID" >&2
 
-  if backend_needs_mount_namespace "$ACTION"; then
+  if _backend_needs_mount_namespace "$ACTION"; then
     echo "[cli] needs mount namespace" >&2
     command -v unshare >/dev/null 2>&1 || {
       echo "unshare is required for build mount isolation." >&2
@@ -367,7 +367,7 @@ run_backend_cli() {
   fi
 
   echo "[cli] checking root" >&2
-  if backend_needs_root "$ACTION" && [[ $EUID -ne 0 ]]; then
+  if _backend_needs_root "$ACTION" && [[ $EUID -ne 0 ]]; then
     echo "[cli] needs root, checking sudo" >&2
     if ! command -v sudo >/dev/null 2>&1; then
       echo "Error: $ACTION requires root. Run with sudo or as root." >&2
@@ -383,7 +383,7 @@ run_backend_cli() {
   return $?
 }
 
-ui_error() {
+_ui_error() {
   yad --error \
     --title="SteamOS NVIDIA" \
     --text="$1" \
@@ -391,7 +391,7 @@ ui_error() {
     --width=560 2>/dev/null || echo "ERROR: $1" >&2
 }
 
-ui_info() {
+_ui_info() {
   yad --info \
     --title="SteamOS NVIDIA" \
     --text="$1" \
@@ -399,8 +399,8 @@ ui_info() {
     --width=560 2>/dev/null || true
 }
 
-ui_require_yad() {
-  require_action_dependencies gui || exit 1
+_ui_require_yad() {
+  _require_action_dependencies gui || exit 1
 }
 
 # _feed_progress LOGFILE RCFILE [LOG_LINES] [RUNNER_PID]
@@ -468,13 +468,13 @@ _gui_cache_sudo_password() {
     }
     printf '%s\n' "$pass" | sudo -S -v 2>/dev/null \
       || {
-        ui_error "Authentication failed."
+        _ui_error "Authentication failed."
         rm -rf "$tmpdir"
         return 1
       }
     sudo -n true 2>/dev/null \
       || {
-        ui_error "Authentication failed."
+        _ui_error "Authentication failed."
         rm -rf "$tmpdir"
         return 1
       }
@@ -483,11 +483,11 @@ _gui_cache_sudo_password() {
   fi
 }
 
-run_backend_gui() {
+_run_backend_gui() {
   local title="$1"
   shift
 
-  echo "[gui] run_backend_gui: $title" >&2
+  echo "[gui] _run_backend_gui: $title" >&2
   echo "[gui] args: $*" >&2
 
   local logfile rcfile
@@ -499,14 +499,14 @@ run_backend_gui() {
   echo "[gui] rcfile=$rcfile" >&2
 
   local backend_action
-  backend_action="$(backend_action_from_args "$@" || true)"
+  backend_action="$(_backend_action_from_args "$@" || true)"
 
   local -a launcher=(bash "$BACKEND" "$@")
   if [[ "$backend_action" == "build" ]]; then
     # Build runs in a private mount namespace so loop devices, overlay
     # filesystems, and chroot mounts never leak into the desktop session.
     command -v unshare >/dev/null 2>&1 || {
-      ui_error "unshare is required for build mount isolation."
+      _ui_error "unshare is required for build mount isolation."
       rm -rf "$tmpdir"
       return 1
     }
@@ -526,7 +526,7 @@ run_backend_gui() {
         echo "[gui] using pkexec + private mount namespace" >&2
       else
         echo "[gui] ERROR: no sudo or pkexec available" >&2
-        ui_error "This operation requires root and neither sudo nor pkexec is available."
+        _ui_error "This operation requires root and neither sudo nor pkexec is available."
         rm -rf "$tmpdir"
         return 1
       fi
@@ -546,7 +546,7 @@ run_backend_gui() {
       echo "[gui] using pkexec for elevation" >&2
     else
       echo "[gui] ERROR: no sudo or pkexec available" >&2
-      ui_error "This operation requires root and neither sudo nor pkexec is available."
+      _ui_error "This operation requires root and neither sudo nor pkexec is available."
       rm -rf "$tmpdir"
       return 1
     fi
@@ -690,7 +690,7 @@ run_backend_gui() {
     fi
 
     if [[ "${GUI_QUIET:-0}" -ne 1 ]]; then
-      ui_error "<b>$error_msg</b>
+      _ui_error "<b>$error_msg</b>
 
 Full log: $logfile"
 
@@ -717,7 +717,7 @@ Full log: $logfile"
 # ---------------------------------------------------------------------------
 # YAD GUI.
 # ---------------------------------------------------------------------------
-ui_select_action() {
+_ui_select_action() {
   local _result _rc=0
   _result="$(yad --list \
     --title="SteamOS Custom Image" \
@@ -749,7 +749,7 @@ ui_select_action() {
 # Initramfs module selection dialog.
 # Enumerates PCI hardware and shows a checklist of modules grouped by category.
 # Prints space-separated module list to stdout; empty if cancelled.
-ui_select_initramfs_modules() {
+_ui_select_initramfs_modules() {
   # Enumerate hardware and matching modules.
   local kver
   kver="$(uname -r)"
@@ -892,7 +892,7 @@ _ui_detect_hw() {
 # Hardware support component selection dialog.
 # Prints space-separated item list to stdout; empty if cancelled.
 # Items: logitech-hid linux-firmware libfprint fprintd bolt
-ui_select_hw_support() {
+_ui_select_hw_support() {
   local conf="$SCRIPT_DIR/lib/configs/hw-packages.conf"
   local -a rows=()
   local -a bad_lines=()
@@ -901,7 +901,7 @@ ui_select_hw_support() {
   [[ -f "$conf" ]] && _ui_parse_hw_manifest "$conf" "pacman"
 
   if ((${#bad_lines[@]} > 0)); then
-    ui_error "Malformed lines in hardware config:
+    _ui_error "Malformed lines in hardware config:
 
 $(printf '%s\n' "${bad_lines[@]}")
 
@@ -912,7 +912,7 @@ Example: Firmware|linux-firmware|latest|TRUE|Full firmware suite"
   fi
 
   ((${#rows[@]} > 0)) || {
-    ui_error "No hardware packages found in config files."
+    _ui_error "No hardware packages found in config files."
     echo ""
     return
   }
@@ -969,7 +969,7 @@ Packages are sourced from Valve's repository or official Arch repositories.</spa
 
   # Handle Auto-detect button — re-run detection and refresh dialog.
   if [[ "$yad_rc" -eq 2 ]]; then
-    ui_select_hw_support
+    _ui_select_hw_support
     return
   fi
 
@@ -982,7 +982,7 @@ Packages are sourced from Valve's repository or official Arch repositories.</spa
 # System tweaks selection dialog.
 # Reads items from configs/customizations.conf.
 # Prints space-separated item list to stdout; empty if cancelled.
-ui_select_system_tweaks() {
+_ui_select_system_tweaks() {
   local conf="$SCRIPT_DIR/lib/configs/customizations.conf"
   if [[ ! -r "$conf" ]]; then
     echo "Customizations config not found: $conf" >&2
@@ -1075,8 +1075,8 @@ _build_form_common_args() {
   )
 }
 
-ui_build() {
-  require_action_dependencies build || return 0
+_ui_build() {
+  _require_action_dependencies build || return 0
 
   local conf_file="" source_img="" output_dir=""
 
@@ -1111,7 +1111,7 @@ ui_build() {
       [[ -f "$source_img" ]] || missing+=("  - Source image")
       [[ -d "$output_dir" ]] || missing+=("  - Output directory")
       if [[ ${#missing[@]} -gt 0 ]]; then
-        ui_error "<b>Please select all inputs before building:</b>\n\n$(printf '%s\n' "${missing[@]}")"
+        _ui_error "<b>Please select all inputs before building:</b>\n\n$(printf '%s\n' "${missing[@]}")"
         continue
       fi
       break
@@ -1179,10 +1179,10 @@ ui_build() {
     2>/dev/null || return 0
 
   # Build
-  if run_backend_gui "Building SteamOS NVIDIA image..." --action build --config "$conf_file" --image "$source_img" --output-dir "$output_dir"; then
+  if _run_backend_gui "Building SteamOS NVIDIA image..." --action build --config "$conf_file" --image "$source_img" --output-dir "$output_dir"; then
     local output
     output="$(grep -oP '(?<=DONE — ).*' "$GUI_LAST_LOG" 2>/dev/null | tail -1 || true)"
-    ui_info "<b>Build complete.</b>
+    _ui_info "<b>Build complete.</b>
 
 ${output:+<b>Output:</b>
 $output
@@ -1192,7 +1192,7 @@ $GUI_LAST_LOG"
   fi
 }
 
-ui_generate_conf() {
+_ui_generate_conf() {
   local sep=$'\x1f'
 
   # Mode selector — choose between Build and Live OS config generation
@@ -1330,19 +1330,19 @@ Configure the build options below. The image will be selected when you build." \
   local hw_items="" gaming_items="" initramfs_mods=""
 
   if [[ "${hw_support^^}" == "TRUE" ]]; then
-    hw_items="$(ui_select_hw_support)"
+    hw_items="$(_ui_select_hw_support)"
     [[ -n "$hw_items" ]] || return 0
     hw_items="$(echo "$hw_items" | tr '\n' ' ' | xargs)"
   fi
 
   if [[ "${system_tweaks^^}" == "TRUE" ]]; then
-    gaming_items="$(ui_select_system_tweaks)"
+    gaming_items="$(_ui_select_system_tweaks)"
     [[ -n "$gaming_items" ]] || return 0
     gaming_items="$(echo "$gaming_items" | tr '\n' ' ' | xargs)"
   fi
 
   if [[ "${initramfs_support^^}" == "TRUE" ]]; then
-    initramfs_mods="$(ui_select_initramfs_modules)"
+    initramfs_mods="$(_ui_select_initramfs_modules)"
     [[ -n "$initramfs_mods" ]] || return 0
   fi
 
@@ -1523,7 +1523,7 @@ Do you want to overwrite it?" \
   local action_hint="build"
   ((is_live)) && action_hint="live"
 
-  ui_info "<b>Configuration saved.</b>
+  _ui_info "<b>Configuration saved.</b>
 
 <b>Path:</b>
 $outfile
@@ -1534,7 +1534,7 @@ Press OK to return to the home screen.
 <tt>./steamos-build.sh --action $action_hint --config $outfile</tt>"
 }
 
-ui_flash_pick_image() {
+_ui_flash_pick_image() {
   local rows
   rows="$(bash "$BACKEND" --action list-images 2>/dev/null || true)"
 
@@ -1594,11 +1594,11 @@ ui_flash_pick_image() {
   printf '%s' "$selected"
 }
 
-ui_flash_pick_device() {
+_ui_flash_pick_device() {
   local rows
   rows="$(bash "$BACKEND" --action list-devices 2>/dev/null || true)"
   [[ -n "$rows" ]] || {
-    ui_error "No target block devices were found."
+    _ui_error "No target block devices were found."
     return 1
   }
 
@@ -1625,41 +1625,41 @@ ui_flash_pick_device() {
     "${table[@]}" 2>/dev/null
 }
 
-ui_flash() {
-  require_action_dependencies flash || return 0
+_ui_flash() {
+  _require_action_dependencies flash || return 0
 
-  echo "[ui_flash] entered" >&2
+  echo "[_ui_flash] entered" >&2
   local image device
-  image="$(ui_flash_pick_image)" || {
-    echo "[ui_flash] pick_image cancelled/failed (rc=$?)" >&2
+  image="$(_ui_flash_pick_image)" || {
+    echo "[_ui_flash] pick_image cancelled/failed (rc=$?)" >&2
     return 0
   }
   [[ -n "$image" ]] || {
-    echo "[ui_flash] no image selected" >&2
+    echo "[_ui_flash] no image selected" >&2
     return 0
   }
   image="${image%%|*}"
-  echo "[ui_flash] image=$image" >&2
+  echo "[_ui_flash] image=$image" >&2
 
-  device="$(ui_flash_pick_device)" || {
-    echo "[ui_flash] pick_device cancelled/failed (rc=$?)" >&2
+  device="$(_ui_flash_pick_device)" || {
+    echo "[_ui_flash] pick_device cancelled/failed (rc=$?)" >&2
     return 0
   }
   [[ -n "$device" ]] || {
-    echo "[ui_flash] no device selected" >&2
+    echo "[_ui_flash] no device selected" >&2
     return 0
   }
   device="${device%%|*}"
-  echo "[ui_flash] device=$device" >&2
+  echo "[_ui_flash] device=$device" >&2
 
   local allow_system=0
-  echo "[ui_flash] checking system disk (device=$device)..." >&2
+  echo "[_ui_flash] checking system disk (device=$device)..." >&2
   local is_sys=0
   set +e
   bash "$BACKEND" --action is-system-disk --device "$device" >/dev/null 2>&1
   is_sys=$?
   set -e
-  echo "[ui_flash] is-system-disk exit=$is_sys (0=system disk)" >&2
+  echo "[_ui_flash] is-system-disk exit=$is_sys (0=system disk)" >&2
   if [[ $is_sys -eq 0 ]]; then
     yad --warning \
       --title="System Disk Warning" \
@@ -1692,7 +1692,7 @@ Do not continue unless you have explicitly verified that overwriting it is inten
     _gui_cache_sudo_password "flash-preflight" "Enter your password to run preflight checks:" || return 0
   fi
 
-  echo "[ui_flash] running preflight..." >&2
+  echo "[_ui_flash] running preflight..." >&2
   local preflight_output preflight_rc=0
   set +e
   if [[ $EUID -eq 0 ]]; then
@@ -1706,7 +1706,7 @@ Do not continue unless you have explicitly verified that overwriting it is inten
   fi
   preflight_rc=$?
   set -e
-  echo "[ui_flash] preflight exit=$preflight_rc" >&2
+  echo "[_ui_flash] preflight exit=$preflight_rc" >&2
   echo "$preflight_output" >&2
 
   if [[ $preflight_rc -ne 0 ]]; then
@@ -1755,7 +1755,7 @@ Is this the correct target?" \
       --button="Yes, flash this device":0 \
       --center \
       --width=520 2>/dev/null || {
-      echo "[ui_flash] device confirm cancelled" >&2
+      echo "[_ui_flash] device confirm cancelled" >&2
       return 0
     }
   fi
@@ -1777,11 +1777,11 @@ $device — $model ($tran, $size)
     --width=800 \
     --height=400 \
     2>/dev/null || {
-    echo "[ui_flash] confirm cancelled (rc=$?)" >&2
+    echo "[_ui_flash] confirm cancelled (rc=$?)" >&2
     return 0
   }
 
-  echo "[ui_flash] confirmed, starting flash..." >&2
+  echo "[_ui_flash] confirmed, starting flash..." >&2
 
   local -a args=(
     --action flash
@@ -1791,9 +1791,9 @@ $device — $model ($tran, $size)
   )
   [[ "$allow_system" -eq 1 ]] && args+=(--allow-system-disk)
 
-  echo "[ui_flash] calling run_backend_gui..." >&2
+  echo "[_ui_flash] calling _run_backend_gui..." >&2
 
-  if run_backend_gui "Flashing $(basename "$image")..." "${args[@]}"; then
+  if _run_backend_gui "Flashing $(basename "$image")..." "${args[@]}"; then
     local flash_log_content
     flash_log_content="$(cat "$GUI_LAST_LOG" 2>/dev/null || true)"
     yad --text-info \
@@ -1810,11 +1810,11 @@ $device — $model ($tran, $size)
   fi
 }
 
-ui_flashless() {
-  require_action_dependencies flash || return 0
+_ui_flashless() {
+  _require_action_dependencies flash || return 0
 
   local image
-  image="$(ui_flash_pick_image)" || return 0
+  image="$(_ui_flash_pick_image)" || return 0
   [[ -n "$image" ]] || return 0
   image="${image%%|*}"
 
@@ -1837,7 +1837,7 @@ No USB stick is required." \
     --center \
     --width=560 2>/dev/null || return 0
 
-  if run_backend_gui "Flashless install to inactive slot..." --action flashless --image "$image"; then
+  if _run_backend_gui "Flashless install to inactive slot..." --action flashless --image "$image"; then
     yad --info \
       --title="Flashless Install Complete" \
       --text="<b>Image installed to inactive slot.</b>
@@ -1850,12 +1850,12 @@ If it fails to boot, SteamOS will automatically fall back." \
   fi
 }
 
-ui_live() {
-  require_action_dependencies build || return 0
+_ui_live() {
+  _require_action_dependencies build || return 0
 
   local conf_file=""
 
-  # Selection loop — same pattern as ui_build
+  # Selection loop — same pattern as _ui_build
   while true; do
     local choice rc=0
     choice="$(yad --list \
@@ -1882,7 +1882,7 @@ Generate a config first using <b>Generate Config</b> from the main menu." \
       return 0
     elif ((rc == 2)); then
       [[ -f "$conf_file" ]] || {
-        ui_error "<b>Please select a configuration file before applying.</b>"
+        _ui_error "<b>Please select a configuration file before applying.</b>"
         continue
       }
       break
@@ -1992,13 +1992,13 @@ Generate a config first using <b>Generate Config</b> from the main menu." \
     2>/dev/null || return 0
 
   # Run live pipeline
-  run_backend_gui "Applying live configuration..." --action live --config "$conf_file"
+  _run_backend_gui "Applying live configuration..." --action live --config "$conf_file"
 }
 
-ui_validate() {
+_ui_validate() {
   local conf_file="" image=""
 
-  # Selection loop — same pattern as ui_build
+  # Selection loop — same pattern as _ui_build
   while true; do
     local choice rc=0
     choice="$(yad --list \
@@ -2061,7 +2061,7 @@ Leave blank to validate against the live running system." \
   [[ -z "$image" ]] || args+=(--image "$image")
 
   GUI_QUIET=1
-  run_backend_gui "Validating configuration..." "${args[@]}"
+  _run_backend_gui "Validating configuration..." "${args[@]}"
   local rc=$?
 
   # Show validation results if we have a log
@@ -2100,7 +2100,7 @@ Leave blank to validate against the live running system." \
   return $rc
 }
 
-ui_diagnostics() {
+_ui_diagnostics() {
   while true; do
     local choice rc
     set +e
@@ -2459,8 +2459,8 @@ _check_persisted_sync() {
   find "$persisted" -name '*.sh' -type f -exec chmod +x {} + 2>&1 || true
 }
 
-ui_main() {
-  ui_require_yad
+_ui_main() {
+  _ui_require_yad
 
   # Check if persisted project in /home differs from the run directory.
   # If so, offer to sync so repatch/live paths use the latest code.
@@ -2469,7 +2469,7 @@ ui_main() {
   while true; do
     local choice rc
     set +e
-    choice="$(ui_select_action)"
+    choice="$(_ui_select_action)"
     rc=$?
     set -e
 
@@ -2484,25 +2484,25 @@ ui_main() {
 
     case "$choice" in
       Build)
-        ui_build
+        _ui_build
         ;;
       "Generate Config")
-        ui_generate_conf
+        _ui_generate_conf
         ;;
       Flash)
-        ui_flash
+        _ui_flash
         ;;
       Flashless)
-        ui_flashless
+        _ui_flashless
         ;;
       "Live OS")
-        ui_live
+        _ui_live
         ;;
       Diagnostics)
-        ui_diagnostics
+        _ui_diagnostics
         ;;
       Validate)
-        ui_validate
+        _ui_validate
         ;;
       "Boot Selector")
         yad --question \
@@ -2512,7 +2512,7 @@ ui_main() {
           --button="Select":0 \
           --center \
           --width=480 2>/dev/null || continue
-        run_backend_gui "Boot selector..." --action reboot || true
+        _run_backend_gui "Boot selector..." --action reboot || true
         ;;
       Quit | "")
         exit 0
@@ -2525,7 +2525,7 @@ ui_main() {
 # CLI dispatch.
 # ---------------------------------------------------------------------------
 if [[ "$CLI_MODE" -eq 0 ]]; then
-  ui_main
+  _ui_main
   exit 0
 fi
 
@@ -2535,7 +2535,7 @@ fi
   exit 2
 }
 
-require_action_dependencies "$ACTION" || exit 1
+_require_action_dependencies "$ACTION" || exit 1
 
 case "$ACTION" in
   build)
@@ -2543,7 +2543,7 @@ case "$ACTION" in
       echo "Build requires --image FILE or a config that supplies IMG." >&2
       exit 2
     }
-    run_backend_cli
+    _run_backend_cli
     ;;
   flash)
     [[ -n "$IMG" ]] || {
@@ -2562,7 +2562,7 @@ case "$ACTION" in
       exit 1
     }
 
-    build_backend_args
+    _build_backend_args
     BACKEND_ARGS+=(--confirm)
 
     if [[ $EUID -ne 0 ]]; then
@@ -2575,7 +2575,7 @@ case "$ACTION" in
       echo "Live action requires --config FILE." >&2
       exit 2
     }
-    run_backend_cli
+    _run_backend_cli
     ;;
   reboot)
     if [[ $EUID -ne 0 ]]; then
@@ -2584,7 +2584,7 @@ case "$ACTION" in
     exec bash "$BACKEND" --action reboot
     ;;
   validate)
-    run_backend_cli
+    _run_backend_cli
     ;;
   *)
     echo "Unsupported action: $ACTION" >&2

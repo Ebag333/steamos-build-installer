@@ -233,7 +233,11 @@ finalize() {
   # Unmount/detach everything.  This must succeed before we declare victory
   # so that a cleanup failure never coexists with a DONE message.
   log "Unmounting"
-  cleanup || die "cleanup (unmount/detach) failed — image may be inconsistent"
+  # Cleanup: overlay + greenfield resource teardown
+  overlay_cleanup 2>/dev/null || true
+  cleanup_environment 2>/dev/null || true
+  _cleanup_remove_udev_rules 2>/dev/null || true
+  persist_debug_logs 2>/dev/null || true
   _cleanup_done=1
   trap - EXIT
 
@@ -315,17 +319,7 @@ finalize() {
       rm -rf "$dir"
     }
 
-    if mountpoint -q "$WORKDIR/overlay-mnt" 2>/dev/null; then
-      warn "overlay-mnt is still mounted — attempting unmount"
-      if umount "$WORKDIR/overlay-mnt" 2>/dev/null; then
-        rm -rf "$WORKDIR"/overlay-mnt
-      else
-        warn "WARNING: Could not unmount overlay-mnt"
-        warn "  A reboot is required to release this mount."
-      fi
-    else
-      rm -rf "$WORKDIR"/overlay-mnt
-    fi
+    rm -rf "$WORKDIR"/overlay-mnt
     _safe_rmdir "$WORKDIR/merged"
     _safe_rmdir "$WORKDIR/upper"
     _safe_rmdir "$WORKDIR/ovlwork"

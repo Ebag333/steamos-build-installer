@@ -95,7 +95,7 @@ enable_steamos_readonly() {
 # Remove project-owned temporary files only.
 # Run after overlay and bind mounts have been unmounted.
 
-cleanup_temporary_files() {
+_cleanup_temporary_files() {
   local mode="${1:---host}"
   local root="${2:-/}"
 
@@ -108,7 +108,7 @@ cleanup_temporary_files() {
 
     --root)
       [[ "$root" != "/" ]] || {
-        warn "cleanup_temporary_files: refusing --root with /"
+        warn "_cleanup_temporary_files: refusing --root with /"
         return 1
       }
 
@@ -118,7 +118,7 @@ cleanup_temporary_files() {
       ;;
 
     *)
-      warn "cleanup_temporary_files: unknown mode '$mode'"
+      warn "_cleanup_temporary_files: unknown mode '$mode'"
       return 1
       ;;
   esac
@@ -129,7 +129,7 @@ cleanup_temporary_files() {
 # ---------------------------------------------------------------------------
 # Remove incomplete pacman download fragments.
 
-cleanup_partial_downloads() {
+_cleanup_partial_downloads() {
   local root="${1:-/}"
   local pkg_dir="$root/var/cache/pacman/pkg"
 
@@ -144,7 +144,7 @@ cleanup_partial_downloads() {
 # ---------------------------------------------------------------------------
 # Bound journal size and remove coredumps and crash reports.
 
-cleanup_diagnostics() {
+_cleanup_diagnostics() {
   local root="${1:-/}"
 
   if [[ "$root" == "/" ]]; then
@@ -165,7 +165,7 @@ cleanup_diagnostics() {
 # Remove installer build artifacts, makepkg working directories,
 # and build-user caches. Safe for repatch and image-finalize.
 
-cleanup_build_artifacts() {
+_cleanup_build_artifacts() {
   local root="${1:-/}"
 
   # makepkg working directories
@@ -183,7 +183,7 @@ cleanup_build_artifacts() {
 # but only after verifying the final .ko files exist under
 # /usr/lib/modules/<kernel>. Preserves source and registration state.
 
-cleanup_dkms_scratch() {
+_cleanup_dkms_scratch() {
   local root="${1:-/}"
   local dkms_dir="$root/var/lib/dkms"
 
@@ -214,7 +214,7 @@ cleanup_dkms_scratch() {
 # Aggressive cleanup for finalized build images only.
 # Removes sync databases and external build intermediates.
 
-cleanup_image_finalize() {
+_cleanup_image_finalize() {
   local root="${1:-/}"
 
   # Pacman sync databases (will be recreated by pacman -Sy)
@@ -270,34 +270,34 @@ cleanup_disk_space() {
       || warn "Target pacman cache cleanup failed"
   fi
 
-  cleanup_temporary_files --host \
+  _cleanup_temporary_files --host \
     || warn "Temporary-file cleanup failed"
 
   if [[ "$root" != "/" ]]; then
-    cleanup_temporary_files --root "$root" \
+    _cleanup_temporary_files --root "$root" \
       || warn "Target temporary-file cleanup failed"
   fi
 
-  cleanup_partial_downloads "$root" \
+  _cleanup_partial_downloads "$root" \
     || warn "Partial download cleanup failed"
 
-  cleanup_diagnostics "$root" \
+  _cleanup_diagnostics "$root" \
     || warn "Diagnostics cleanup failed"
 
   # --- repatch + image-finalize ---
 
   if [[ "$policy" == "repatch" || "$policy" == "image-finalize" ]]; then
-    cleanup_build_artifacts "$root" \
+    _cleanup_build_artifacts "$root" \
       || warn "Build artifact cleanup failed"
 
-    cleanup_dkms_scratch "$root" \
+    _cleanup_dkms_scratch "$root" \
       || warn "DKMS scratch cleanup failed"
   fi
 
   # --- image-finalize only ---
 
   if [[ "$policy" == "image-finalize" ]]; then
-    cleanup_image_finalize "$root" \
+    _cleanup_image_finalize "$root" \
       || warn "Image finalization cleanup failed"
   fi
 

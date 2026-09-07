@@ -184,18 +184,18 @@ populate_mock_grubx64_efi() {
 }
 
 # ============================================================================
-# create_mock_efi
+# _create_mock_efi
 #
 # Create mock EFI partition content: grub.cfg, grubx64.efi stub, partsets.
 #
-# create_mock_efi EFI_DIR ROOTFS_UUID PARTNAMESPACE [SLOT_COUNT]
+# _create_mock_efi EFI_DIR ROOTFS_UUID PARTNAMESPACE [SLOT_COUNT]
 #
 # SLOT_COUNT defaults to 2 (A+B). Pass 1 for single-slot Build fixtures.
 # ============================================================================
-create_mock_efi() {
-  local efi_dir="${1:?create_mock_efi: missing efi_dir}"
-  local rootfs_uuid="${2:?create_mock_efi: missing rootfs_uuid}"
-  local ns="${3:?create_mock_efi: missing namespace}"
+_create_mock_efi() {
+  local efi_dir="${1:?_create_mock_efi: missing efi_dir}"
+  local rootfs_uuid="${2:?_create_mock_efi: missing rootfs_uuid}"
+  local ns="${3:?_create_mock_efi: missing namespace}"
   local slot_count="${4:-2}"
 
   # Steamos EFI directory
@@ -227,15 +227,15 @@ create_mock_efi() {
 }
 
 # ============================================================================
-# create_mock_esp
+# _create_mock_esp
 #
 # Create mock shared ESP content: bootconf files.
 #
-# create_mock_esp ESP_DIR NAMESPACE SLOT_COUNT
+# _create_mock_esp ESP_DIR NAMESPACE SLOT_COUNT
 # ============================================================================
-create_mock_esp() {
-  local esp_dir="${1:?create_mock_esp: missing esp_dir}"
-  local ns="${2:?create_mock_esp: missing namespace}"
+_create_mock_esp() {
+  local esp_dir="${1:?_create_mock_esp: missing esp_dir}"
+  local ns="${2:?_create_mock_esp: missing namespace}"
   local slot_count="${3:-2}"
 
   mkdir -p "$esp_dir/SteamOS/conf"
@@ -260,20 +260,20 @@ BOOTCONF_B_EOF
 }
 
 # ============================================================================
-# create_mock_topology
+# _create_mock_topology
 #
 # Generate topology.json with deterministic UUIDs/PARTUUIDs.
 # This is the test oracle - production code must discover identity from
 # fixture devices, not read this file.
 #
-# create_mock_topology METADATA_DIR NAMESPACE SCENARIO CURRENT_SLOT TARGET_SLOT
+# _create_mock_topology METADATA_DIR NAMESPACE SCENARIO CURRENT_SLOT TARGET_SLOT
 # ============================================================================
-create_mock_topology() {
-  local metadata_dir="${1:?create_mock_topology: missing metadata_dir}"
-  local ns="${2:?create_mock_topology: missing namespace}"
-  local scenario="${3:?create_mock_topology: missing scenario}"
-  local current_slot="${4:?create_mock_topology: missing current_slot}"
-  local target_slot="${5:?create_mock_topology: missing target_slot}"
+_create_mock_topology() {
+  local metadata_dir="${1:?_create_mock_topology: missing metadata_dir}"
+  local ns="${2:?_create_mock_topology: missing namespace}"
+  local scenario="${3:?_create_mock_topology: missing scenario}"
+  local current_slot="${4:?_create_mock_topology: missing current_slot}"
+  local target_slot="${5:?_create_mock_topology: missing target_slot}"
 
   mkdir -p "$metadata_dir"
 
@@ -579,16 +579,16 @@ create_mock_boot_fixture() {
   create_mock_rootfs "$base_dir/rootfs" "$target_rootfs_uuid"
 
   # 2. Create mock EFI partition
-  create_mock_efi "$base_dir/efi" "$target_rootfs_uuid" "$ns" "$slot_count"
+  _create_mock_efi "$base_dir/efi" "$target_rootfs_uuid" "$ns" "$slot_count"
 
   # Add partset semantics (self/other/all/shared)
   create_mock_partset_semantics "$base_dir/efi" "$ns" "$target_slot" "$slot_count"
 
   # 3. Create mock shared ESP
-  create_mock_esp "$base_dir/esp" "$ns" "$slot_count"
+  _create_mock_esp "$base_dir/esp" "$ns" "$slot_count"
 
   # 4. Create metadata directory with topology and manifests
-  create_mock_topology "$base_dir/metadata" "$ns" "$scenario" "$current_slot" "$target_slot"
+  _create_mock_topology "$base_dir/metadata" "$ns" "$scenario" "$current_slot" "$target_slot"
 
   # Emit fixture context for test harness consumption
   cat >"$base_dir/metadata/fixture-context.json" <<CONTEXT_EOF

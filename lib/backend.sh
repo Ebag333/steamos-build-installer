@@ -56,7 +56,7 @@ ALLOW_SYSTEM_DISK=0
 UDEV_RULE=/run/udev/rules.d/89-steamos-build-installer.rules
 UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 
-backend_usage() {
+_backend_usage() {
   cat <<'EOF'
 Usage:
   backend.sh --action <build|flash|flashless|live|validate|preflight|list-images|list-devices|is-system-disk|reboot> [options]
@@ -123,7 +123,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h | --help)
-      backend_usage
+      _backend_usage
       exit 0
       ;;
     --)
@@ -135,7 +135,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown argument: $1" >&2
-      backend_usage >&2
+      _backend_usage >&2
       exit 2
       ;;
   esac
@@ -143,26 +143,26 @@ done
 
 [[ -n "$ACTION" ]] || {
   echo "--action is required" >&2
-  backend_usage >&2
+  _backend_usage >&2
   exit 2
 }
 
 # ---------------------------------------------------------------------------
 # Shared flash backend.
 # ---------------------------------------------------------------------------
-load_flash_libs() {
+_load_flash_libs() {
   # shellcheck source=lib/common.sh
   source "$BACKEND_DIR/common.sh"
   # shellcheck source=lib/flash.sh
   source "$BACKEND_DIR/flash.sh"
 }
 
-flash_image_is_complete() {
+_flash_image_is_complete() {
   local image="$1"
   [[ -f "$image" && -f "${image}.build-complete" ]]
 }
 
-flash_discover_images() {
+_flash_discover_images() {
   # During the current transition, RAM output is still a legitimate completed
   # location.  Once build publication is made canonical, remove /dev/shm here.
   local search_dirs=(
@@ -179,7 +179,7 @@ flash_discover_images() {
     [[ -d "$d" ]] || continue
     while IFS="" read -r f; do
       [[ -n "$f" ]] || continue
-      flash_image_is_complete "$f" || continue
+      _flash_image_is_complete "$f" || continue
       found+=("$(readlink -f "$f")")
     done < <(find "$d" -maxdepth 1 -name '*nvidia*usbinstall*.img' -type f 2>/dev/null)
   done
@@ -206,20 +206,20 @@ flash_discover_images() {
   done <<<"$_sorted" | sort -t$'\t' -k4,4nr
 }
 
-flash_validate_image() {
+_flash_validate_image() {
   local image="$1"
   [[ -f "$image" ]] || {
     echo "Image not found: $image" >&2
     return 1
   }
 
-  if [[ "$(basename "$image")" == *nvidia*usbinstall*.img ]] && ! flash_image_is_complete "$image"; then
+  if [[ "$(basename "$image")" == *nvidia*usbinstall*.img ]] && ! _flash_image_is_complete "$image"; then
     echo "Refusing NVIDIA installer image without .build-complete marker: $image" >&2
     return 1
   fi
 }
 
-backend_flash() {
+_backend_flash() {
   [[ $EUID -eq 0 ]] || {
     echo "Flash action requires root." >&2
     exit 1
@@ -238,7 +238,7 @@ backend_flash() {
   }
 
   IMG="$(readlink -f "$IMG")"
-  flash_validate_image "$IMG"
+  _flash_validate_image "$IMG"
   [[ -b "$TARGET_DEV" ]] || {
     echo "Not a block device: $TARGET_DEV" >&2
     exit 1
@@ -257,7 +257,7 @@ backend_flash() {
 # Shared build backend.  This is the former steamos-build-installer.sh build
 # orchestration moved out of the frontend.
 # ---------------------------------------------------------------------------
-load_build_libs() {
+_load_build_libs() {
   # Source library loader and pipeline
   # shellcheck source=lib/library-loader.sh
   source "$BACKEND_DIR/library-loader.sh"
@@ -270,7 +270,7 @@ load_build_libs() {
   load_workflow_libs "build" "$BACKEND_DIR"
 }
 
-check_build_deps() {
+_check_build_deps() {
   if [[ -f "$BACKEND_DIR/check-deps.sh" ]]; then
     bash "$BACKEND_DIR/check-deps.sh" --check-only || exit 1
     return 0
@@ -299,7 +299,7 @@ check_build_deps() {
   fi
 }
 
-normalize_build_options() {
+_normalize_build_options() {
 
   [[ -z "$ROOTFS_SIZE" || "$ROOTFS_SIZE" =~ ^[0-9]+[KMGkmg]?$ ]] \
     || die "--rootfs-size takes a size like 10G, 10240M, or 10240 (plain = MiB)"
@@ -334,7 +334,7 @@ normalize_build_options() {
   fi
 }
 
-resolve_build_image() {
+_resolve_build_image() {
   if [[ -n "$IMG" ]]; then
     [[ -f "$IMG" ]] || die "Image not found: $IMG"
     IMG="$(realpath "$IMG")"
@@ -358,13 +358,13 @@ resolve_build_image() {
   esac
 }
 
-backend_build() {
+_backend_build() {
   [[ $EUID -eq 0 ]] || die "Build action requires root."
 
-  load_build_libs
-  normalize_build_options
-  resolve_build_image
-  check_build_deps
+  _load_build_libs
+  _normalize_build_options
+  _resolve_build_image
+  _check_build_deps
 
   [[ "$(basename "$IMG")" != *-nvidia* ]] \
     || die "Input looks like an already-patched image — start from the clean repair image."
@@ -392,7 +392,14 @@ backend_build() {
   LOOPDEV=""
   local _trap_rc
   local _cleanup_done=0
-  trap '_trap_rc=$?; trap - EXIT; set +e; [[ "${_cleanup_done:-0}" -eq 0 ]] && cleanup; exit "$_trap_rc"' EXIT
+  trap '_trap_rc=$?; trap - EXIT; set +e; if [[ "${_cleanup_done:-0}" -eq 0 ]]; then
+  cleanup_check_host_namespace || { warn "Skipping cleanup — in init namespace"; exit "$_trap_rc"; }
+  cleanup_stop_background_jobs
+  cleanup_remove_udev_rules
+  overlay_cleanup 2>/dev/null || true
+  cleanup_environment 2>/dev/null || true
+  persist_debug_logs 2>/dev/null || true
+fi; exit "$_trap_rc"' EXIT
 
   : "${UPSTREAM_DRIVER_REF:=master}"
   # shellcheck disable=SC2034
@@ -403,6 +410,10 @@ backend_build() {
   log "Root mount propagation: $(findmnt -no PROPAGATION / 2>/dev/null || echo '<unknown>')"
 
   log "Starting steamos-build build (rootfs=${ROOTFS_SIZE:-5120}M)"
+
+  # Ledger: recover from previous run, then initialize
+  pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
+  pipeline_init "" "$WORKDIR" || warn "Ledger initialization failed — proceeding without crash recovery"
 
   # Register and run the build pipeline
   register_build_pipeline
@@ -421,7 +432,7 @@ VALIDATE_ROOTFS=""
 VALIDATE_VARPART=""
 VALIDATE_UDEV_RULE="/run/udev/rules.d/89-steamos-validate.rules"
 
-validate_mount_image() {
+_validate_mount_image() {
   local img="$1"
 
   # Install udev guard BEFORE attaching loop — prevents udisks2 from
@@ -437,6 +448,7 @@ EOF
   log "Attaching loop device: $img"
   VALIDATE_LOOP="$(losetup -f --show --partscan "$img")" \
     || die "Failed to attach loop device"
+  cleanup_track_loop "$VALIDATE_LOOP" "$img" "validate image"
   log "  Loop: $VALIDATE_LOOP"
   udevadm settle --timeout=10
 
@@ -456,7 +468,7 @@ EOF
   log "  var:    ${VALIDATE_VARPART:-<not found>}"
 
   log "Mounting $VALIDATE_ROOTFS on $VALIDATE_MNT (read-only)"
-  mount -o ro "$VALIDATE_ROOTFS" "$VALIDATE_MNT" \
+  cleanup_mount "$VALIDATE_MNT" "validate rootfs" -- -o ro "$VALIDATE_ROOTFS" \
     || die "Failed to mount rootfs"
 
   # Mount var if it exists as a separate partition.
@@ -464,26 +476,21 @@ EOF
   if [[ -n "$VALIDATE_VARPART" ]]; then
     mkdir -p "$VALIDATE_MNT/var"
     log "Mounting $VALIDATE_VARPART on $VALIDATE_MNT/var (read-only)"
-    mount -o ro "$VALIDATE_VARPART" "$VALIDATE_MNT/var" \
+    cleanup_mount "$VALIDATE_MNT/var" "validate var" -- -o ro "$VALIDATE_VARPART" \
       || die "Failed to mount var"
   fi
 
   log "Mount complete"
 }
 
-validate_cleanup() {
+_validate_cleanup() {
   local _had_e=0
   [[ -o errexit ]] && _had_e=1
   set +e
-  # Unmount var before rootfs-A (reverse order)
-  if [[ -n "$VALIDATE_MNT" ]] && mountpoint -q "$VALIDATE_MNT/var" 2>/dev/null; then
-    umount "$VALIDATE_MNT/var" 2>/dev/null
-  fi
-  if [[ -n "$VALIDATE_MNT" ]] && mountpoint -q "$VALIDATE_MNT" 2>/dev/null; then
-    umount "$VALIDATE_MNT" 2>/dev/null
-  fi
+  # Unmount all tracked mounts in reverse order (var before rootfs-A)
+  cleanup_unmount_registered 2>/dev/null || true
   if [[ -n "${VALIDATE_LOOP:-}" ]]; then
-    losetup -d "$VALIDATE_LOOP" 2>/dev/null
+    strict_detach_loop "$VALIDATE_LOOP"
   fi
   [[ -d "$VALIDATE_MNT" ]] && rmdir "$VALIDATE_MNT" 2>/dev/null
   # Remove udev guard and reload
@@ -492,7 +499,7 @@ validate_cleanup() {
   [[ "$_had_e" -eq 1 ]] && set -e
 }
 
-backend_validate() {
+_backend_validate() {
   # shellcheck source=lib/library-loader.sh
   source "$BACKEND_DIR/library-loader.sh"
   load_workflow_libs "validate" "$BACKEND_DIR"
@@ -512,7 +519,7 @@ backend_validate() {
 
     VALIDATE_MNT="$(mktemp -d /tmp/steamos-validate.XXXXXX)"
 
-    trap 'validate_cleanup' EXIT
+    trap '_validate_cleanup' EXIT
 
     log "=== Mounts before ==="
     local _loop_state
@@ -523,7 +530,7 @@ backend_validate() {
       log "  (no active loop devices)"
     fi
 
-    validate_mount_image "$IMG"
+    _validate_mount_image "$IMG"
 
     export VALIDATE_ROOT="$VALIDATE_MNT"
     export MERGED="$VALIDATE_MNT"
@@ -561,7 +568,7 @@ backend_validate() {
 
   # Run cleanup before reporting final state
   if [[ -n "$VALIDATE_MNT" ]]; then
-    validate_cleanup
+    _validate_cleanup
     trap - EXIT
   fi
 
@@ -580,7 +587,7 @@ backend_validate() {
   return "$rc"
 }
 
-backend_live() {
+_backend_live() {
   [[ $EUID -eq 0 ]] || die "Live configuration requires root."
 
   [[ -n "$CONFIG_FILE" ]] || die "--config is required for live configuration"
@@ -604,9 +611,15 @@ backend_live() {
     *) die "Invalid base OS mode: $BASE_OS_MODE" ;;
   esac
 
-  load_build_libs
+  _load_build_libs
   # shellcheck source=/dev/null
   source "$BACKEND_DIR/pipelines/pipeline_live.sh"
+
+  # Ledger: recover from previous run, then initialize
+  local _live_workdir="/dev/shm/steamos-build-live-$$"
+  mkdir -p "$_live_workdir" 2>/dev/null || true
+  pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
+  pipeline_init "" "$_live_workdir" || warn "Ledger initialization failed — proceeding without crash recovery"
 
   register_live_pipeline
   if ! run_pipeline; then
@@ -614,17 +627,17 @@ backend_live() {
   fi
 }
 
-backend_flashless() {
+_backend_flashless() {
   [[ $EUID -eq 0 ]] || die "Flashless install requires root."
   [[ -n "$IMG" ]] || die "--image is required for flashless install"
   [[ -f "$IMG" ]] || die "Image not found: $IMG"
   IMG="$(readlink -f "$IMG")"
 
-  load_build_libs
+  _load_build_libs
   flashless_install "$IMG"
 }
 
-backend_reboot() {
+_backend_reboot() {
   [[ $EUID -eq 0 ]] || {
     echo "Reboot action requires root." >&2
     exit 1
@@ -708,20 +721,20 @@ backend_reboot() {
 # ---------------------------------------------------------------------------
 case "$ACTION" in
   build)
-    backend_build
+    _backend_build
     ;;
   flash)
-    load_flash_libs
-    backend_flash
+    _load_flash_libs
+    _backend_flash
     ;;
   flashless)
-    backend_flashless
+    _backend_flashless
     ;;
   list-images)
-    flash_discover_images
+    _flash_discover_images
     ;;
   list-devices)
-    load_flash_libs
+    _load_flash_libs
     flash_scan_devices
     ;;
   is-system-disk)
@@ -729,7 +742,7 @@ case "$ACTION" in
       echo "--device is required" >&2
       exit 2
     }
-    load_flash_libs
+    _load_flash_libs
     flash_is_system_disk "$TARGET_DEV"
     ;;
   preflight)
@@ -741,22 +754,22 @@ case "$ACTION" in
       echo "--device is required" >&2
       exit 2
     }
-    load_flash_libs
+    _load_flash_libs
     IMG="$(readlink -f "$IMG")"
     flash_preflight "$IMG" "$TARGET_DEV"
     ;;
   live)
-    backend_live
+    _backend_live
     ;;
   validate)
-    backend_validate
+    _backend_validate
     ;;
   reboot)
-    backend_reboot
+    _backend_reboot
     ;;
   *)
     echo "Unknown action: $ACTION" >&2
-    backend_usage >&2
+    _backend_usage >&2
     exit 2
     ;;
 esac

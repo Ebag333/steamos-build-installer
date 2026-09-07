@@ -4,7 +4,7 @@
 # Central router for all optimization modules.
 # External callers use this as the single entry point.
 #
-# Usage: apply_optimization MODULE ITEM [MODE] [ROOT]
+# Usage: _apply_optimization MODULE ITEM [MODE] [ROOT]
 #        apply_optimization_for_item ITEM [MODE] [ROOT]
 #
 # Sourced by the build backend and repatch — do not run directly.
@@ -88,7 +88,7 @@ _opt_item_to_module() {
 
 # Route by module name.
 #
-# Usage: apply_optimization MODULE ITEM [MODE] [ROOT]
+# Usage: _apply_optimization MODULE ITEM [MODE] [ROOT]
 #   MODULE - Module name (video, cpu-performance, pci-hardware, build-tools, system)
 #   ITEM   - Optimization name within the module
 #   MODE   - Optional override: chroot|live (auto-detected if omitted)
@@ -96,9 +96,9 @@ _opt_item_to_module() {
 #
 # Returns 0 on success, 1 on failure.
 
-apply_optimization() {
-  local module="${1:?apply_optimization: missing module name}"
-  local item="${2:?apply_optimization: missing item name}"
+_apply_optimization() {
+  local module="${1:?_apply_optimization: missing module name}"
+  local item="${2:?_apply_optimization: missing item name}"
   local mode="${3:-}"
   local root="${4:-}"
 
@@ -174,7 +174,7 @@ apply_optimization_for_item() {
     return 1
   fi
 
-  apply_optimization "$module" "$item" "$mode" "$root"
+  _apply_optimization "$module" "$item" "$mode" "$root"
 }
 
 # ---------------------------------------------------------------------------

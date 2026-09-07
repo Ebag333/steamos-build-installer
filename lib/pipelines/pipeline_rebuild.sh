@@ -26,14 +26,14 @@ register_rebuild_pipeline() {
     "configure" \
     "reconcile"
 
-  register_phase "mount" "phase_rebuild_mount" "Mount target rootfs"
-  register_phase "preflight" "phase_rebuild_preflight" "Run preflight safety checks"
-  register_phase "discover" "phase_rebuild_discover" "Discover kernel and packages"
-  register_phase "sysupgrade" "phase_rebuild_sysupgrade" "System upgrade (pacman -Syu)"
-  register_phase "overlay" "phase_rebuild_overlay" "Create overlay chroot"
-  register_phase "install" "phase_rebuild_install" "Install drivers and packages"
-  register_phase "configure" "phase_rebuild_configure" "Configure system and GRUB"
-  register_phase "reconcile" "phase_rebuild_reconcile" "Reconcile and verify"
+  register_phase "mount" "_phase_rebuild_mount" "Mount target rootfs"
+  register_phase "preflight" "_phase_rebuild_preflight" "Run preflight safety checks"
+  register_phase "discover" "_phase_rebuild_discover" "Discover kernel and packages"
+  register_phase "sysupgrade" "_phase_rebuild_sysupgrade" "System upgrade (pacman -Syu)"
+  register_phase "overlay" "_phase_rebuild_overlay" "Create overlay chroot"
+  register_phase "install" "_phase_rebuild_install" "Install drivers and packages"
+  register_phase "configure" "_phase_rebuild_configure" "Configure system and GRUB"
+  register_phase "reconcile" "_phase_rebuild_reconcile" "Reconcile and verify"
 }
 
 # ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ register_rebuild_pipeline() {
 
 # Cleanup function for repatch workflow.
 # Tears down mounts, loop devices, and temporary directories.
-repatch_cleanup() {
+_repatch_cleanup() {
   local _had_e=0
   [[ -o errexit ]] && _had_e=1
   set +e
@@ -53,38 +53,22 @@ repatch_cleanup() {
   fi
 
   # Unmount chroot filesystems
-  if declare -F umount_chroot_fs >/dev/null 2>&1; then
-    umount_chroot_fs "$NEWROOT" 2>/dev/null
+  if declare -F cleanup_unmount_registered >/dev/null 2>&1; then
+    cleanup_unmount_registered 2>/dev/null || true
   fi
 
-  # Unmount EFI if mounted
-  if mountpoint -q "$NEWROOT/efi" 2>/dev/null; then
-    if ! umount -R "$NEWROOT/efi" 2>/dev/null; then
-      warn "repatch_cleanup: regular unmount of $NEWROOT/efi failed, falling back to lazy"
-      umount -Rl "$NEWROOT/efi" 2>/dev/null || true
-    fi
-  fi
-
-  # Unmount workspace
-  if [[ -n "${WORK:-}" ]] && mountpoint -q "$WORK" 2>/dev/null; then
-    if ! umount "$WORK" 2>/dev/null; then
-      warn "repatch_cleanup: regular unmount of $WORK failed, falling back to lazy"
-      umount -l "$WORK" 2>/dev/null || true
-    fi
+  if declare -F cleanup_release >/dev/null 2>&1; then
+    cleanup_release "$WORK" 2>/dev/null || true
   fi
 
   # Detach workspace loop device
   if [[ -n "${WORK_LOOPDEV:-}" ]]; then
-    losetup -d "$WORK_LOOPDEV" 2>/dev/null || true
+    strict_detach_loop "$WORK_LOOPDEV"
     WORK_LOOPDEV=""
   fi
 
-  # Unmount target rootfs
-  if [[ -n "${NEWROOT:-}" ]] && mountpoint -q "$NEWROOT" 2>/dev/null; then
-    if ! umount -R "$NEWROOT" 2>/dev/null; then
-      warn "repatch_cleanup: regular unmount of $NEWROOT failed, falling back to lazy"
-      umount -Rl "$NEWROOT" 2>/dev/null || true
-    fi
+  if declare -F cleanup_release >/dev/null 2>&1; then
+    cleanup_release "$NEWROOT" 2>/dev/null || true
   fi
 
   # Clean up temporary directories
@@ -106,7 +90,7 @@ repatch_cleanup() {
 
 # Register cleanup trap
 register_rebuild_cleanup() {
-  trap 'set +e; repatch_cleanup; set -e' EXIT
+  trap 'set +e; _repatch_cleanup; set -e' EXIT
 }
 
 # ---------------------------------------------------------------------------
@@ -114,7 +98,7 @@ register_rebuild_cleanup() {
 # ---------------------------------------------------------------------------
 
 # Phase: Mount target rootfs
-phase_rebuild_mount() {
+_phase_rebuild_mount() {
   stage_header "prepare target"
   # Run boot diagnostics
   if declare -F diagnose_boot_layout >/dev/null 2>&1; then
@@ -126,7 +110,7 @@ phase_rebuild_mount() {
 
   # Mount the inactive slot's rootfs partition
   step "Mounting $ROOTDEV"
-  mount -o rw,compress-force=zstd:3 "$ROOTDEV" "$NEWROOT" \
+  cleanup_mount "$NEWROOT" "rebuild rootfs" -- -o rw,compress-force=zstd:3 "$ROOTDEV" \
     || {
       die "Could not mount $PARTSET rootfs"
       return 1
@@ -226,7 +210,7 @@ phase_rebuild_mount() {
 }
 
 # Phase: Run preflight safety checks
-phase_rebuild_preflight() {
+_phase_rebuild_preflight() {
   stage_header "preflight"
 
   # Translate PARTSET to slot label
@@ -268,7 +252,7 @@ phase_rebuild_preflight() {
 }
 
 # Phase: Discover kernel and packages
-phase_rebuild_discover() {
+_phase_rebuild_discover() {
   # Discover kernel version
   step "Discovering target kernel"
   discover_neptune_kver "$NEWROOT"
@@ -306,7 +290,7 @@ phase_rebuild_discover() {
 }
 
 # Phase: System upgrade (pacman -Syu directly on target)
-phase_rebuild_sysupgrade() {
+_phase_rebuild_sysupgrade() {
   stage_header "system upgrade"
   # Generate machine-id if invalid — systemd-tmpfiles needs it to expand %m
   # EUCLEAN ("Structure needs cleaning") means invalid format, not just empty
@@ -362,7 +346,7 @@ phase_rebuild_sysupgrade() {
 }
 
 # Phase: Create overlay chroot
-phase_rebuild_overlay() {
+_phase_rebuild_overlay() {
   stage_header "install drivers"
   # Prepare temporary ext4 overlay workspace
   log "Preparing temporary ext4 overlay workspace"
@@ -372,11 +356,8 @@ phase_rebuild_overlay() {
     [[ -n "$stale_loop" ]] || continue
     while IFS="" read -r stale_mnt; do
       [[ -n "$stale_mnt" ]] || continue
-      umount -R "$stale_mnt" 2>/dev/null \
-        || umount -Rl "$stale_mnt" 2>/dev/null \
-        || true
     done < <(findmnt -rn -o TARGET -S "$stale_loop" 2>/dev/null)
-    losetup -d "$stale_loop" 2>/dev/null || true
+    strict_detach_loop "$stale_loop"
   done < <(losetup -j "$WORKIMG" 2>/dev/null | cut -d: -f1)
 
   [[ -z "$(losetup -j "$WORKIMG" 2>/dev/null)" ]] \
@@ -393,7 +374,8 @@ phase_rebuild_overlay() {
       die "Could not allocate loop device for repatch workspace"
       return 1
     }
-  mount "$WORK_LOOPDEV" "$WORK" \
+  cleanup_track_loop "$WORK_LOOPDEV" "$WORKIMG" "rebuild workspace"
+  cleanup_mount "$WORK" "rebuild workspace" -- "$WORK_LOOPDEV" \
     || {
       die "Could not mount repatch workspace"
       return 1
@@ -431,7 +413,7 @@ phase_rebuild_overlay() {
 }
 
 # Phase: Install drivers and packages
-phase_rebuild_install() {
+_phase_rebuild_install() {
   # Clear transaction scratch files from any previous run
   : >"$WORKDIR/build-only-exclusions.txt"
   : >"$WORKDIR/custom-payload-files.txt"
@@ -462,7 +444,7 @@ phase_rebuild_install() {
 }
 
 # Phase: Configure system and GRUB
-phase_rebuild_configure() {
+_phase_rebuild_configure() {
   stage_header "finalize & verify"
   # Reconcile initramfs
   step "Restoring module autoloading in initramfs"
@@ -499,7 +481,7 @@ phase_rebuild_configure() {
 }
 
 # Phase: Reconcile and verify
-phase_rebuild_reconcile() {
+_phase_rebuild_reconcile() {
   # Propagate self-healing scripts from /home (latest) or /usr (fallback).
   # Persist project files to /home for later re-run
   ensure_project_persisted
@@ -519,6 +501,11 @@ phase_rebuild_reconcile() {
 
   # Free disk space before GRUB reconciliation
   cleanup_disk_space "$NEWROOT" "repatch"
+
+  # Verify cleanup completeness
+  if declare -F cleanup_verify >/dev/null 2>&1; then
+    cleanup_verify || warn "Repatch hygiene: cleanup verification detected issues"
+  fi
 
   # Run final diagnostics
   if declare -F diagnose_boot_state >/dev/null 2>&1; then

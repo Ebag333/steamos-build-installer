@@ -52,8 +52,8 @@ _load_initramfs_conf
 # Get modules for a specific group.
 # Args: $1 = group name
 # Output: space-separated module list
-get_initramfs_group_modules() {
-  local group="${1:?get_initramfs_group_modules: missing group name}"
+_get_initramfs_group_modules() {
+  local group="${1:?_get_initramfs_group_modules: missing group name}"
   echo "${_INITRAMFS_GROUP_MODULES[$group]:-}"
 }
 
@@ -76,7 +76,7 @@ _collect_and_dedup_modules() {
 # Get all modules from all groups (deduplicated).
 # Args: $@ = groups to include (empty = all TRUE groups)
 # Output: space-separated module list
-get_all_initramfs_modules() {
+_get_all_initramfs_modules() {
   local -a groups=("$@")
 
   if [[ ${#groups[@]} -eq 0 ]]; then
@@ -93,23 +93,23 @@ get_all_initramfs_modules() {
 # Get modules from a space-separated list of group names.
 # Args: $1 = space-separated group names
 # Output: space-separated module list
-get_initramfs_modules_by_groups() {
-  local group_list="${1:?get_initramfs_modules_by_groups: missing group list}"
+_get_initramfs_modules_by_groups() {
+  local group_list="${1:?_get_initramfs_modules_by_groups: missing group list}"
   local -a groups
   read -ra groups <<<"$group_list"
-  get_all_initramfs_modules "${groups[@]}"
+  _get_all_initramfs_modules "${groups[@]}"
 }
 
 # Discover hardware modules via modprobe -R.
 # Filters out nouveau.  Returns space-separated list.
 # Args: $1 = root path (chroot target), $2 = optional kernel version
-discover_auto_modules() {
-  local root="${1:?discover_auto_modules: missing root}"
+_discover_auto_modules() {
+  local root="${1:?_discover_auto_modules: missing root}"
   local kver="${2:-${KVER:-$(uname -r)}}"
   local modules=""
 
   if [[ ! -d "$root" ]]; then
-    warn "discover_auto_modules: root path does not exist: $root"
+    warn "_discover_auto_modules: root path does not exist: $root"
     return 1
   fi
 
@@ -132,9 +132,9 @@ discover_auto_modules() {
 # Validate modules against a target kernel.
 # Args: $1 = root path, $2 = kernel version, $3 = space-separated modules
 # Output: space-separated validated modules
-validate_initramfs_modules() {
-  local root="${1:?validate_initramfs_modules: missing root}"
-  local kver="${2:?validate_initramfs_modules: missing kernel version}"
+_validate_initramfs_modules() {
+  local root="${1:?_validate_initramfs_modules: missing root}"
+  local kver="${2:?_validate_initramfs_modules: missing kernel version}"
   local modules="${3:-}"
   local validated=""
 
@@ -159,6 +159,7 @@ validate_initramfs_modules() {
 #
 # Args: $1 = root path, $2 = kernel version, $3 = space-separated modules
 # Returns 0 on success, 1 on failure
+# shellcheck disable=SC2317  # called from _configure_initramfs_modules; invoked via sourced callers
 _write_initramfs_config() {
   local root="${1:?_write_initramfs_config: missing root}"
   local kver="${2:?_write_initramfs_config: missing kernel version}"
@@ -170,7 +171,7 @@ _write_initramfs_config() {
   fi
 
   local validated
-  validated="$(validate_initramfs_modules "$root" "$kver" "$modules")"
+  validated="$(_validate_initramfs_modules "$root" "$kver" "$modules")"
 
   if [[ -z "$validated" ]]; then
     log "  No valid modules for $kver — leaving initramfs unchanged"
@@ -192,8 +193,8 @@ _write_initramfs_config() {
 # Regenerate initramfs from existing config.
 # Args: $1 = root path
 # Returns 0 on success, 1 on failure
-_regenerate_initramfs() {
-  local root="${1:?_regenerate_initramfs: missing root}"
+regenerate_initramfs() {
+  local root="${1:?regenerate_initramfs: missing root}"
 
   if [[ -x "$root/usr/bin/dracut" ]]; then
     log "  Regenerating initramfs (dracut)..."
@@ -242,7 +243,7 @@ _configure_initramfs_modules() {
   fi
 
   _write_initramfs_config "$root" "$kver" "$modules" || return 1
-  _regenerate_initramfs "$root"
+  regenerate_initramfs "$root"
 }
 
 # Write dracut config file.
@@ -297,21 +298,6 @@ EOF
 # ---------------------------------------------------------------------------
 # Three paths: chroot, live, verify.
 
-# Write initramfs config without regenerating (for offline targets).
-# The config will take effect when the target boots and regenerates its own initramfs.
-#
-# Args:
-#   $1 = root path
-#   $2 = kernel version
-#   $3 = space-separated module list
-write_initramfs_config() {
-  local root="${1:?write_initramfs_config: missing root}"
-  local kver="${2:?write_initramfs_config: missing kernel version}"
-  local modules="${3:?write_initramfs_config: missing modules}"
-
-  _write_initramfs_config "$root" "$kver" "$modules"
-}
-
 # Apply initramfs configuration (chroot or live).
 #
 # Args:
@@ -334,10 +320,10 @@ apply_initramfs() {
     log "Auto-discovering initramfs modules"
     local auto_modules
     local auto_modules
-    if ! auto_modules="$(discover_auto_modules "$root" "$kver")"; then
+    if ! auto_modules="$(_discover_auto_modules "$root" "$kver")"; then
       warn "Auto-discovery failed — using default modules only"
     fi
-    modules="$(get_all_initramfs_modules) $auto_modules"
+    modules="$(_get_all_initramfs_modules) $auto_modules"
     modules="$(echo "$modules" | tr ' ' '\n' | sort -u | { grep -v '^$' || true; } | tr '\n' ' ' | sed 's/^ *//;s/ *$//')"
   fi
 
@@ -365,8 +351,8 @@ reconcile_initramfs() {
   log "Reconciling initramfs for $kver"
   log "  Requested modules: $custom_modules"
 
-  if declare -F mount_chroot_fs >/dev/null 2>&1; then
-    mount_chroot_fs "$root"
+  if declare -F cleanup_mount_chroot >/dev/null 2>&1; then
+    cleanup_mount_chroot "$root"
   fi
 
   local effective_etc=0
@@ -380,8 +366,8 @@ reconcile_initramfs() {
   _reconcile_initramfs_cleanup() {
     set +e
     if ((effective_etc)); then unmount_effective_etc "$root" 2>/dev/null; fi
-    if declare -F umount_chroot_fs >/dev/null 2>&1; then
-      umount_chroot_fs "$root" 2>/dev/null
+    if declare -F cleanup_unmount_registered >/dev/null 2>&1; then
+      cleanup_unmount_registered 2>/dev/null || true
     fi
   }
   trap _reconcile_initramfs_cleanup ERR EXIT
@@ -453,7 +439,7 @@ verify_initramfs() {
   # Validate modules against target kernel
   if [[ -n "$kver" && -n "$configured_modules" ]]; then
     local validated
-    validated="$(validate_initramfs_modules "$root" "$kver" "$configured_modules")"
+    validated="$(_validate_initramfs_modules "$root" "$kver" "$configured_modules")"
     local configured_count validated_count
     configured_count=$(echo "$configured_modules" | wc -w)
     validated_count=$(echo "$validated" | wc -w)

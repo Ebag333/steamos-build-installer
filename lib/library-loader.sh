@@ -39,6 +39,7 @@ load_workflow_libs() {
     workflow-common
     common
     mounts
+    pipeline_init
     overlay
     common_system
     common_modules

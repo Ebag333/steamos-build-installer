@@ -19,7 +19,7 @@ fi
 # Global state
 # ---------------------------------------------------------------------------
 
-# PF-54a: set by preflight_resources_acquire_lock when flock succeeds.
+# PF-54a: set by _preflight_resources_acquire_lock when flock succeeds.
 # The lock fd remains held for the lifetime of the calling process so that
 # concurrent builds are rejected.  Callers should call
 # _pf_res_lock_cleanup explicitly or rely on process exit.
@@ -77,7 +77,7 @@ _pf_res_lock_cleanup() {
 # Preflight checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_resources_efi_free_space EFIMNT EFI_REQUIRED_KB
+# _preflight_resources_efi_free_space EFIMNT EFI_REQUIRED_KB
 #   PF-53a: Verify the EFI mount has at least EFI_REQUIRED_KB kilobytes
 #   of free space available.  Dies if insufficient.
 #
@@ -85,9 +85,9 @@ _pf_res_lock_cleanup() {
 #   Callers must derive requirements from the planned artifact manifest:
 #     new staged artifacts + retained old artifacts + temporary output + safety margin
 #   For FAT (EFI/ESP), account for cluster allocation overhead.
-preflight_resources_efi_free_space() {
-  local efi_mount="${1:?preflight_resources_efi_free_space: missing EFI mountpoint}"
-  local required_kb="${2:?preflight_resources_efi_free_space: missing required KB}"
+_preflight_resources_efi_free_space() {
+  local efi_mount="${1:?_preflight_resources_efi_free_space: missing EFI mountpoint}"
+  local required_kb="${2:?_preflight_resources_efi_free_space: missing required KB}"
 
   [[ "$required_kb" =~ ^[1-9][0-9]*$ ]] \
     || die "PF-53a: required_kb is not a positive integer: $required_kb"
@@ -106,16 +106,16 @@ preflight_resources_efi_free_space() {
   debug "PF-53a: EFI free space OK (${avail_kib} KiB available, ${required_kb} KiB required) on $efi_mount"
 }
 
-# preflight_resources_rootfs_free_space ROOTFS ROOTFS_REQUIRED_KB
+# _preflight_resources_rootfs_free_space ROOTFS ROOTFS_REQUIRED_KB
 #   PF-53b: Verify the rootfs has at least ROOTFS_REQUIRED_KB kilobytes
 #   of free space available.  Dies if insufficient.
 #
 #   NOTE: Space requirements are in 1K-blocks (KiB), not decimal KB.
 #   Callers must derive requirements from the planned artifact manifest:
 #     new staged artifacts + retained old artifacts + temporary output + safety margin
-preflight_resources_rootfs_free_space() {
-  local rootfs="${1:?preflight_resources_rootfs_free_space: missing rootfs mountpoint}"
-  local required_kb="${2:?preflight_resources_rootfs_free_space: missing required KB}"
+_preflight_resources_rootfs_free_space() {
+  local rootfs="${1:?_preflight_resources_rootfs_free_space: missing rootfs mountpoint}"
+  local required_kb="${2:?_preflight_resources_rootfs_free_space: missing required KB}"
 
   [[ "$required_kb" =~ ^[1-9][0-9]*$ ]] \
     || die "PF-53b: required_kb is not a positive integer: $required_kb"
@@ -134,7 +134,7 @@ preflight_resources_rootfs_free_space() {
   debug "PF-53b: rootfs free space OK (${avail_kib} KiB available, ${required_kb} KiB required) on $rootfs"
 }
 
-# preflight_resources_esp_free_space ESP_MOUNT ESP_REQUIRED_KB
+# _preflight_resources_esp_free_space ESP_MOUNT ESP_REQUIRED_KB
 #   PF-53c: Verify the shared ESP mount has at least ESP_REQUIRED_KB
 #   kilobytes of free space available.  Dies if insufficient.
 #
@@ -142,9 +142,9 @@ preflight_resources_rootfs_free_space() {
 #   Callers must derive requirements from the planned artifact manifest:
 #     new staged artifacts + retained old artifacts + temporary output + safety margin
 #   For FAT (ESP), account for cluster allocation overhead.
-preflight_resources_esp_free_space() {
-  local esp_mount="${1:?preflight_resources_esp_free_space: missing ESP mountpoint}"
-  local required_kb="${2:?preflight_resources_esp_free_space: missing required KB}"
+_preflight_resources_esp_free_space() {
+  local esp_mount="${1:?_preflight_resources_esp_free_space: missing ESP mountpoint}"
+  local required_kb="${2:?_preflight_resources_esp_free_space: missing required KB}"
 
   [[ "$required_kb" =~ ^[1-9][0-9]*$ ]] \
     || die "PF-53c: required_kb is not a positive integer: $required_kb"
@@ -163,7 +163,7 @@ preflight_resources_esp_free_space() {
   debug "PF-53c: ESP free space OK (${avail_kib} KiB available, ${required_kb} KiB required) on $esp_mount"
 }
 
-# preflight_resources_acquire_lock [LOCK_PATH]
+# _preflight_resources_acquire_lock [LOCK_PATH]
 #   PF-54a: Attempt to acquire an exclusive, non-blocking flock.
 #   Uses a fixed, protected path under /run/lock/steamos-build-installer/.
 #   The lock is held for the lifetime of the calling process (no RETURN trap).
@@ -172,7 +172,7 @@ preflight_resources_esp_free_space() {
 #   LOCK_PATH is optional; defaults to /run/lock/steamos-build-installer/build.lock
 #
 #   Sets global PF_LOCK_FD on success. Dies on failure.
-preflight_resources_acquire_lock() {
+_preflight_resources_acquire_lock() {
   local lock_path="${1:-/run/lock/steamos-build-installer/build.lock}"
 
   # Ensure the lock directory exists and is root-owned.
@@ -182,6 +182,13 @@ preflight_resources_acquire_lock() {
     mkdir -p "$lock_dir" \
       || die "PF-54a: could not create lock directory: $lock_dir"
     chmod 0755 "$lock_dir" 2>/dev/null || true
+  fi
+
+  # Check ledger lock before acquiring deployment lock
+  if declare -F pipeline_init_check_lock >/dev/null 2>&1; then
+    if ! pipeline_init_check_lock; then
+      die "PF-54a: another build is running (ledger locked) — cannot proceed"
+    fi
   fi
 
   # Use a Bash dynamic file descriptor (no eval, no fixed FD that could collide).
@@ -220,14 +227,14 @@ _pf_res_resolve_device() {
   echo "$resolved"
 }
 
-# preflight_resources_no_secondary_mounts DEVICE EXPECTED_MOUNTPOINT
+# _preflight_resources_no_secondary_mounts DEVICE EXPECTED_MOUNTPOINT
 #   PF-54b: Verify the given block device is mounted at exactly the expected
 #   location and not multiply mounted. A device mounted at unexpected locations
 #   indicates concurrent operations, bind mounts, or stale mounts.
 #   Dies if the mount topology doesn't match expectations.
-preflight_resources_no_secondary_mounts() {
-  local device="${1:?preflight_resources_no_secondary_mounts: missing device path}"
-  local expected_mount="${2:?preflight_resources_no_secondary_mounts: missing expected mountpoint}"
+_preflight_resources_no_secondary_mounts() {
+  local device="${1:?_preflight_resources_no_secondary_mounts: missing device path}"
+  local expected_mount="${2:?_preflight_resources_no_secondary_mounts: missing expected mountpoint}"
 
   local canonical_device
   if ! canonical_device="$(_pf_res_resolve_device "$device")"; then
@@ -400,13 +407,13 @@ preflight_resources_validate() {
   debug "preflight_resources_validate: efi=$efi_mount rootfs=$rootfs esp=${esp_mount:-<none>} scenario=${scenario:-<none>}"
 
   # PF-54a: Exclusive flock — acquired FIRST before any stateful checks.
-  preflight_resources_acquire_lock "$lock_path"
+  _preflight_resources_acquire_lock "$lock_path"
 
   # PF-53a: EFI free space.
-  preflight_resources_efi_free_space "$efi_mount" "$efi_required_kb"
+  _preflight_resources_efi_free_space "$efi_mount" "$efi_required_kb"
 
   # PF-53b: rootfs free space.
-  preflight_resources_rootfs_free_space "$rootfs" "$rootfs_required_kb"
+  _preflight_resources_rootfs_free_space "$rootfs" "$rootfs_required_kb"
 
   # PF-53c: ESP free space (optional -- only when ESP_MOUNT is provided).
   if [[ -n "$esp_mount" ]]; then
@@ -414,7 +421,7 @@ preflight_resources_validate() {
     if [[ -z "$esp_required_kb" ]]; then
       die "preflight_resources_validate: ESP_MOUNT provided but ESP_REQUIRED_KB is missing"
     fi
-    preflight_resources_esp_free_space "$esp_mount" "$esp_required_kb"
+    _preflight_resources_esp_free_space "$esp_mount" "$esp_required_kb"
   fi
 
   # PF-54b: No secondary mounts on the rootfs device.
@@ -425,7 +432,7 @@ preflight_resources_validate() {
     die "PF-54b: could not determine device for rootfs: $rootfs"
   fi
 
-  preflight_resources_no_secondary_mounts "$rootfs_device" "$rootfs"
+  _preflight_resources_no_secondary_mounts "$rootfs_device" "$rootfs"
 
   # PF-54c: RAUC idle and system state stable.
   preflight_resources_rauc_idle "$scenario"

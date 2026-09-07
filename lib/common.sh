@@ -97,9 +97,9 @@ stage_header() {
   fi
 }
 
-failure_snapshot() {
-  local rc="${1:?failure_snapshot: missing rc}"
-  local line="${2:?failure_snapshot: missing line}"
+_failure_snapshot() {
+  local rc="${1:?_failure_snapshot: missing rc}"
+  local line="${2:?_failure_snapshot: missing line}"
   local cmd="${3:-}"
   local reason="${4:-}"
   local journal_cmd journal_reason journal_context=""
@@ -157,9 +157,9 @@ failure_snapshot() {
   fi
 }
 
-report_failure() {
-  local rc="${1:?report_failure: missing rc}"
-  local line="${2:?report_failure: missing line}"
+_report_failure() {
+  local rc="${1:?_report_failure: missing rc}"
+  local line="${2:?_report_failure: missing line}"
   local cmd="${3:-}"
   local reason="${4:-}"
 
@@ -176,16 +176,16 @@ report_failure() {
   trap - ERR
   set +e
 
-  failure_snapshot "$rc" "$line" "$cmd" "$reason"
+  _failure_snapshot "$rc" "$line" "$cmd" "$reason"
   exit "$rc"
 }
 
-on_err() {
+_on_err() {
   local rc=$?
   local line="${BASH_LINENO[0]:-${LINENO}}"
   local cmd="$BASH_COMMAND"
 
-  report_failure \
+  _report_failure \
     "$rc" \
     "$line" \
     "$cmd" \
@@ -200,7 +200,7 @@ die() {
 
   ((rc != 0)) || rc=1
 
-  report_failure \
+  _report_failure \
     "$rc" \
     "$line" \
     "die: $reason" \
@@ -211,7 +211,7 @@ die() {
 # command substitutions, and subshells.  This is already enabled by repatch;
 # enabling it here gives the builder the same enriched failure handling.
 set -E
-trap on_err ERR
+trap _on_err ERR
 
 # ensure_steamos_build_dirs [BASE_PATH]
 #   Create the persistent /home/.steamos-build tree (logs + recovery).
@@ -267,8 +267,8 @@ _get_project_version() {
 # Copies: steamos-build.sh, lib/, tools/, configs/, build.conf, LICENSE
 # Skips: .git/, .idea/, test-*.sh, docs/, __pycache__/
 # Preserves: logs/, recovery/, .version
-persist_project_files() {
-  local src="${1:?persist_project_files: missing source dir}"
+_persist_project_files() {
+  local src="${1:?_persist_project_files: missing source dir}"
   local base="${2:-/home}"
   local dest="$base/.steamos-build"
   local version_file="$dest/.version"
@@ -360,7 +360,7 @@ ensure_project_persisted() {
   fi
 
   ensure_steamos_build_dirs "$base"
-  persist_project_files "$src" "$base"
+  _persist_project_files "$src" "$base"
 }
 
 # curl_retry ATTEMPTS [CURL_ARGS...]
@@ -421,13 +421,13 @@ progress_emit() {
   fi
 }
 
-# _persist_debug_logs
+# persist_debug_logs
 #   When DEBUG=1, copy all .log and .txt diagnostic files from WORKDIR to
 #   /tmp/steamos-build-logs-<timestamp>-<pid>/ before cleanup removes the
 #   workspace.  Preserves the directory structure (e.g. packages/build.log
 #   → /tmp/steamos-build-logs-.../packages/build.log).
 #   No-op when DEBUG!=1 or WORKDIR is unset/missing.
-_persist_debug_logs() {
+persist_debug_logs() {
   [[ "${DEBUG:-0}" == 1 ]] || return 0
   [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]] || return 0
 
@@ -450,215 +450,49 @@ _persist_debug_logs() {
   fi
 }
 
-# Tear down everything mounted/created on OUR loop device + the overlay, and
-# drop the udisks guard rule. Idempotent — safe to run twice (EXIT trap).
-cleanup() {
-  local _had_e=0
-  [[ -o errexit ]] && _had_e=1
-  set +e
-  trap - ERR
-
-  local rc=0
-  local kid m
-
-  log "cleanup: starting (WORKDIR=${WORKDIR:-<unset>} LOOPDEV=${LOOPDEV:-<unset>} MERGED=${MERGED:-<unset>})"
-
-  # ------------------------------------------------------------
-  # Namespace verification: refuse aggressive cleanup when we are
-  # running in the init (PID 1) mount namespace.  The build runs
-  # inside `unshare --mount --propagation private`; if that
-  # namespace is lost, unmount/rm operations would affect the host
-  # directly.  Safe operations (udev rule removal, log persistence)
-  # are still allowed.
-  # ------------------------------------------------------------
-  local _IN_INIT_NS=0
+# cleanup_check_host_namespace
+#   Returns 0 if safe to clean up (not in init namespace),
+#   Returns 1 if in init namespace (PID 1 mount namespace).
+cleanup_check_host_namespace() {
   if [[ -e /proc/self/ns/mnt && -e /proc/1/ns/mnt ]]; then
     if [[ "$(readlink /proc/self/ns/mnt)" == "$(readlink /proc/1/ns/mnt)" ]]; then
-      _IN_INIT_NS=1
-      warn "cleanup: detected init (PID 1) mount namespace — refusing aggressive cleanup"
-      warn "cleanup: mount namespace: $(readlink /proc/self/ns/mnt)"
-      warn "cleanup: safe operations (udev rules, logs) will proceed"
-      warn "cleanup: unmount, loop detach, and workspace removal are skipped"
-      warn "cleanup: if the build namespace was lost, a reboot may be needed"
+      warn "cleanup_check_host_namespace: detected init (PID 1) mount namespace — refusing aggressive cleanup"
+      return 1
     fi
   fi
+  return 0
+}
 
-  # ------------------------------------------------------------
-  # Critical-path guard: refuse to clean up if WORKDIR points at
-  # (or is a parent of) a well-known system directory.  An unset
-  # or empty WORKDIR is also treated as invalid.
-  # ------------------------------------------------------------
-  local _WORKDIR_INVALID=0
-  if [[ -z "${WORKDIR:-}" ]]; then
-    warn "cleanup: WORKDIR is unset or empty — refusing workspace removal"
-    _WORKDIR_INVALID=1
-  else
-    # Resolve to absolute path and strip trailing slash for comparison.
-    local _wd_real
-    _wd_real="$(realpath "$WORKDIR" 2>/dev/null || true)"
-    if [[ -z "$_wd_real" ]]; then
-      warn "cleanup: WORKDIR ($WORKDIR) does not resolve — refusing workspace removal"
-      _WORKDIR_INVALID=1
-    else
-      case "$_wd_real" in
-        / | /bin | /boot | /dev | /etc | /home | /lib* | /media | /mnt | /opt | /proc | /root | /run | /sbin | /srv | /sys | /tmp | /usr | /var)
-          warn "cleanup: WORKDIR ($_wd_real) is a critical system path — refusing workspace removal"
-          _WORKDIR_INVALID=1
-          ;;
-      esac
-    fi
-  fi
-
-  # Stop background children owned by this shell.
-  local kid_count=0
+# cleanup_stop_background_jobs
+#   Stop all background jobs launched by the current shell.
+cleanup_stop_background_jobs() {
+  local kid
   for kid in $(jobs -p 2>/dev/null); do
     kill "$kid" 2>/dev/null || true
-    wait "$kid" 2>/dev/null || true
-    ((++kid_count))
   done
-  ((kid_count > 0)) && log "cleanup: stopped $kid_count background child(ren)"
+}
 
-  # ------------------------------------------------------------
-  # Aggressive cleanup: overlay teardown, unmounts, loop detach.
-  # Skipped entirely when running in the init namespace.
-  # ------------------------------------------------------------
-  if ((_IN_INIT_NS)); then
-    warn "cleanup: skipping overlay teardown (in init namespace)"
-    warn "cleanup: skipping filesystem unmounts (in init namespace)"
-    warn "cleanup: skipping loop detach (in init namespace)"
-    rc=1
-  else
-    # Overlay must disappear before its lower filesystem.
-    log "cleanup: tearing down overlay"
-    if ! overlay_cleanup; then
-      warn "cleanup: overlay teardown incomplete"
-      warn "cleanup: refusing to unmount main image filesystems underneath it"
-      warn "cleanup: this is typically caused by the kernel's jbd2 journal thread"
-      warn "cleanup: holding an ext4 superblock after unmount. A reboot will"
-      warn "cleanup: release all resources cleanly."
-      rc=1
-    else
-      log "cleanup: overlay teardown complete"
-
-      # ----------------------------------------------------------
-      # Main image filesystem mounts.
-      # ----------------------------------------------------------
-      for m in "${HOMEMNT:-}" "${EFIMNT:-}" "${MNT:-}"; do
-        [[ -n "$m" ]] || continue
-
-        if mountpoint -q "$m" 2>/dev/null; then
-          log "cleanup: unmounting $m"
-          if strict_unmount "$m" "main image filesystem"; then
-            untrack_mount "$m" 2>/dev/null || true
-          else
-            warn "cleanup: failed to unmount $m"
-            rc=1
-          fi
-        fi
-      done
-
-      # ----------------------------------------------------------
-      # Main image loop.
-      # ----------------------------------------------------------
-      if [[ -n "${LOOPDEV:-}" ]]; then
-        log "cleanup: detaching main loop $LOOPDEV"
-        local loop_mounts
-        loop_mounts="$(mounts_for_loop "$LOOPDEV")"
-        if [[ -n "$loop_mounts" ]]; then
-          log "cleanup: $LOOPDEV has remaining mounts:"
-          emit_prefixed_lines log "    " "$loop_mounts"
-        fi
-
-        if ((rc == 0)); then
-          while IFS="" read -r m; do
-            [[ -n "$m" ]] || continue
-            if ! strict_unmount "$m" "remaining mount from $LOOPDEV"; then
-              rc=1
-            fi
-          done < <(mounts_for_loop "$LOOPDEV")
-
-          if ((rc == 0)); then
-            strict_detach_loop "$LOOPDEV" || rc=1
-          fi
-        else
-          warn "cleanup: skipping loop detach (previous errors)"
-        fi
-      fi
-    fi
-  fi
-
-  # Udev rule itself is safe to remove regardless of mount cleanup result.
+# cleanup_remove_udev_rules
+#   Remove udev rules created during build.
+cleanup_remove_udev_rules() {
   if [[ -n "${UDEV_RULE:-}" && -f "$UDEV_RULE" ]]; then
-    log "cleanup: removing udev rule $UDEV_RULE"
     rm -f "$UDEV_RULE"
     udevadm control --reload 2>/dev/null || true
   fi
-
-  # ------------------------------------------------------------
-  # Final diagnostics — skipped in init namespace since we know
-  # loops/mounts were not cleaned up by us.
-  # ------------------------------------------------------------
-  if ((_IN_INIT_NS)); then
-    warn "cleanup: skipping final diagnostics (in init namespace)"
-  else
-    if [[ -n "${OVL_IMG:-}" ]]; then
-      local remaining
-      remaining="$(loops_for_file "$OVL_IMG")"
-
-      if [[ -n "$remaining" ]]; then
-        warn "cleanup: overlay workspace still attached:"
-        emit_prefixed_lines warn "  " "$remaining"
-        rc=1
-      fi
-    fi
-
-    if [[ -n "${LOOPDEV:-}" ]] \
-      && losetup "$LOOPDEV" >/dev/null 2>&1; then
-      warn "cleanup: main image loop still attached: $LOOPDEV"
-      losetup "$LOOPDEV" >&2 2>/dev/null || true
-      warn "cleanup: a reboot may be required to release this loop device"
-      rc=1
-    fi
-  fi
-
-  # ------------------------------------------------------------
-  # Persist debug logs — safe to do in any namespace.
-  # ------------------------------------------------------------
-  _persist_debug_logs
-
-  # ------------------------------------------------------------
-  # Remove build workspace — skipped in init namespace to avoid
-  # deleting files that belong to the host, and skipped when
-  # WORKDIR is unset, unresolvable, or points at a critical path.
-  # ------------------------------------------------------------
-  if ((_WORKDIR_INVALID)); then
-    warn "cleanup: skipping workspace removal (WORKDIR is invalid or critical)"
-  elif ((_IN_INIT_NS)); then
-    warn "cleanup: skipping workspace removal (in init namespace)"
-  elif ((rc == 0)) && [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]]; then
-    log "cleanup: removing build workspace: $WORKDIR"
-    rm -rf "$WORKDIR" 2>/dev/null || warn "cleanup: could not remove $WORKDIR"
-  elif ((rc != 0)) && [[ -n "${WORKDIR:-}" ]]; then
-    warn "cleanup: skipping workspace removal — manually remove ${WORKDIR:-} when loop devices are fully released"
-  fi
-
-  log "cleanup: finished (rc=$rc)"
-  [[ "$_had_e" -eq 1 ]] && set -e
-  return "$rc"
 }
 
 # Diff the chroot's new packages against the pristine image db to get the list
 # of files that actually ship, then size-check it against available rootfs space.
-compute_payload() {
+_compute_payload() {
   # --- input validation (match copy_driver_payload style) ---
-  [[ -n "${MNT:-}" ]] || die "compute_payload: MNT is not set"
-  [[ -d "${MNT:-}" ]] || die "compute_payload: MNT directory not found: $MNT"
-  [[ -n "${MERGED:-}" ]] || die "compute_payload: MERGED is not set"
-  [[ -d "${MERGED:-}" ]] || die "compute_payload: MERGED directory not found: $MERGED"
-  [[ -n "${UPPER:-}" ]] || die "compute_payload: UPPER is not set"
-  [[ -d "${UPPER:-}" ]] || die "compute_payload: UPPER directory not found: $UPPER"
-  [[ -n "${KVER:-}" ]] || die "compute_payload: KVER is not set"
-  [[ -n "${WORKDIR:-}" ]] || die "compute_payload: WORKDIR is not set"
+  [[ -n "${MNT:-}" ]] || die "_compute_payload: MNT is not set"
+  [[ -d "${MNT:-}" ]] || die "_compute_payload: MNT directory not found: $MNT"
+  [[ -n "${MERGED:-}" ]] || die "_compute_payload: MERGED is not set"
+  [[ -d "${MERGED:-}" ]] || die "_compute_payload: MERGED directory not found: $MERGED"
+  [[ -n "${UPPER:-}" ]] || die "_compute_payload: UPPER is not set"
+  [[ -d "${UPPER:-}" ]] || die "_compute_payload: UPPER directory not found: $UPPER"
+  [[ -n "${KVER:-}" ]] || die "_compute_payload: KVER is not set"
+  [[ -n "${WORKDIR:-}" ]] || die "_compute_payload: WORKDIR is not set"
 
   # "Before" = the pristine image's own pacman db (read directly, host-side) —
   # NOT the chroot's, whose db carries installs cached in the overlay upper
@@ -719,12 +553,6 @@ compute_payload() {
     die "Not enough space in rootfs. Rerun with --trim-cuda."
   fi
 }
-
-
-
-
-
-
 
 # ---------------------------------------------------------------------------
 # Pacman config helpers

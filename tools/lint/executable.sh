@@ -80,7 +80,7 @@ has_suppress() {
 # Fix ownership: chown root-owned .sh files to DEFAULT_OWNER
 # ---------------------------------------------------------------------------
 
-fix_ownership() {
+_fix_ownership() {
   local root_owned=()
   while IFS= read -r -d '' file; do
     local uid
@@ -126,7 +126,7 @@ fix_ownership() {
 # Fix executable: chmod +x on non-executable .sh files
 # ---------------------------------------------------------------------------
 
-fix_executable() {
+_fix_executable() {
   local fixed=0
   local failed=0
 
@@ -217,8 +217,8 @@ scan() {
 # ---------------------------------------------------------------------------
 
 if [[ "$FIX_MODE" == true ]]; then
-  fix_ownership || true
-  fix_executable || true
+  _fix_ownership || true
+  _fix_executable || true
   scan
 else
   scan

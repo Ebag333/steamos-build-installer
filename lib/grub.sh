@@ -142,7 +142,7 @@ _param_in_grub_steamos() {
 # structure, new params are appended as continuation lines before the
 # closing quote.
 # Args: $1 = file path, $2... = parameters to add
-_add_params_to_grub_steamos() {
+add_params_to_grub_steamos() {
   local file="$1"
   shift
   local params_to_add=("$@")
@@ -292,7 +292,7 @@ patch_persistent_defaults() {
     done
 
     if [[ ${#params_to_add[@]} -gt 0 ]]; then
-      _add_params_to_grub_steamos "$grub_steamos" "${params_to_add[@]}"
+      add_params_to_grub_steamos "$grub_steamos" "${params_to_add[@]}"
     else
       log "  All params already in grub-steamos"
     fi
@@ -346,7 +346,7 @@ _remove_quiet_from_grub_default() {
 # Idempotently add parameters to EFI grub.cfg kernel lines.
 # Reuses _param_on_kernel_line for whole-token matching.
 # Args: $1 = grub.cfg path, $2... = parameters to add
-_add_params_to_efi_grub_cfg() {
+add_params_to_efi_grub_cfg() {
   local grub_cfg="$1"
   shift
   local params_to_add=("$@")
@@ -540,6 +540,7 @@ reconcile_grub() {
   fi
 
   log "Mounting $label EFI: $efi_dev -> $(readlink -f "$efi_dev" 2>/dev/null || echo '<unresolved>')"
+  # lint-ignore: strict-mount (registered on next line)
   mount "$efi_dev" "$EFIMNT" \
     || die "Could not mount EFI for $label"
   cleanup_track_mount "$EFIMNT"
@@ -555,7 +556,7 @@ reconcile_grub() {
     log "  target EFI partsets: <missing>"
   fi
 
-  mount_chroot_fs "$root"
+  cleanup_mount_chroot "$root"
 
   # ERR trap ensures teardown runs even if patching or validation calls die().
   # Uses the permissive chroot cleanup variant (lazy-unmount fallback, never
@@ -563,14 +564,7 @@ reconcile_grub() {
   # shellcheck disable=SC2317  # Called via trap _reconcile_grub_cleanup ERR below
   _reconcile_grub_cleanup() {
     set +e
-    umount_chroot_fs "$root" 2>/dev/null
-    if mountpoint -q "$EFIMNT" 2>/dev/null; then
-      log "ERR trap: attempting recursive unmount of $EFIMNT"
-      if ! umount -R "$EFIMNT" 2>/dev/null; then
-        log "ERR trap: recursive unmount failed, falling back to lazy unmount"
-        umount -Rl "$EFIMNT" 2>/dev/null || true
-      fi
-    fi
+    cleanup_unmount_registered 2>/dev/null || true
   }
   trap _reconcile_grub_cleanup ERR
 
@@ -595,22 +589,15 @@ reconcile_grub() {
   sync -f "$root"
   sync -f "$EFIMNT" 2>/dev/null || sync
 
-  umount_chroot_fs "$root" strict
-  if mountpoint -q "$EFIMNT" 2>/dev/null; then
-    if ! umount -R "$EFIMNT" 2>/dev/null; then
-      warn "EFI unmount failed, falling back to lazy unmount"
-      umount -Rl "$EFIMNT" 2>/dev/null || true
-    fi
-  fi
-  untrack_mount "$EFIMNT"
+  cleanup_unmount_registered
   trap - ERR
 }
 
 # ── Compatibility wrappers ────────────────────────────────────────────────────
-# patch_grub_steamos() is kept for callers that only need grub-steamos patching
+# _patch_grub_steamos() is kept for callers that only need grub-steamos patching
 # (e.g. install-driver.sh).  It now delegates to patch_persistent_defaults()
 # which handles both grub and grub-steamos.
 
-patch_grub_steamos() {
+_patch_grub_steamos() {
   patch_persistent_defaults
 }

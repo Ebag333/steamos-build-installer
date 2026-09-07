@@ -53,7 +53,7 @@ failure_snapshot_extra() {
   local _slot
 
   # Send a desktop notification to the user about the critical failure.
-  notify_desktop critical \
+  _notify_desktop critical \
     "SteamOS update patch failed" \
     "The SteamOS update was cancelled because a critical customization failed.
 
@@ -90,11 +90,11 @@ Log: ${RUN_LOG:-unknown}"
   fi
 }
 
-# notify_desktop URGENCY TITLE BODY
+# _notify_desktop URGENCY TITLE BODY
 #   Send a desktop notification to the deck user's Plasma session.
 #   Urgency: "critical" (sticky), "normal" (auto-expires), "low".
 #   Falls back through: notify-send → busctl → log only.
-notify_desktop() {
+_notify_desktop() {
   local urgency="${1:-normal}"
   local title="$2"
   local body="$3"
@@ -103,12 +103,12 @@ notify_desktop() {
   local uid
 
   uid="$(id -u "$user" 2>/dev/null)" || {
-    log "notify_desktop: cannot resolve uid for $user"
+    log "_notify_desktop: cannot resolve uid for $user"
     return 1
   }
 
   [[ -S "/run/user/$uid/bus" ]] || {
-    log "notify_desktop: no D-Bus session for $user (no /run/user/$uid/bus)"
+    log "_notify_desktop: no D-Bus session for $user (no /run/user/$uid/bus)"
     return 1
   }
 
@@ -127,7 +127,7 @@ notify_desktop() {
       "$title" \
       "$body" 2>/dev/null && return 0
 
-    log "notify_desktop: notify-send failed, falling back to busctl"
+    log "_notify_desktop: notify-send failed, falling back to busctl"
   fi
 
   # Fallback: direct D-Bus call via busctl (part of systemd, always present).
@@ -153,7 +153,7 @@ notify_desktop() {
     1 "urgency" "y" "$urgency_byte" \
     2>/dev/null && return 0
 
-  log "notify_desktop: busctl fallback also failed"
+  log "_notify_desktop: busctl fallback also failed"
   return 1
 }
 
@@ -255,6 +255,10 @@ WORK_LOOPDEV=""
 register_rebuild_pipeline
 register_rebuild_cleanup
 
+# Ledger: recover from previous run, then initialize
+pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
+pipeline_init "" "/home/.steamos-build" || warn "Ledger initialization failed — proceeding without crash recovery"
+
 # Run the pipeline
 if run_pipeline; then
   # Pipeline succeeded — summarize results
@@ -300,7 +304,7 @@ if run_pipeline; then
   warn "============================================================"
   warn ""
 
-  notify_desktop normal \
+  _notify_desktop normal \
     "SteamOS NVIDIA: patch warnings" \
     "The SteamOS update succeeded, but some optional patches failed: $_warn_failed_list.
 
@@ -322,7 +326,7 @@ else
   warn "============================================================"
   warn ""
 
-  notify_desktop critical \
+  _notify_desktop critical \
     "SteamOS NVIDIA: patch failed" \
     "The SteamOS update was cancelled because a critical customization failed.
 

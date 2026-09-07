@@ -40,7 +40,7 @@ set -euo pipefail
 LOG_DIR=""
 USB_MOUNT=""
 
-find_usb() {
+_find_usb() {
   # Already mounted (e.g. home partition automounted)?
   for mp in /run/media/*/home /media/*/home /home; do
     if [[ -f "$mp/.steamos-build/usb-marker" ]]; then
@@ -67,19 +67,19 @@ find_usb() {
   return 1
 }
 
-if ! find_usb; then
+if ! _find_usb; then
   echo "collect-boot-logs: USB not found, skipping." >&2
   exit 0
 fi
 
-collect_boot_logs_cleanup() {
+_collect_boot_logs_cleanup() {
   [[ -n "${OUT:-}" && -d "$OUT" ]] && rm -rf "$OUT"
   if [[ -n "${USB_MOUNT:-}" ]]; then
     umount "$USB_MOUNT" 2>/dev/null || true
     rmdir "$USB_MOUNT" 2>/dev/null || true
   fi
 }
-trap collect_boot_logs_cleanup EXIT
+trap _collect_boot_logs_cleanup EXIT
 
 mkdir -p "$LOG_DIR"
 
@@ -87,11 +87,11 @@ TS="$(date +%Y%m%d-%H%M%S)"
 OUT="$LOG_DIR/boot-${TS}"
 mkdir -p "$OUT"
 
-cp_if() { [[ -f "$1" ]] && cp "$1" "$OUT/" 2>/dev/null || true; }
+_cp_if() { [[ -f "$1" ]] && cp "$1" "$OUT/" 2>/dev/null || true; }
 save() { [[ -f "$1" ]] && cp "$1" "$OUT/$2" 2>/dev/null || true; }
 
 # --- initramfs logs (dracut: rd.log=all writes here) ---
-cp_if /run/initramfs/init.log
+_cp_if /run/initramfs/init.log
 
 # --- dmesg ---
 dmesg > "$OUT/dmesg.txt" 2>/dev/null || true
@@ -296,7 +296,7 @@ case "$MODE" in
   *) echo "Usage: $0 [all|system]" >&2; exit 1 ;;
 esac
 
-err_exit() { zenity --error --no-wrap --text "$1" 2>/dev/null || echo "ERROR: $1" >&2; exit 1; }
+_err_exit() { zenity --error --no-wrap --text "$1" 2>/dev/null || echo "ERROR: $1" >&2; exit 1; }
 
 # Disk we're running from (the USB) — never offer it as a target.
 # Fail closed: if we can't determine the source disk, refuse to proceed
@@ -304,13 +304,13 @@ err_exit() { zenity --error --no-wrap --text "$1" 2>/dev/null || echo "ERROR: $1
 SRC_PART="$(findmnt -no SOURCE /)"
 SRC_DISK="$(lsblk -no PKNAME "$SRC_PART" 2>/dev/null | head -1)"
 if [[ -z "$SRC_DISK" ]]; then
-  err_exit "Cannot determine which disk contains the USB rootfs.\nRefusing to proceed — the USB might be offered as an install target."
+  _err_exit "Cannot determine which disk contains the USB rootfs.\nRefusing to proceed — the USB might be offered as an install target."
 fi
 
 mapfile -t CANDIDATES < <(lsblk -dn -o NAME,SIZE,MODEL,TRAN,TYPE | \
   awk -v src="$SRC_DISK" '$NF=="disk" && $1!=src && $1 !~ /^(loop|zram|sr|nbd|ram)/ {NF--; print}')
 
-[[ ${#CANDIDATES[@]} -gt 0 ]] || err_exit "No target disk found.\nThis machine appears to have no internal drive (other than this USB)."
+[[ ${#CANDIDATES[@]} -gt 0 ]] || _err_exit "No target disk found.\nThis machine appears to have no internal drive (other than this USB)."
 
 ROWS=()
 for c in "${CANDIDATES[@]}"; do
@@ -322,12 +322,12 @@ TARGET=$(zenity --list --radiolist --title "$TITLE" \
   --text "$PICK_TEXT" \
   --column "" --column "Disk" --column "Size / Model / Bus" \
   --width 640 --height 340 "${ROWS[@]}") || exit 0
-[[ -n "$TARGET" && -b "$TARGET" ]] || err_exit "No disk selected."
+[[ -n "$TARGET" && -b "$TARGET" ]] || _err_exit "No disk selected."
 
 # Upgrade mode only makes sense on a disk that already has the SteamOS layout
 if [[ "$MODE" == system ]]; then
   if ! lsblk -no PARTLABEL "$TARGET" 2>/dev/null | grep -qx "rootfs-A"; then
-    err_exit "No existing SteamOS installation found on $TARGET.\nUse \"Install SteamOS (NVIDIA) to Hard Drive\" for a fresh install."
+    _err_exit "No existing SteamOS installation found on $TARGET.\nUse \"Install SteamOS (NVIDIA) to Hard Drive\" for a fresh install."
   fi
 fi
 

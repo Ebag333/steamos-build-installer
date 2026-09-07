@@ -24,7 +24,7 @@ fi
 # Preflight checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_esp_matches_partuuid ESP_DEVICE EXPECTED_PARTUUID
+# _preflight_esp_matches_partuuid ESP_DEVICE EXPECTED_PARTUUID
 #   PF-37: Verify the shared ESP's PARTUUID matches the expected value
 #   (case-insensitive comparison).  The expected PARTUUID must come from
 #   independently validated GPT/topology state (e.g., the discovered
@@ -36,9 +36,9 @@ fi
 #   - Expected parent disk
 #   - Expected GPT partition type GUID
 #   - Distinctness from rootfs, VAR, and per-slot EFI devices
-preflight_esp_matches_partuuid() {
-  local device="${1:?preflight_esp_matches_partuuid: missing device path}"
-  local expected="${2:?preflight_esp_matches_partuuid: missing expected PARTUUID}"
+_preflight_esp_matches_partuuid() {
+  local device="${1:?_preflight_esp_matches_partuuid: missing device path}"
+  local expected="${2:?_preflight_esp_matches_partuuid: missing expected PARTUUID}"
 
   local canonical
   canonical="$(_canonicalize_efi_device "$device" 2>/dev/null)" || true
@@ -219,7 +219,7 @@ preflight_esp_validate() {
   preflight_esp_distinct_from_efi "$esp_device" "$efi_device"
 
   # PF-37: PARTUUID matches expected.
-  preflight_esp_matches_partuuid "$esp_device" "$expected_partuuid"
+  _preflight_esp_matches_partuuid "$esp_device" "$expected_partuuid"
 
   # PF-38: FAT filesystem, mounted, writable — write probe happens LAST.
   preflight_esp_is_fat_and_writable "$esp_mount" "$esp_device"

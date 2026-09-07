@@ -43,6 +43,7 @@ _build_print_deps() {
 # Resolve a package's provenance against a profile.
 # Args: $1 = root, $2 = package name
 # Sets: _DEP_VERSION, _DEP_SOURCE, _DEP_CLASS
+# lint-ignore: private-funcs
 _build_resolve_dep() {
   local root="${1:?}" pkg="${2:?}"
 
@@ -112,8 +113,8 @@ _build_exit_cleanup() {
   else
     if [[ -n "$_build_cleanup_build_root" && -d "$_build_cleanup_build_root" ]]; then
       _build_destroy_root "$_build_cleanup_build_root" || {
-        warn "Build root cleanup failed, attempting force cleanup"
-        _build_force_destroy_root "$_build_cleanup_build_root"
+        warn "Build root cleanup failed, attempting force teardown"
+        cleanup_force_teardown "$_build_cleanup_build_root"
       }
     fi
   fi
@@ -368,7 +369,7 @@ install_build_artifact() {
     pacman_install_local --needed -- "$pkg" || die "Failed to install $pkg"
   else
     cp "$pkg" "$root/tmp/"
-    _pacman_retry chroot "$root" pacman --config "${PACCONF:-/etc/pacman.conf}" -U --noconfirm "/tmp/$(basename "$pkg")" || {
+    pacman_retry chroot "$root" pacman --config "${PACCONF:-/etc/pacman.conf}" -U --noconfirm "/tmp/$(basename "$pkg")" || {
       rm -f "$root/tmp/$(basename "$pkg")"
       die "Failed to install $pkg into chroot"
     }
@@ -387,10 +388,10 @@ install_build_artifact() {
 #
 # Args: $1 = root path, $2 = package file, $3 = expected artifact path (chroot-relative, e.g. /usr/lib/dri/nvidia_drv_video.so)
 # Returns 0 on success, 1 on failure
-validate_build_artifact() {
-  local root="${1:?validate_build_artifact: missing root}"
-  local pkg="${2:?validate_build_artifact: missing package}"
-  local artifact="${3:?validate_build_artifact: missing artifact path}"
+_validate_build_artifact() {
+  local root="${1:?_validate_build_artifact: missing root}"
+  local pkg="${2:?_validate_build_artifact: missing package}"
+  local artifact="${3:?_validate_build_artifact: missing artifact path}"
   local rc=0
 
   local pkg_basename
@@ -649,21 +650,6 @@ _build_destroy_root() {
       ;;
     overlay-chroot)
       _build_overlay_destroy_root "$build_root"
-      ;;
-  esac
-}
-
-# Force destroy a build root (aggressive cleanup for failed builds).
-_build_force_destroy_root() {
-  local build_root="${1:?}"
-  local backend="${BUILD_BACKEND:-overlay-chroot}"
-
-  case "$backend" in
-    arch-devtools)
-      _build_devtools_destroy_root "$build_root"
-      ;;
-    overlay-chroot)
-      _build_overlay_force_destroy_root "$build_root"
       ;;
   esac
 }

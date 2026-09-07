@@ -409,13 +409,13 @@ _recovery_update_grub_binary() {
 }
 
 # ============================================================================
-# simulate_recovery_preflight_validation
+# _simulate_recovery_preflight_validation
 #
 # Run preflight checks for the recovery scenario. Validates that the
 # fixture is in a consistent state before applying recovery.
 #
 # Usage:
-#   simulate_recovery_preflight_validation [EFI_DIR] [ESP_DIR]
+#   _simulate_recovery_preflight_validation [EFI_DIR] [ESP_DIR]
 #
 # Checks:
 #   1. EFI directory structure is intact
@@ -430,7 +430,7 @@ _recovery_update_grub_binary() {
 #   0 - All preflight checks passed
 #   1 - One or more checks failed
 # ============================================================================
-simulate_recovery_preflight_validation() {
+_simulate_recovery_preflight_validation() {
   local efi_dir="${1:-$RECOVERY_EFI_DIR}"
   local esp_dir="${2:-$RECOVERY_ESP_DIR}"
 
@@ -924,13 +924,13 @@ verify_filesystem_flushed() {
 }
 
 # ============================================================================
-# verify_repatch_idempotent
+# _verify_repatch_idempotent
 #
 # Verify that applying recovery state a second time produces no duplicates
 # and leaves the fixture in an identical state.
 #
 # Usage:
-#   verify_repatch_idempotent [ROOTFS_DIR] [EFI_DIR] [ESP_DIR]
+#   _verify_repatch_idempotent [ROOTFS_DIR] [EFI_DIR] [ESP_DIR]
 #
 # Arguments:
 #   ROOTFS_DIR - Rootfs directory (default: RECOVERY_ROOTFS_DIR)
@@ -947,7 +947,7 @@ verify_filesystem_flushed() {
 #   0 - Second apply is idempotent
 #   1 - Duplicates or state changes detected
 # ============================================================================
-verify_repatch_idempotent() {
+_verify_repatch_idempotent() {
   local rootfs_dir="${1:-$RECOVERY_ROOTFS_DIR}"
   local efi_dir="${2:-$RECOVERY_EFI_DIR}"
   local esp_dir="${3:-$RECOVERY_ESP_DIR}"
@@ -966,7 +966,7 @@ verify_repatch_idempotent() {
 
   # 2. Apply recovery again
   if ! simulate_recovery_apply "$rootfs_dir" "$efi_dir" "$esp_dir"; then
-    echo "ERROR: verify_repatch_idempotent: second apply failed" >&2
+    echo "ERROR: _verify_repatch_idempotent: second apply failed" >&2
     return 1
   fi
 
@@ -983,7 +983,7 @@ verify_repatch_idempotent() {
     local dup_check
     dup_check="$(grep -v '^\s*#\|^\s*$' "$ps_path" | awk '{print $2}' | sort | uniq -d)"
     if [[ -n "$dup_check" ]]; then
-      echo "ERROR: verify_repatch_idempotent: duplicate PARTUUID in partset $ps_file: $dup_check" >&2
+      echo "ERROR: _verify_repatch_idempotent: duplicate PARTUUID in partset $ps_file: $dup_check" >&2
       rc=1
     fi
   done
@@ -999,27 +999,27 @@ verify_repatch_idempotent() {
   post_conf_b="$(md5sum "$esp_dir/SteamOS/conf/B.conf" 2>/dev/null | awk '{print $1}')"
 
   if [[ -n "$pre_grub" && "$post_grub" != "$pre_grub" ]]; then
-    echo "ERROR: verify_repatch_idempotent: grub.cfg changed on second apply" >&2
+    echo "ERROR: _verify_repatch_idempotent: grub.cfg changed on second apply" >&2
     rc=1
   fi
   if [[ -n "$pre_partset_self" && "$post_partset_self" != "$pre_partset_self" ]]; then
-    echo "ERROR: verify_repatch_idempotent: partset self changed on second apply" >&2
+    echo "ERROR: _verify_repatch_idempotent: partset self changed on second apply" >&2
     rc=1
   fi
   if [[ -n "$pre_partset_all" && "$post_partset_all" != "$pre_partset_all" ]]; then
-    echo "ERROR: verify_repatch_idempotent: partset all changed on second apply" >&2
+    echo "ERROR: _verify_repatch_idempotent: partset all changed on second apply" >&2
     rc=1
   fi
   if [[ -n "$pre_partset_shared" && "$post_partset_shared" != "$pre_partset_shared" ]]; then
-    echo "ERROR: verify_repatch_idempotent: partset shared changed on second apply" >&2
+    echo "ERROR: _verify_repatch_idempotent: partset shared changed on second apply" >&2
     rc=1
   fi
   if [[ -n "$pre_grubx64" && "$post_grubx64" != "$pre_grubx64" ]]; then
-    echo "ERROR: verify_repatch_idempotent: grubx64.efi changed on second apply" >&2
+    echo "ERROR: _verify_repatch_idempotent: grubx64.efi changed on second apply" >&2
     rc=1
   fi
   if [[ -n "$pre_conf_b" && "$post_conf_b" != "$pre_conf_b" ]]; then
-    echo "ERROR: verify_repatch_idempotent: B.conf changed on second apply" >&2
+    echo "ERROR: _verify_repatch_idempotent: B.conf changed on second apply" >&2
     rc=1
   fi
 
@@ -1135,70 +1135,70 @@ simulate_recovery_bootconf_ownership() {
 # ============================================================================
 
 # Get the target rootfs UUID for the current recovery fixture
-# Usage: get_recovery_target_uuid
-get_recovery_target_uuid() {
+# Usage: _get_recovery_target_uuid
+_get_recovery_target_uuid() {
   if [[ -z "$RECOVERY_TARGET_UUID" ]]; then
-    echo "ERROR: get_recovery_target_uuid: RECOVERY_TARGET_UUID not set (call recovery_scenario_setup first)" >&2
+    echo "ERROR: _get_recovery_target_uuid: RECOVERY_TARGET_UUID not set (call recovery_scenario_setup first)" >&2
     return 1
   fi
   echo "$RECOVERY_TARGET_UUID"
 }
 
 # Get the current (slot A) rootfs UUID for the current recovery fixture
-# Usage: get_recovery_current_uuid
-get_recovery_current_uuid() {
+# Usage: _get_recovery_current_uuid
+_get_recovery_current_uuid() {
   if [[ -z "$RECOVERY_CURRENT_UUID" ]]; then
-    echo "ERROR: get_recovery_current_uuid: RECOVERY_CURRENT_UUID not set (call recovery_scenario_setup first)" >&2
+    echo "ERROR: _get_recovery_current_uuid: RECOVERY_CURRENT_UUID not set (call recovery_scenario_setup first)" >&2
     return 1
   fi
   echo "$RECOVERY_CURRENT_UUID"
 }
 
 # Get the EFI directory for the current recovery fixture
-# Usage: get_recovery_efi_dir
-get_recovery_efi_dir() {
+# Usage: _get_recovery_efi_dir
+_get_recovery_efi_dir() {
   if [[ -z "$RECOVERY_EFI_DIR" ]]; then
-    echo "ERROR: get_recovery_efi_dir: RECOVERY_EFI_DIR not set (call recovery_scenario_setup first)" >&2
+    echo "ERROR: _get_recovery_efi_dir: RECOVERY_EFI_DIR not set (call recovery_scenario_setup first)" >&2
     return 1
   fi
   echo "$RECOVERY_EFI_DIR"
 }
 
 # Get the rootfs directory for the current recovery fixture
-# Usage: get_recovery_rootfs_dir
-get_recovery_rootfs_dir() {
+# Usage: _get_recovery_rootfs_dir
+_get_recovery_rootfs_dir() {
   if [[ -z "$RECOVERY_ROOTFS_DIR" ]]; then
-    echo "ERROR: get_recovery_rootfs_dir: RECOVERY_ROOTFS_DIR not set (call recovery_scenario_setup first)" >&2
+    echo "ERROR: _get_recovery_rootfs_dir: RECOVERY_ROOTFS_DIR not set (call recovery_scenario_setup first)" >&2
     return 1
   fi
   echo "$RECOVERY_ROOTFS_DIR"
 }
 
 # Get the ESP directory for the current recovery fixture
-# Usage: get_recovery_esp_dir
-get_recovery_esp_dir() {
+# Usage: _get_recovery_esp_dir
+_get_recovery_esp_dir() {
   if [[ -z "$RECOVERY_ESP_DIR" ]]; then
-    echo "ERROR: get_recovery_esp_dir: RECOVERY_ESP_DIR not set (call recovery_scenario_setup first)" >&2
+    echo "ERROR: _get_recovery_esp_dir: RECOVERY_ESP_DIR not set (call recovery_scenario_setup first)" >&2
     return 1
   fi
   echo "$RECOVERY_ESP_DIR"
 }
 
 # Get the metadata directory for the current recovery fixture
-# Usage: get_recovery_metadata_dir
-get_recovery_metadata_dir() {
+# Usage: _get_recovery_metadata_dir
+_get_recovery_metadata_dir() {
   if [[ -z "$RECOVERY_METADATA_DIR" ]]; then
-    echo "ERROR: get_recovery_metadata_dir: RECOVERY_METADATA_DIR not set (call recovery_scenario_setup first)" >&2
+    echo "ERROR: _get_recovery_metadata_dir: RECOVERY_METADATA_DIR not set (call recovery_scenario_setup first)" >&2
     return 1
   fi
   echo "$RECOVERY_METADATA_DIR"
 }
 
 # Get the namespace for the current recovery fixture
-# Usage: get_recovery_namespace
-get_recovery_namespace() {
+# Usage: _get_recovery_namespace
+_get_recovery_namespace() {
   if [[ -z "$RECOVERY_NAMESPACE" ]]; then
-    echo "ERROR: get_recovery_namespace: RECOVERY_NAMESPACE not set (call recovery_scenario_setup first)" >&2
+    echo "ERROR: _get_recovery_namespace: RECOVERY_NAMESPACE not set (call recovery_scenario_setup first)" >&2
     return 1
   fi
   echo "$RECOVERY_NAMESPACE"

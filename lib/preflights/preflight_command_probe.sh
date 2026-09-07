@@ -20,6 +20,7 @@ fi
 # Shared command-availability probe for preflight modules.
 # Returns 0 if the command is available, 1 otherwise.
 # Does NOT die on failure — callers handle error reporting.
+# lint-ignore: private-funcs
 _pf_command_available() {
   local rootfs="${1:?_pf_command_available: missing rootfs path}"
   local cmd="${2:?_pf_command_available: missing command name}"

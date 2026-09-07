@@ -641,7 +641,7 @@ _pf_fs_parse_hash_file() {
 # Individual checks — independently callable
 # ---------------------------------------------------------------------------
 
-# pf_fs_check_rootfs_device_identity ROOTFS TARGET_DEVICE
+# _pf_fs_check_rootfs_device_identity ROOTFS TARGET_DEVICE
 #   PF-59: Verify that ROOTFS is actually mounted from TARGET_DEVICE by
 #   comparing their major:minor device numbers.  Path-based matching is
 #   unreliable because device symlinks and names can change; major:minor
@@ -652,9 +652,9 @@ _pf_fs_parse_hash_file() {
 #     TARGET_DEVICE — expected block device that ROOTFS should be mounted from
 #
 #   Dies if ROOTFS is not mounted from TARGET_DEVICE.
-pf_fs_check_rootfs_device_identity() {
-  local rootfs="${1:?pf_fs_check_rootfs_device_identity: missing rootfs path}"
-  local target_device="${2:?pf_fs_check_rootfs_device_identity: missing target device}"
+_pf_fs_check_rootfs_device_identity() {
+  local rootfs="${1:?_pf_fs_check_rootfs_device_identity: missing rootfs path}"
+  local target_device="${2:?_pf_fs_check_rootfs_device_identity: missing target device}"
 
   if [[ -z "$target_device" ]]; then
     debug "PF-59: no TARGET_DEVICE provided — skipping rootfs device identity check"
@@ -706,8 +706,8 @@ pf_fs_check_rootfs_device_identity() {
 #     0 — active operation detected  → die
 #     1 — no active operation (idle)  → continue
 #     2 — unable to determine state   → die (fail closed)
-pf_fs_check_no_btrfs_operations() {
-  local rootfs="${1:?pf_fs_check_no_btrfs_operations: missing rootfs path}"
+_pf_fs_check_no_btrfs_operations() {
+  local rootfs="${1:?_pf_fs_check_no_btrfs_operations: missing rootfs path}"
   local rc
 
   # Skip if not Btrfs — these checks are filesystem-specific.
@@ -763,8 +763,8 @@ pf_fs_check_no_btrfs_operations() {
 #     ROOTFS        — mounted root filesystem path
 #     ROOTFS_DEVICE — expected rootfs block device (e.g., /dev/nvme0n1p3)
 #     VERITY_DEVICE — expected verity device (e.g., /dev/mapper/rootfs.0-verity)
-pf_fs_check_verity_inactive() {
-  local rootfs="${1:?pf_fs_check_verity_inactive: missing rootfs path}"
+_pf_fs_check_verity_inactive() {
+  local rootfs="${1:?_pf_fs_check_verity_inactive: missing rootfs path}"
   local rootfs_device="${2:-}"
   local verity_device="${3:-}"
 
@@ -843,8 +843,8 @@ pf_fs_check_verity_inactive() {
 #     VERITY_DEVICE   — verity device paired with rootfs
 #     VERITY_POLICY   — policy for verity update: "regenerate", "disable",
 #                       "leave-invalid", or "not-applicable"
-pf_fs_check_verity_policy_defined() {
-  local rootfs="${1:?pf_fs_check_verity_policy_defined: missing rootfs path}"
+_pf_fs_check_verity_policy_defined() {
+  local rootfs="${1:?_pf_fs_check_verity_policy_defined: missing rootfs path}"
   local rootfs_device="${2:-}"
   local verity_device="${3:-}"
   local verity_policy="${4:-}"
@@ -1067,8 +1067,8 @@ _pf_fs_extract_initrd_version() {
 #     - Resolved to a path that remains beneath the target root
 #
 #   Dies if no matching pair is found.
-pf_fs_check_coherent_boot_payload() {
-  local rootfs="${1:?pf_fs_check_coherent_boot_payload: missing rootfs path}"
+_pf_fs_check_coherent_boot_payload() {
+  local rootfs="${1:?_pf_fs_check_coherent_boot_payload: missing rootfs path}"
 
   local boot_dir="$rootfs/boot"
 
@@ -1308,26 +1308,26 @@ preflight_filesystem_state_validate() {
   # This must run before any other checks to ensure we are operating on the
   # correct device.  Uses major:minor comparison (not path strings).
   if [[ -n "$target_device" ]]; then
-    pf_fs_check_rootfs_device_identity "$rootfs" "$target_device"
+    _pf_fs_check_rootfs_device_identity "$rootfs" "$target_device"
   else
     debug "PF-59: no TARGET_DEVICE provided — skipping rootfs device identity check"
   fi
 
   # PF-60: No active Btrfs operations.
-  pf_fs_check_no_btrfs_operations "$rootfs"
+  _pf_fs_check_no_btrfs_operations "$rootfs"
 
   # PF-61: Verity device state (graceful skip on non-verity systems).
-  pf_fs_check_verity_inactive "$rootfs" "$rootfs_device" "$verity_device"
+  _pf_fs_check_verity_inactive "$rootfs" "$rootfs_device" "$verity_device"
 
   # PF-62: Verity policy defined (only when rootfs will be modified).
   if [[ "$rootfs_modified_bool" == "true" ]]; then
-    pf_fs_check_verity_policy_defined "$rootfs" "$rootfs_device" "$verity_device" "$verity_policy"
+    _pf_fs_check_verity_policy_defined "$rootfs" "$rootfs_device" "$verity_device" "$verity_policy"
   else
     debug "PF-62: rootfs_modified is not true — skipping verity policy check"
   fi
 
   # PF-63: Boot payload exists.
-  pf_fs_check_coherent_boot_payload "$rootfs"
+  _pf_fs_check_coherent_boot_payload "$rootfs"
 
   # PF-64: Source image integrity (only when IMAGE_PATH is provided).
   if [[ -n "$image_path" ]]; then

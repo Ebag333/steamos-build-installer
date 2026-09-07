@@ -21,16 +21,16 @@ register_live_pipeline() {
     "configure" \
     "verify"
 
-  register_phase "validate" "phase_live_validate" "Validate target system"
-  register_phase "prepare" "phase_live_prepare" "Prepare system for changes"
-  register_phase "preflight" "phase_live_preflight" "Run preflight safety checks"
-  register_phase "sysupgrade" "phase_live_sysupgrade" "System upgrade (pacman -Syu)"
-  register_phase "install" "phase_live_install" "Install drivers and packages"
-  register_phase "configure" "phase_live_configure" "Configure system"
-  register_phase "verify" "phase_live_verify" "Verify and cleanup"
+  register_phase "validate" "_phase_live_validate" "Validate target system"
+  register_phase "prepare" "_phase_live_prepare" "Prepare system for changes"
+  register_phase "preflight" "_phase_live_preflight" "Run preflight safety checks"
+  register_phase "sysupgrade" "_phase_live_sysupgrade" "System upgrade (pacman -Syu)"
+  register_phase "install" "_phase_live_install" "Install drivers and packages"
+  register_phase "configure" "_phase_live_configure" "Configure system"
+  register_phase "verify" "_phase_live_verify" "Verify and cleanup"
 }
 
-phase_live_validate() {
+_phase_live_validate() {
   stage_header "preparation"
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     warn "Live configuration requires root privileges"
@@ -118,7 +118,7 @@ phase_live_validate() {
   return 0
 }
 
-phase_live_prepare() {
+_phase_live_prepare() {
   if [[ -z "${config_root:-}" || "${config_root:-}" == "/" ]]; then
     disable_steamos_readonly
   else
@@ -131,7 +131,7 @@ phase_live_prepare() {
 }
 
 # Phase: Run preflight safety checks
-phase_live_preflight() {
+_phase_live_preflight() {
   stage_header "preflight"
 
   local root="${config_root:-/}"
@@ -163,7 +163,7 @@ phase_live_preflight() {
   return 0
 }
 
-phase_live_sysupgrade() {
+_phase_live_sysupgrade() {
   stage_header "system update"
   local root="${config_root:-/}"
 
@@ -218,7 +218,7 @@ phase_live_sysupgrade() {
   return 0
 }
 
-phase_live_install() {
+_phase_live_install() {
   stage_header "driver installation"
   local root="${config_root:-/}"
 
@@ -238,7 +238,7 @@ phase_live_install() {
   return 0
 }
 
-phase_live_configure() {
+_phase_live_configure() {
   local root="${config_root:-/}"
 
   reconcile_initramfs "$root" "$(uname -r)" "${INITRAMFS_MODULES:-}"
@@ -259,14 +259,19 @@ phase_live_configure() {
   return 0
 }
 
-phase_live_verify() {
+_phase_live_verify() {
   stage_header "finalization"
   local root="${config_root:-/}"
 
   cleanup_disk_space "${config_root:-/}" "live"
 
+  # Verify cleanup completeness
+  if declare -F cleanup_verify >/dev/null 2>&1; then
+    cleanup_verify || warn "Live hygiene: cleanup verification detected issues"
+  fi
+
   if [[ "$root" != "/" ]]; then
-    _regenerate_initramfs "$root"
+    regenerate_initramfs "$root"
   fi
 
   if [[ -z "${config_root:-}" || "${config_root:-}" == "/" ]]; then

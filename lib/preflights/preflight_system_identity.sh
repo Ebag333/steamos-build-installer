@@ -164,7 +164,7 @@ _pf_si_parse_partset_file() {
 # Individual checks — independently callable
 # ---------------------------------------------------------------------------
 
-# preflight_system_identity_os_release ROOTFS [EXPECTED_VARIANT] [ACCEPTED_VARIANTS]
+# _preflight_system_identity_os_release ROOTFS [EXPECTED_VARIANT] [ACCEPTED_VARIANTS]
 #   PF-40: Verify the rootfs os-release declares a supported SteamOS variant
 #   and architecture.
 #
@@ -182,8 +182,8 @@ _pf_si_parse_partset_file() {
 #   Optional:
 #     BASE_ARCH           — must be x86_64 when present
 #     VARIANT_ID           — validated against EXPECTED_VARIANT or ACCEPTED_VARIANTS
-preflight_system_identity_os_release() {
-  local rootfs="${1:?preflight_system_identity_os_release: missing rootfs path}"
+_preflight_system_identity_os_release() {
+  local rootfs="${1:?_preflight_system_identity_os_release: missing rootfs path}"
   local expected_variant="${2:-}"
   local accepted_variants="${3:-}"
 
@@ -279,7 +279,7 @@ preflight_system_identity_os_release() {
   debug "PF-40: os-release is a valid SteamOS variant (ID=$id VERSION_ID=$version_id BASE_ARCH=$base_arch)"
 }
 
-# preflight_system_identity_topology_complete ROOTFS [EFIMNT] [SCENARIO] [TOPOLOGY_DIR]
+# _preflight_system_identity_topology_complete ROOTFS [EFIMNT] [SCENARIO] [TOPOLOGY_DIR]
 #   PF-41: Verify that required partitions exist for the target system.
 #   The topology source defaults to /dev/disk/by-partsets but can be
 #   overridden via TOPOLOGY_DIR (e.g. a loop device's topology for Build).
@@ -294,8 +294,8 @@ preflight_system_identity_os_release() {
 #     $TOPOLOGY_DIR/{slot}/rootfs
 #     $TOPOLOGY_DIR/{slot}/efi
 #     $TOPOLOGY_DIR/{slot}/var
-preflight_system_identity_topology_complete() {
-  local rootfs="${1:?preflight_system_identity_topology_complete: missing rootfs path}"
+_preflight_system_identity_topology_complete() {
+  local rootfs="${1:?_preflight_system_identity_topology_complete: missing rootfs path}"
   local efimnt="${2:-}"
   local scenario="${3:-}"
   local topology_dir="${4:-/dev/disk/by-partsets}"
@@ -339,7 +339,7 @@ preflight_system_identity_topology_complete() {
   debug "PF-41: partition topology complete (scenario=${scenario:-live} slots=$slots)"
 }
 
-# preflight_system_identity_partition_consistent SLOT PARTITION [TOPOLOGY_DIR]
+# _preflight_system_identity_partition_consistent SLOT PARTITION [TOPOLOGY_DIR]
 #   PF-42: Verify that PARTLABEL, partset name, PARTUUID, and the actual
 #   device agree for a given slot/partition.  The PARTLABEL is expected
 #   to encode the slot and partition (e.g. "rootfs-A", "efi-B").
@@ -351,9 +351,9 @@ preflight_system_identity_topology_complete() {
 #     2. PARTLABEL matches the expected pattern: ${PARTITION}-${SLOT}
 #     3. PARTUUID is available and non-empty
 #     4. The resolved device is a valid block device
-preflight_system_identity_partition_consistent() {
-  local slot="${1:?preflight_system_identity_partition_consistent: missing slot}"
-  local partition="${2:?preflight_system_identity_partition_consistent: missing partition}"
+_preflight_system_identity_partition_consistent() {
+  local slot="${1:?_preflight_system_identity_partition_consistent: missing slot}"
+  local partition="${2:?_preflight_system_identity_partition_consistent: missing partition}"
   local topology_dir="${3:-/dev/disk/by-partsets}"
 
   case "$slot" in
@@ -386,12 +386,12 @@ preflight_system_identity_partition_consistent() {
   debug "PF-42: partition identity consistent (slot=$slot partition=$partition label=$partlabel partuuid=$partuuid device=$dev)"
 }
 
-# preflight_system_identity_no_cross_slot_alias [TOPOLOGY_DIR]
+# _preflight_system_identity_no_cross_slot_alias [TOPOLOGY_DIR]
 #   PF-43: Verify that all partition devices across slots A and B are
 #   distinct.  Checks both major:minor identity and PARTUUID to catch
 #   cross-role aliases (e.g. A/rootfs == B/efi) and cloned partitions.
 #   TOPOLOGY_DIR defaults to /dev/disk/by-partsets but can be overridden.
-preflight_system_identity_no_cross_slot_alias() {
+_preflight_system_identity_no_cross_slot_alias() {
   local topology_dir="${1:-/dev/disk/by-partsets}"
 
   if [[ ! -d "$topology_dir" ]]; then
@@ -453,7 +453,7 @@ preflight_system_identity_no_cross_slot_alias() {
   debug "PF-43: no cross-slot aliasing detected (${#all_labels[@]} devices checked)"
 }
 
-# preflight_system_identity_partset_map EFIMNT [SELF_SLOT] [TOPOLOGY_DIR]
+# _preflight_system_identity_partset_map EFIMNT [SELF_SLOT] [TOPOLOGY_DIR]
 #   PF-44: Verify the current-slot partset map at $EFIMNT/SteamOS/partsets/.
 #   Entries A, B, self, and other must be regular files parseable by
 #   _pf_si_parse_partset_file.  Each role=PARTUUID pair is validated.
@@ -461,7 +461,7 @@ preflight_system_identity_no_cross_slot_alias() {
 #   SELF_SLOT, when provided, is the explicit slot label for the self side
 #   (e.g. "A" or "B").  When empty, self/other validation is skipped.
 #   TOPOLOGY_DIR defaults to /dev/disk/by-partsets.
-preflight_system_identity_partset_map() {
+_preflight_system_identity_partset_map() {
   local efimnt="${1:-/efi}"
   local self_slot="${2:-}"
   local topology_dir="${3:-/dev/disk/by-partsets}"
@@ -674,10 +674,10 @@ preflight_system_identity_validate() {
   debug "preflight_system_identity_validate: validating rootfs=$rootfs efimnt=$efimnt expected_variant=${expected_variant:-<none>} scenario=${scenario:-live} topology_dir=$topology_dir"
 
   # PF-40: os-release declares supported SteamOS variant/architecture.
-  preflight_system_identity_os_release "$rootfs" "$expected_variant" "$accepted_variants"
+  _preflight_system_identity_os_release "$rootfs" "$expected_variant" "$accepted_variants"
 
   # PF-41: Required partitions exist (rootfs/efi/var per slot).
-  preflight_system_identity_topology_complete "$rootfs" "$efimnt" "$scenario" "$topology_dir"
+  _preflight_system_identity_topology_complete "$rootfs" "$efimnt" "$scenario" "$topology_dir"
 
   # PF-42: PARTLABEL/partset/PARTUUID/device agree for each slot/partition.
   local slots
@@ -691,16 +691,16 @@ preflight_system_identity_validate() {
     for partition in rootfs efi var; do
       # Only check partitions that actually exist in the topology.
       if [[ -L "$topology_dir/$slot/$partition" ]]; then
-        preflight_system_identity_partition_consistent "$slot" "$partition" "$topology_dir"
+        _preflight_system_identity_partition_consistent "$slot" "$partition" "$topology_dir"
       fi
     done
   done
 
   # PF-43: No cross-slot aliasing.
-  preflight_system_identity_no_cross_slot_alias "$topology_dir"
+  _preflight_system_identity_no_cross_slot_alias "$topology_dir"
 
   # PF-44: /efi/SteamOS/partsets/ entries valid.
-  preflight_system_identity_partset_map "$efimnt" "$self_slot" "$topology_dir"
+  _preflight_system_identity_partset_map "$efimnt" "$self_slot" "$topology_dir"
 
   debug "preflight_system_identity_validate: all system identity checks passed"
 }

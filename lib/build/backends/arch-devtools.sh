@@ -21,6 +21,7 @@ _BUILD_DEVTOOLS_LOADED=1
 # Create a clean build root using mkarchroot.
 # Args: $1 = name, $2 = profile dir
 # Prints: path to build root directory
+# lint-ignore: private-funcs
 _build_devtools_create_root() {
   local name="${1:?}"
   # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
@@ -74,6 +75,7 @@ _build_devtools_create_root() {
 
 # Destroy a build root.
 # Args: $1 = build root directory
+# lint-ignore: private-funcs
 _build_devtools_destroy_root() {
   local build_dir="${1:?}"
 
@@ -85,6 +87,7 @@ _build_devtools_destroy_root() {
 
 # Sync build root with profile (update repos, install build deps).
 # Args: $1 = build root directory
+# lint-ignore: private-funcs
 _build_devtools_sync_root() {
   local build_dir="${1:?}"
   local root="$build_dir/root"
@@ -94,8 +97,8 @@ _build_devtools_sync_root() {
 
   # Update the root — Phase 4 already performed pacman -Syu; only refresh databases here.
   arch-nspawn -C "$pacman_conf" "$root" pacman -Sy --noconfirm --ask=4 \
-    > >(tail -5 | _pacman_filter_stdout) \
-    2> >(tee -a "${PACMAN_RAW_LOG:-/dev/null}" | _pacman_filter_stderr >&2)
+    > >(tail -5 | pacman_filter_stdout) \
+    2> >(tee -a "${PACMAN_RAW_LOG:-/dev/null}" | pacman_filter_stderr >&2)
   if [[ "${PIPESTATUS[0]}" -ne 0 ]]; then
     warn "Failed to sync build root"
     return 1
@@ -106,6 +109,7 @@ _build_devtools_sync_root() {
 
 # Inject recipe sources into build root.
 # Args: $1 = build root directory, $2 = recipe directory
+# lint-ignore: private-funcs
 _build_devtools_inject_sources() {
   local build_dir="${1:?}"
   local recipe_dir="${2:?}"
@@ -133,6 +137,7 @@ _build_devtools_inject_sources() {
 
 # Run the build using makechrootpkg.
 # Args: $1 = build root directory, $2 = recipe directory, $3 = output directory
+# lint-ignore: private-funcs
 _build_devtools_run() {
   local build_dir="${1:?}"
   local recipe_dir="${2:?}"

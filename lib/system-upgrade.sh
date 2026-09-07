@@ -26,13 +26,13 @@ system_upgrade_prepare() {
   log "Preparing system upgrade on $MNT"
 
   # Mount chroot filesystems
-  mount_chroot_fs "$MNT"
+  cleanup_mount_chroot "$MNT"
 
   # Mount build cache for pacman packages (keeps downloads out of image)
   _pkgcache_dir="$WORKDIR/pkgcache"
   mkdir -p "$_pkgcache_dir"
   mkdir -p "$MNT/var/cache/pacman/pkg"
-  mount --bind "$_pkgcache_dir" "$MNT/var/cache/pacman/pkg"
+  cleanup_mount "$MNT/var/cache/pacman/pkg" "pkgcache" -- --bind "$_pkgcache_dir"
   log "Mounted build cache at /var/cache/pacman/pkg"
 
   # Inject DNS for the chroot
@@ -134,8 +134,8 @@ system_upgrade() {
 
   set -o pipefail
   chroot "$MNT" /bin/bash -c "pacman -Syu --noconfirm --ask=4" \
-    > >(tee -a "$_raw_log" | _pacman_filter_stdout | tee "$upgrade_log") \
-    2> >(tee -a "$_raw_log" | _pacman_filter_stderr | tee -a "$upgrade_log" >&2)
+    > >(tee -a "$_raw_log" | pacman_filter_stdout | tee "$upgrade_log") \
+    2> >(tee -a "$_raw_log" | pacman_filter_stderr | tee -a "$upgrade_log" >&2)
   _pacman_rc=${PIPESTATUS[0]}
   set +o pipefail
 
@@ -240,21 +240,8 @@ system_upgrade_cleanup() {
     gpgconf --homedir "$MNT/etc/pacman.d/gnupg" --kill gpg-agent >/dev/null 2>&1 || true
   fi
 
-  # Unmount children in reverse order (children before parents)
-  local m
-  for m in \
-    "$MNT/var/cache/pacman/pkg" \
-    "$MNT/dev/pts" \
-    "$MNT/dev/shm" \
-    "$MNT/dev" \
-    "$MNT/sys" \
-    "$MNT/proc"; do
-    [[ -e "$m" ]] || continue
-    if mountpoint -q "$m" 2>/dev/null; then
-      log "  Unmounting $m"
-      umount -R "$m" 2>/dev/null || umount -Rl "$m" 2>/dev/null || true
-    fi
-  done
+  # Unmount all tracked mounts in reverse order (children before parents)
+  cleanup_unmount_registered || true
 
   log "System upgrade chroot cleaned up"
 }
