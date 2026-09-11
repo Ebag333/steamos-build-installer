@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=../lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
 # pacman-provenance-audit.sh
 #
 # Compare installed SteamOS packages against:
@@ -27,7 +30,7 @@ FORMAT="csv"
 HAVE_BASE_SET=0
 
 usage() {
-  cat "$(dirname "$(dirname "${BASH_SOURCE[0]}")")/lib/heredocs/static/usage-pacman-provence.txt"
+  cat "$(heredoc_dir)/static/usage-pacman-provence.txt"
 }
 
 packages=()
@@ -721,6 +724,6 @@ case "$FORMAT" in
     ;;
 
   json)
-    python3 - "$out" < "$(dirname "$(dirname "${BASH_SOURCE[0]}")")/lib/heredocs/static/csv-to-json.py"
+    python3 - "$out" <"$(heredoc_dir)/static/csv-to-json.py"
     ;;
 esac

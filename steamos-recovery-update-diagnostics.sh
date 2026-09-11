@@ -9,6 +9,9 @@
 set -u
 export LC_ALL=C
 
+# shellcheck source=lib/common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+
 TS="$(date +%Y%m%d-%H%M%S)"
 HOST="$(hostname 2>/dev/null || echo unknown)"
 BASE="${TMPDIR:-/tmp}/steamos-recovery-diag-${TS}"
@@ -502,7 +505,7 @@ done < <(
 # Package it
 ###############################################################################
 
-cat "$(dirname "${BASH_SOURCE[0]}")/lib/heredocs/static/diagnostics-readme.txt" > "$BASE/README.txt"
+cat "$(heredoc_dir)/static/diagnostics-readme.txt" >"$BASE/README.txt"
 
 tar -C "$(dirname "$BASE")" -czf "$OUT" "$(basename "$BASE")"
 

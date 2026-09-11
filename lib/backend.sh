@@ -25,6 +25,7 @@ PROJECT_DIR="$SCRIPT_DIR"
 : "${IMG:=}"
 : "${TARGET_DEV:=}"
 : "${CONFIG_FILE:=}"
+: "${PARTSET:=}"
 
 UPDATE_MODE="selfheal" # selfheal | hold | stock
 # shellcheck disable=SC2034  # consumed by lib/finalize.sh and lib/installer.sh
@@ -57,7 +58,7 @@ UDEV_RULE=/run/udev/rules.d/89-steamos-build-installer.rules
 UPSTREAM_DRIVER_REF="${UPSTREAM_DRIVER_REF:-}"
 
 _backend_usage() {
-  cat "$(_heredoc_dir)/static/usage-backend.txt"
+  cat "$(heredoc_dir)/static/usage-backend.txt"
 }
 
 # ---------------------------------------------------------------------------
@@ -100,6 +101,15 @@ while [[ $# -gt 0 ]]; do
       FLASH_CONFIRMED=1
       shift
       ;;
+    --partset)
+      [[ $# -ge 2 ]] || {
+        echo "--partset requires a value" >&2
+        exit 2
+      }
+      PARTSET="$2"
+      export PARTSET
+      shift 2
+      ;;
     -h | --help)
       _backend_usage
       exit 0
@@ -131,8 +141,14 @@ done
 _load_flash_libs() {
   # shellcheck source=lib/common.sh
   source "$BACKEND_DIR/common.sh"
+  # shellcheck source=lib/mounts.sh
+  source "$BACKEND_DIR/mounts.sh"
   # shellcheck source=lib/flash.sh
   source "$BACKEND_DIR/flash.sh"
+  # shellcheck source=lib/pipeline.sh
+  source "$BACKEND_DIR/pipeline.sh"
+  # shellcheck source=lib/pipelines/pipeline_flash.sh
+  source "$BACKEND_DIR/pipelines/pipeline_flash.sh"
 }
 
 _flash_image_is_complete() {
@@ -228,7 +244,11 @@ _backend_flash() {
     exit 1
   fi
 
-  flash_write "$IMG" "$TARGET_DEV"
+  register_flash_pipeline
+  run_pipeline || {
+    echo "Flash pipeline failed." >&2
+    exit 1
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -416,7 +436,7 @@ _validate_mount_image() {
   # Install udev guard BEFORE attaching loop — prevents udisks2 from
   # seeing the partitions and triggering an automount popup.
   mkdir -p /run/udev/rules.d
-  cat "$(_heredoc_dir)/static/validate-udev.rule" >"$VALIDATE_UDEV_RULE"
+  cat "$(heredoc_dir)/static/validate-udev.rule" >"$VALIDATE_UDEV_RULE"
   udevadm control --reload-rules
   log "Installed udev guard: $VALIDATE_UDEV_RULE"
 
@@ -443,6 +463,8 @@ _validate_mount_image() {
   log "  var:    ${VALIDATE_VARPART:-<not found>}"
 
   log "Mounting $VALIDATE_ROOTFS on $VALIDATE_MNT (read-only)"
+  cleanup_set_workspace "$VALIDATE_MNT" 2>/dev/null || true
+  cleanup_track_tempdir "$VALIDATE_MNT" "validate workspace" || true
   cleanup_mount "$VALIDATE_MNT" "validate rootfs" -- -o ro "$VALIDATE_ROOTFS" \
     || die "Failed to mount rootfs"
 
@@ -466,6 +488,9 @@ _validate_cleanup() {
   cleanup_unmount_registered 2>/dev/null || true
   if [[ -n "${VALIDATE_LOOP:-}" ]]; then
     strict_detach_loop "$VALIDATE_LOOP"
+  fi
+  if declare -F cleanup_verify >/dev/null 2>&1; then
+    cleanup_verify || warn "Validate cleanup: verification detected issues"
   fi
   [[ -d "$VALIDATE_MNT" ]] && rmdir "$VALIDATE_MNT" 2>/dev/null
   # Remove udev guard and reload
@@ -596,10 +621,29 @@ _backend_live() {
   pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
   pipeline_init "" "$_live_workdir" || warn "Ledger initialization failed — proceeding without crash recovery"
 
+  local _live_tmpdir="/tmp/steamos-live-$$"
+  mkdir -p "$_live_tmpdir"
+  cleanup_set_workspace "$_live_tmpdir" 2>/dev/null || true
+
+  # Register cleanup trap (mirrors _backend_build pattern)
+  local _trap_rc
+  local _cleanup_done=0
+  trap '_trap_rc=$?; trap - EXIT; set +e; if [[ "${_cleanup_done:-0}" -eq 0 ]]; then
+  cleanup_check_host_namespace || { warn "Skipping cleanup — in init namespace"; exit "$_trap_rc"; }
+  cleanup_stop_background_jobs
+  cleanup_remove_udev_rules
+  overlay_cleanup 2>/dev/null || true
+  cleanup_environment 2>/dev/null || true
+  persist_debug_logs 2>/dev/null || true
+fi; exit "$_trap_rc"' EXIT
+
   register_live_pipeline
   if ! run_pipeline; then
     exit 1
   fi
+  _cleanup_done=1
+  cleanup_environment 2>/dev/null || true
+  trap - EXIT
 }
 
 _backend_flashless() {
@@ -608,8 +652,47 @@ _backend_flashless() {
   [[ -f "$IMG" ]] || die "Image not found: $IMG"
   IMG="$(readlink -f "$IMG")"
 
-  _load_build_libs
-  flashless_install "$IMG"
+  # Source library loader and load the flashless workflow libs
+  # shellcheck source=lib/library-loader.sh
+  source "$BACKEND_DIR/library-loader.sh"
+  # shellcheck source=lib/pipelines/pipeline_flashless.sh
+  source "$BACKEND_DIR/pipelines/pipeline_flashless.sh"
+  load_workflow_libs "flashless" "$BACKEND_DIR"
+
+  # Workspace
+  cleanup_set_workspace "/tmp" 2>/dev/null || true
+
+  # Ledger: recover from previous run, then initialize
+  pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
+  pipeline_init "" "/home/.steamos-build" || warn "Ledger initialization failed — proceeding without crash recovery"
+
+  # Register cleanup and pipeline
+  register_flashless_cleanup
+  register_flashless_pipeline
+
+  # Run
+  if run_pipeline; then
+    log "=== Flashless install complete — slot $FL_TARGET is ready ==="
+
+    local out
+    if out="$(steamos-bootconf selected-image 2>&1)"; then
+      log "  selected-image: $out"
+    else
+      log "  selected-image: (unavailable)"
+    fi
+
+    if command -v rauc >/dev/null 2>&1; then
+      log "  RAUC status:"
+      rauc status --detailed 2>&1 | while IFS="" read -r line; do
+        log "    $line"
+      done
+    fi
+
+    log "Reboot to activate.  If the new slot fails to boot, SteamOS will"
+    log "automatically fall back to slot $FL_CURRENT."
+  else
+    die "Flashless install failed"
+  fi
 }
 
 _backend_reboot() {
@@ -692,6 +775,303 @@ _backend_reboot() {
 }
 
 # ---------------------------------------------------------------------------
+# Rebuild (repatch) backend — reconcile NVIDIA driver into another partition
+# set after an OS update.
+# ---------------------------------------------------------------------------
+_load_rebuild_libs() {
+  # shellcheck source=lib/library-loader.sh
+  source "$BACKEND_DIR/library-loader.sh"
+  # shellcheck source=lib/pipelines/pipeline_rebuild.sh
+  source "$BACKEND_DIR/pipelines/pipeline_rebuild.sh"
+  load_workflow_libs "repatch" "$BACKEND_DIR"
+}
+
+_backend_rebuild() {
+  [[ $EUID -eq 0 ]] || die "Rebuild action requires root."
+
+  # ── Persistent log setup (must happen before sourcing common.sh) ────────
+  PERSIST_LOG_DIR="/home/.steamos-build/logs"
+  mkdir -p "$PERSIST_LOG_DIR"
+
+  local run_id
+  run_id="$(date +%Y%m%d-%H%M%S)-$$"
+  # shellcheck disable=SC2034  # used by failure_snapshot_extra via RUN_LOG
+  RUN_LOG="$PERSIST_LOG_DIR/repatch-$run_id.log"
+
+  ln -sfn "$(basename "$RUN_LOG")" \
+    "$PERSIST_LOG_DIR/repatch-latest.log"
+
+  # Keep stdout/stderr flowing to the caller, but independently retain
+  # everything on the persistent /home filesystem.
+  exec > >(tee -a "$RUN_LOG") 2>&1
+
+  # ── Repatch-specific globals (must be set before sourcing common.sh) ────
+  # shellcheck disable=SC2034  # read by sourced common.sh
+  LOG_TAG="repatch"
+  # shellcheck disable=SC2034  # read by sourced common.sh
+  LOGGER_TAG="steamos-build-repatch"
+  # shellcheck disable=SC2034  # read by sourced common.sh
+  LOG_COLOR=0
+  CURRENT_STEP="startup"
+  # shellcheck disable=SC2034  # read by sourced common.sh
+  FAILURE_REPORTED=0
+
+  # May not exist yet if failure happens very early.
+  : "${NEWROOT:=}"
+
+  # ── Source libraries ─────────────────────────────────────────────────────
+  _load_rebuild_libs
+  ensure_steamos_build_dirs
+
+  # ── Failure context functions ────────────────────────────────────────────
+  failure_journal_context() {
+    printf "partset='%s' kver='%s'\n" \
+      "${PARTSET:-unknown}" \
+      "${KVER:-unknown}"
+  }
+
+  failure_snapshot_extra() {
+    local _slot
+
+    # Send a desktop notification to the user about the critical failure.
+    _notify_desktop critical \
+      "SteamOS update patch failed" \
+      "The SteamOS update was cancelled because a critical customization failed.
+
+Failed step: ${CURRENT_STEP:-unknown}
+
+Log: ${RUN_LOG:-unknown}"
+
+    echo >&2
+    echo "=== SLOT STATE ===" >&2
+    rauc status --detailed 2>&1 || true
+    steamos-bootconf list-images 2>&1 || true
+
+    for _slot in A B; do
+      echo "--- $_slot ---" >&2
+      steamos-bootconf --image "$_slot" config \
+        --get boot-attempts \
+        --get boot-requested-at \
+        --get image-invalid \
+        --get comment 2>&1 || true
+    done
+
+    if [[ -n "${NEWROOT:-}" ]] && mountpoint -q "$NEWROOT" 2>/dev/null; then
+      echo >&2
+      echo "=== TARGET ROOTFS ===" >&2
+      findmnt "$NEWROOT" 2>&1 || true
+      btrfs filesystem usage "$NEWROOT" 2>&1 || true
+
+      if [[ -n "${KVER:-}" ]]; then
+        echo >&2
+        echo "=== TARGET DRIVER STATE ===" >&2
+        chroot "$NEWROOT" dkms status 2>&1 || true
+        chroot "$NEWROOT" pacman -Q nvidia-utils 2>&1 || true
+      fi
+    fi
+  }
+
+  # _notify_desktop URGENCY TITLE BODY
+  #   Send a desktop notification to the deck user's Plasma session.
+  #   Urgency: "critical" (sticky), "normal" (auto-expires), "low".
+  #   Falls back through: notify-send → busctl → log only.
+  _notify_desktop() {
+    local urgency="${1:-normal}"
+    local title="$2"
+    local body="$3"
+
+    local user="deck"
+    local uid
+
+    uid="$(id -u "$user" 2>/dev/null)" || {
+      log "_notify_desktop: cannot resolve uid for $user"
+      return 1
+    }
+
+    [[ -S "/run/user/$uid/bus" ]] || {
+      log "_notify_desktop: no D-Bus session for $user (no /run/user/$uid/bus)"
+      return 1
+    }
+
+    local icon="dialog-information"
+    [[ "$urgency" == "critical" ]] && icon="dialog-error"
+
+    # Prefer notify-send if available.
+    if command -v notify-send >/dev/null 2>&1; then
+      runuser -u "$user" -- env \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        notify-send \
+        --urgency="$urgency" \
+        --app-name="SteamOS NVIDIA Patcher" \
+        --icon="$icon" \
+        "$title" \
+        "$body" 2>/dev/null && return 0
+
+      log "_notify_desktop: notify-send failed, falling back to busctl"
+    fi
+
+    # Fallback: direct D-Bus call via busctl (part of systemd, always present).
+    local urgency_byte=1
+    [[ "$urgency" == "critical" ]] && urgency_byte=2
+    [[ "$urgency" == "low" ]] && urgency_byte=0
+
+    runuser -u "$user" -- env \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      busctl --user call \
+      org.freedesktop.Notifications \
+      /org/freedesktop/Notifications \
+      org.freedesktop.Notifications \
+      Notify \
+      "susssasa{sv}" \
+      "SteamOS NVIDIA Patcher" \
+      0 \
+      "$icon" \
+      "$title" \
+      "$body" \
+      0 \
+      1 "urgency" "y" "$urgency_byte" \
+      2>/dev/null && return 0
+
+    log "_notify_desktop: busctl fallback also failed"
+    return 1
+  }
+
+  # ── Resolve PARTSET ─────────────────────────────────────────────────────
+  PARTSET="${PARTSET:-other}"
+
+  # ── Safety guard: refuse to modify the booted slot ──────────────────────
+  local _booted _target_slot
+  _booted="$(steamos-bootconf this-image 2>/dev/null || true)"
+  _target_slot=""
+  case "$PARTSET" in
+    other)
+      case "$_booted" in
+        A) _target_slot=B ;;
+        B) _target_slot=A ;;
+      esac
+      ;;
+    A | B) _target_slot="$PARTSET" ;;
+  esac
+
+  if [[ -n "$_booted" && -n "$_target_slot" && "$_target_slot" == "$_booted" ]]; then
+    die "Refusing to modify the currently booted slot ($_booted). Use 'other' or specify the inactive slot."
+  fi
+
+  log "Repatch target: partset=$PARTSET booted=${_booted:-unknown} target=${_target_slot:-unknown}"
+
+  # ── Workspace setup ─────────────────────────────────────────────────────
+  # shellcheck disable=SC2034  # read by sourced pipeline_rebuild.sh
+  ROOTDEV="/dev/disk/by-partsets/$PARTSET/rootfs"
+  # shellcheck disable=SC2034  # read by sourced pipeline_rebuild.sh
+  EFIDEV="/dev/disk/by-partsets/$PARTSET/efi"
+
+  NEWROOT="$(mktemp -d /tmp/repatch-root.XXXXXX)"
+  # SteamOS /home is ext4 with casefold enabled, which OverlayFS rejects as an
+  # upperdir.  Build inside a temporary plain-ext4 loopback filesystem stored on
+  # /home, where there is enough space for DKMS/toolchain work.
+  # shellcheck disable=SC2034  # read by sourced pipeline_rebuild.sh
+  WORKIMG=/home/.steamos-build-work.img
+  # shellcheck disable=SC2034  # read by sourced pipeline_rebuild.sh
+  WORK="$(mktemp -d /tmp/repatch-work.XXXXXX)"
+  # shellcheck disable=SC2034  # read by sourced pipeline_rebuild.sh
+  WORK_LOOPDEV=""
+
+  cleanup_set_workspace "$NEWROOT" 2>/dev/null || true
+
+  # ── Register and run pipeline ───────────────────────────────────────────
+  register_rebuild_pipeline
+  register_rebuild_cleanup
+
+  # Ledger: recover from previous run, then initialize
+  pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
+  pipeline_init "" "/home/.steamos-build" || warn "Ledger initialization failed — proceeding without crash recovery"
+
+  # Run the pipeline
+  if run_pipeline; then
+    # Pipeline succeeded — summarize results
+    local _ok_count=0 _fail_count=0 _skip_count=0
+    for _entry in "${PATCH_RESULTS[@]}"; do
+      local _name _status _detail
+      IFS='|' read -r _name _status _detail <<<"$_entry"
+      if [[ "$_status" == "ok" ]]; then
+        ((++_ok_count)) || true
+      elif [[ "$_status" == "skip" ]]; then
+        ((++_skip_count)) || true
+      else
+        ((++_fail_count)) || true
+      fi
+    done
+
+    if ((_fail_count == 0)); then
+      step "OK — $PARTSET is NVIDIA-ready (${KVER:-unknown})"
+      exit 0
+    fi
+
+    # Some optional patches failed but slot is bootable
+    warn ""
+    warn "============================================================"
+    warn " SteamOS NVIDIA Repatch: COMPLETED WITH WARNINGS"
+    warn "============================================================"
+    warn ""
+    warn "SteamOS update installed successfully, but some optional"
+    warn "patches failed.  The updated slot remains bootable."
+    warn ""
+    local _warn_failed_list=""
+    warn "Patch results:"
+    for _entry in "${PATCH_RESULTS[@]}"; do
+      local _name _status _detail
+      IFS='|' read -r _name _status _detail <<<"$_entry"
+      if [[ "$_status" == "ok" ]]; then
+        warn "  ✓ $_name"
+      elif [[ "$_status" == "skip" ]]; then
+        warn "  ○ $_name — skipped: $_detail"
+      else
+        warn "  ✗ $_name — $_detail"
+        _warn_failed_list+="$_name, "
+      fi
+    done
+    _warn_failed_list="${_warn_failed_list%, }"
+    warn ""
+    warn "Full log: $RUN_LOG"
+    warn "============================================================"
+    warn ""
+
+    _notify_desktop normal \
+      "SteamOS NVIDIA: patch warnings" \
+      "The SteamOS update succeeded, but some optional patches failed: $_warn_failed_list.
+
+Your system is bootable. See the repatch log for details:
+$RUN_LOG"
+
+    exit 10
+  else
+    # Pipeline failed — critical failure
+    warn ""
+    warn "============================================================"
+    warn " SteamOS NVIDIA Repatch: CRITICAL FAILURE"
+    warn "============================================================"
+    warn ""
+    warn "A critical customization failed. The staged OS update has been"
+    warn "cancelled to prevent an unbootable system."
+    warn ""
+    warn "Full log: $RUN_LOG"
+    warn "============================================================"
+    warn ""
+
+    _notify_desktop critical \
+      "SteamOS NVIDIA: patch failed" \
+      "The SteamOS update was cancelled because a critical customization failed.
+
+Your system is unchanged. See the repatch log for details:
+$RUN_LOG"
+
+    exit 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 case "$ACTION" in
@@ -741,6 +1121,9 @@ case "$ACTION" in
     ;;
   reboot)
     _backend_reboot
+    ;;
+  rebuild)
+    _backend_rebuild
     ;;
   *)
     echo "Unknown action: $ACTION" >&2

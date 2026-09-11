@@ -503,11 +503,37 @@ _cleanup_check_tracked_mounts() {
     return 1
   }
 
-  local i
-  for ((i = 0; i < ${#CLEANUP_MOUNTS[@]}; i++)); do
+  local i _n=0
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && _n=${#CLEANUP_MOUNTS[@]}
+  for ((i = 0; i < _n; i++)); do
     local m="${CLEANUP_MOUNTS[$i]}"
     if grep -qxF -- "$m" <<<"$all_mounts" 2>/dev/null; then
       warn "_cleanup_check_tracked_mounts: $m still mounted"
+      # Detailed diagnostics: what's still mounted there
+      local _cm_detail
+      _cm_detail="$(findmnt -rno TARGET,SOURCE,FSTYPE,OPTIONS -M "$m" 2>/dev/null || true)"
+      if [[ -n "$_cm_detail" ]]; then
+        warn "  findmnt for $m:"
+        emit_prefixed_lines warn "    " "$_cm_detail"
+      fi
+      # Check for child mounts that might prevent parent unmount
+      local _cm_children
+      _cm_children="$(findmnt -rno TARGET,SOURCE --submounts -M "$m" 2>/dev/null || true)"
+      if [[ -n "$_cm_children" ]]; then
+        local _cm_child_count
+        _cm_child_count="$(echo "$_cm_children" | wc -l)"
+        if ((_cm_child_count > 1)); then
+          warn "  $m has $((_cm_child_count - 1)) child mount(s):"
+          emit_prefixed_lines warn "    " "$_cm_children"
+        fi
+      fi
+      # Processes using this mount
+      local _cm_fuser
+      _cm_fuser="$(fuser -vm "$m" 2>&1 || true)"
+      if [[ -n "$_cm_fuser" ]]; then
+        warn "  Processes using $m:"
+        emit_prefixed_lines warn "    " "$_cm_fuser"
+      fi
       rc=1
     fi
   done
@@ -572,7 +598,9 @@ cleanup_unmount_registered() {
   local i
 
   # Reverse iteration
-  for ((i = ${#CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
+  local _n=0
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && _n=${#CLEANUP_MOUNTS[@]}
+  for ((i = _n - 1; i >= 0; i--)); do
     local m="${CLEANUP_MOUNTS[$i]}"
     local label="${CLEANUP_MOUNT_LABELS[$i]:-}"
     local expected_id="${CLEANUP_MOUNT_IDS[$i]:-}"
@@ -637,7 +665,29 @@ cleanup_unmount_registered() {
       fi
       debug "cleanup_unmount_registered: unmounted $m"
     else
-      warn "cleanup_unmount_registered: failed to unmount $m"
+      warn "cleanup_unmount_registered: failed to unmount $m (label=${label:-unknown})"
+      # Detailed diagnostics: findmnt tree for the failed mount
+      local _mnt_detail
+      _mnt_detail="$(findmnt -R "$m" 2>/dev/null || true)"
+      if [[ -n "$_mnt_detail" ]]; then
+        warn "  findmnt for $m:"
+        emit_prefixed_lines warn "    " "$_mnt_detail"
+      fi
+      # Processes holding the mount busy
+      local _fuser_out
+      _fuser_out="$(fuser -vm "$m" 2>&1 || true)"
+      if [[ -n "$_fuser_out" ]]; then
+        warn "  Processes using $m:"
+        emit_prefixed_lines warn "    " "$_fuser_out"
+      else
+        warn "  No processes found using $m (mount may be held by kernel or namespace)"
+      fi
+      # Check if mount is in a different mount namespace
+      local _mnt_ns
+      _mnt_ns="$(findmnt -rno TARGET,PROPAGATION -M "$m" 2>/dev/null || true)"
+      if [[ -n "$_mnt_ns" ]]; then
+        debug "  Mount propagation info: $_mnt_ns"
+      fi
       rc=1
     fi
   done
@@ -664,12 +714,33 @@ _cleanup_detach_registered_loops() {
   if [[ -n "$CLEANUP_WORKSPACE_ROOT" ]]; then
     if ! _cleanup_assert_no_mounts_under "$CLEANUP_WORKSPACE_ROOT"; then
       warn "_cleanup_detach_registered_loops: unexpected mounts remain under workspace — preserving loops"
+      # Detailed diagnostics: show exactly what mounts are still present
+      warn "  Workspace root: $CLEANUP_WORKSPACE_ROOT"
+      local _ws_mounts
+      _ws_mounts="$(findmnt -rno TARGET,SOURCE,FSTYPE,OPTIONS --submounts -M "$CLEANUP_WORKSPACE_ROOT" 2>/dev/null || true)"
+      if [[ -n "$_ws_mounts" ]]; then
+        warn "  Unexpected mounts under $CLEANUP_WORKSPACE_ROOT:"
+        emit_prefixed_lines warn "    " "$_ws_mounts"
+      else
+        # Fallback: try broader search
+        _ws_mounts="$(findmnt -rno TARGET,SOURCE,FSTYPE 2>/dev/null | grep -F "$CLEANUP_WORKSPACE_ROOT" || true)"
+        if [[ -n "$_ws_mounts" ]]; then
+          warn "  Mounts matching workspace root:"
+          emit_prefixed_lines warn "    " "$_ws_mounts"
+        fi
+      fi
+      # Show mount namespace info for debugging cross-namespace issues
+      local _ws_mnt_ns
+      _ws_mnt_ns="$(readlink /proc/self/ns/mnt 2>/dev/null || echo "unknown")"
+      debug "  Current mount namespace: $_ws_mnt_ns"
       CLEANUP_INCOMPLETE=1
       return 1
     fi
   fi
 
-  for ((i = 0; i < ${#CLEANUP_LOOPS[@]}; i++)); do
+  local _n=0
+  [[ ${CLEANUP_LOOPS[0]+_} ]] && _n=${#CLEANUP_LOOPS[@]}
+  for ((i = 0; i < _n; i++)); do
     local l="${CLEANUP_LOOPS[$i]}"
     local expected_backing="${CLEANUP_LOOP_BACKINGS[$i]:-}"
 
@@ -745,7 +816,9 @@ _cleanup_detach_registered_loops() {
 
   # Post-detach verification: confirm all tracked loops are actually detached
   local verify_rc=0
-  for ((i = 0; i < ${#CLEANUP_LOOPS[@]}; i++)); do
+  local _n2=0
+  [[ ${CLEANUP_LOOPS[0]+_} ]] && _n2=${#CLEANUP_LOOPS[@]}
+  for ((i = 0; i < _n2; i++)); do
     local _pf_vl="${CLEANUP_LOOPS[$i]}"
     if [[ -f "/sys/block/${_pf_vl##*/}/loop/backing_file" ]] || losetup "$_pf_vl" &>/dev/null; then
       warn "_cleanup_detach_registered_loops: $_pf_vl still attached after detach attempts"
@@ -769,7 +842,9 @@ _cleanup_remove_registered_tempdirs() {
   local i
 
   # Reverse iteration (same as mounts)
-  for ((i = ${#CLEANUP_TEMPDIRS[@]} - 1; i >= 0; i--)); do
+  local _n=0
+  [[ ${CLEANUP_TEMPDIRS[0]+_} ]] && _n=${#CLEANUP_TEMPDIRS[@]}
+  for ((i = _n - 1; i >= 0; i--)); do
     local d="${CLEANUP_TEMPDIRS[$i]}"
 
     [[ -d "$d" ]] || continue
@@ -791,7 +866,9 @@ _cleanup_remove_registered_tempdirs() {
   done
 
   # Post-removal verification: confirm all tracked tempdirs are actually gone
-  for ((i = 0; i < ${#CLEANUP_TEMPDIRS[@]}; i++)); do
+  local _n2=0
+  [[ ${CLEANUP_TEMPDIRS[0]+_} ]] && _n2=${#CLEANUP_TEMPDIRS[@]}
+  for ((i = 0; i < _n2; i++)); do
     if [[ -d "${CLEANUP_TEMPDIRS[$i]}" ]]; then
       warn "_cleanup_remove_registered_tempdirs: ${CLEANUP_TEMPDIRS[$i]} still exists after removal"
       rc=1
@@ -826,6 +903,20 @@ cleanup_environment() {
 
   if ((!mounts_ok)); then
     warn "cleanup_environment: mount cleanup incomplete — preserving loops and workspace"
+    warn "  Cleanup status: mounts_ok=$mounts_ok loops_ok=$loops_ok"
+    warn "  Registered mounts: ${#CLEANUP_MOUNTS[@]}, loops: ${#CLEANUP_LOOPS[@]}, tempdirs: ${#CLEANUP_TEMPDIRS[@]}"
+    # Show which mounts are still tracked (not yet released)
+    local _ce_i
+    local _ce_remaining=0
+    local _ce_n=0
+    [[ ${CLEANUP_MOUNTS[0]+_} ]] && _ce_n=${#CLEANUP_MOUNTS[@]}
+    for ((_ce_i = 0; _ce_i < _ce_n; _ce_i++)); do
+      if mountpoint -q "${CLEANUP_MOUNTS[$_ce_i]}" 2>/dev/null; then
+        warn "  Still mounted: ${CLEANUP_MOUNTS[$_ce_i]} (label=${CLEANUP_MOUNT_LABELS[$_ce_i]:-unknown})"
+        _ce_remaining=$((_ce_remaining + 1))
+      fi
+    done
+    warn "  Mounts still mounted: $_ce_remaining of $_ce_n"
     CLEANUP_INCOMPLETE=1
     CLEANUP_RUNNING=0
     return 1
@@ -836,6 +927,19 @@ cleanup_environment() {
 
   if ((!loops_ok)); then
     warn "cleanup_environment: loop cleanup incomplete — preserving workspace"
+    warn "  Cleanup status: mounts_ok=$mounts_ok loops_ok=$loops_ok"
+    # Show which loops are still tracked
+    local _ce_li
+    local _ce_remaining_loops=0
+    local _ce_ln=0
+    [[ ${CLEANUP_LOOPS[0]+_} ]] && _ce_ln=${#CLEANUP_LOOPS[@]}
+    for ((_ce_li = 0; _ce_li < _ce_ln; _ce_li++)); do
+      if losetup "${CLEANUP_LOOPS[$_ce_li]}" &>/dev/null; then
+        warn "  Still attached: ${CLEANUP_LOOPS[$_ce_li]} (label=${CLEANUP_LOOP_LABELS[$_ce_li]:-unknown})"
+        _ce_remaining_loops=$((_ce_remaining_loops + 1))
+      fi
+    done
+    warn "  Loops still attached: $_ce_remaining_loops of $_ce_ln"
     CLEANUP_INCOMPLETE=1
     CLEANUP_RUNNING=0
     return 1
@@ -869,7 +973,9 @@ cleanup_verify() {
 
   # Check tracked loops are detached (with identity verification)
   local i
-  for ((i = 0; i < ${#CLEANUP_LOOPS[@]}; i++)); do
+  local _n=0
+  [[ ${CLEANUP_LOOPS[0]+_} ]] && _n=${#CLEANUP_LOOPS[@]}
+  for ((i = 0; i < _n; i++)); do
     local l="${CLEANUP_LOOPS[$i]}"
     local expected_id="${CLEANUP_LOOP_BACKINGS[$i]:-}"
 
@@ -907,7 +1013,9 @@ cleanup_verify() {
   done
 
   # Check tracked tempdirs are gone
-  for ((i = 0; i < ${#CLEANUP_TEMPDIRS[@]}; i++)); do
+  local _n2=0
+  [[ ${CLEANUP_TEMPDIRS[0]+_} ]] && _n2=${#CLEANUP_TEMPDIRS[@]}
+  for ((i = 0; i < _n2; i++)); do
     if [[ -d "${CLEANUP_TEMPDIRS[$i]}" ]]; then
       warn "cleanup_verify: ${CLEANUP_TEMPDIRS[$i]} still exists"
       rc=1
@@ -935,9 +1043,9 @@ _cleanup_reset() {
   fi
 
   local has_registrations=0
-  ((${#CLEANUP_MOUNTS[@]} > 0)) && has_registrations=1
-  ((${#CLEANUP_LOOPS[@]} > 0)) && has_registrations=1
-  ((${#CLEANUP_TEMPDIRS[@]} > 0)) && has_registrations=1
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && has_registrations=1
+  [[ ${CLEANUP_LOOPS[0]+_} ]] && has_registrations=1
+  [[ ${CLEANUP_TEMPDIRS[0]+_} ]] && has_registrations=1
 
   if ((has_registrations)); then
     # Require cleanup was attempted AND succeeded
@@ -1205,7 +1313,8 @@ cleanup_mount_chroot() {
   [[ -d "$root" ]] || die "cleanup_mount_chroot: $root is not a directory"
 
   # Record registration boundary — only roll back what we create
-  local boundary=${#CLEANUP_MOUNTS[@]}
+  local boundary=0
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && boundary=${#CLEANUP_MOUNTS[@]}
 
   # Ensure mount directories exist
   if ! mkdir -p "$root/proc" "$root/sys" "$root/dev" "$root/dev/pts" "$root/dev/shm" 2>/dev/null; then
@@ -1313,7 +1422,9 @@ _cleanup_chroot_rollback() {
   }
 
   # Unmount in reverse, only from our registration boundary onward
-  for ((i = ${#CLEANUP_MOUNTS[@]} - 1; i >= boundary; i--)); do
+  local _n=0
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && _n=${#CLEANUP_MOUNTS[@]}
+  for ((i = _n - 1; i >= boundary; i--)); do
     local m="${CLEANUP_MOUNTS[$i]}"
     local expected_id="${CLEANUP_MOUNT_IDS[$i]:-}"
 
@@ -1356,9 +1467,9 @@ _cleanup_chroot_rollback() {
   done
 
   # Re-index arrays
-  CLEANUP_MOUNTS=("${CLEANUP_MOUNTS[@]}")
-  CLEANUP_MOUNT_IDS=("${CLEANUP_MOUNT_IDS[@]}")
-  CLEANUP_MOUNT_LABELS=("${CLEANUP_MOUNT_LABELS[@]}")
+  CLEANUP_MOUNTS=("${CLEANUP_MOUNTS[@]+"${CLEANUP_MOUNTS[@]}"}")
+  CLEANUP_MOUNT_IDS=("${CLEANUP_MOUNT_IDS[@]+"${CLEANUP_MOUNT_IDS[@]}"}")
+  CLEANUP_MOUNT_LABELS=("${CLEANUP_MOUNT_LABELS[@]+"${CLEANUP_MOUNT_LABELS[@]}"}")
 
   return "$rc"
 }
@@ -1388,12 +1499,14 @@ _cleanup_stop_workers() {
     [[ -n "$pid" ]] && pids+=("$pid")
   done < <(jobs -p 2>/dev/null)
 
-  if [[ ${#pids[@]} -eq 0 ]]; then
+  local _n=0
+  [[ ${pids[0]+_} ]] && _n=${#pids[@]}
+  if [[ $_n -eq 0 ]]; then
     debug "_cleanup_stop_workers: no background jobs"
     return 0
   fi
 
-  debug "_cleanup_stop_workers: stopping ${#pids[@]} background job(s)"
+  debug "_cleanup_stop_workers: stopping $_n background job(s)"
 
   # Send SIGTERM to each
   for pid in "${pids[@]}"; do
@@ -1482,14 +1595,16 @@ cleanup_release() {
 
   # Remove from tracking
   local i
-  for ((i = ${#CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
+  local _n=0
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && _n=${#CLEANUP_MOUNTS[@]}
+  for ((i = _n - 1; i >= 0; i--)); do
     if [[ "${CLEANUP_MOUNTS[$i]}" == "$normalized" || "${CLEANUP_MOUNTS[$i]}" == "$target" ]]; then
       unset 'CLEANUP_MOUNTS[i]'
       unset 'CLEANUP_MOUNT_IDS[i]'
       unset 'CLEANUP_MOUNT_LABELS[i]'
-      CLEANUP_MOUNTS=("${CLEANUP_MOUNTS[@]}")
-      CLEANUP_MOUNT_IDS=("${CLEANUP_MOUNT_IDS[@]}")
-      CLEANUP_MOUNT_LABELS=("${CLEANUP_MOUNT_LABELS[@]}")
+      CLEANUP_MOUNTS=("${CLEANUP_MOUNTS[@]+"${CLEANUP_MOUNTS[@]}"}")
+      CLEANUP_MOUNT_IDS=("${CLEANUP_MOUNT_IDS[@]+"${CLEANUP_MOUNT_IDS[@]}"}")
+      CLEANUP_MOUNT_LABELS=("${CLEANUP_MOUNT_LABELS[@]+"${CLEANUP_MOUNT_LABELS[@]}"}")
       debug "cleanup_release: released $target from tracking"
       return 0
     fi
@@ -1609,7 +1724,9 @@ cleanup_force_teardown() {
 
   # Phase 2: Lazy-unmount all tracked mounts
   local i
-  for ((i = ${#CLEANUP_MOUNTS[@]} - 1; i >= 0; i--)); do
+  local _n=0
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && _n=${#CLEANUP_MOUNTS[@]}
+  for ((i = _n - 1; i >= 0; i--)); do
     local m="${CLEANUP_MOUNTS[$i]}"
     if mountpoint -q "$m" 2>/dev/null; then
       warn "cleanup_force_teardown: lazy-unmounting $m"
@@ -1618,7 +1735,9 @@ cleanup_force_teardown() {
   done
 
   # Phase 3: Detach all tracked loops
-  for ((i = ${#CLEANUP_LOOPS[@]} - 1; i >= 0; i--)); do
+  local _n2=0
+  [[ ${CLEANUP_LOOPS[0]+_} ]] && _n2=${#CLEANUP_LOOPS[@]}
+  for ((i = _n2 - 1; i >= 0; i--)); do
     local l="${CLEANUP_LOOPS[$i]}"
     if losetup "$l" &>/dev/null; then
       warn "cleanup_force_teardown: detaching loop $l"
@@ -1628,7 +1747,9 @@ cleanup_force_teardown() {
   done
 
   # Phase 4: Remove tracked temp directories
-  for ((i = ${#CLEANUP_TEMPDIRS[@]} - 1; i >= 0; i--)); do
+  local _n3=0
+  [[ ${CLEANUP_TEMPDIRS[0]+_} ]] && _n3=${#CLEANUP_TEMPDIRS[@]}
+  for ((i = _n3 - 1; i >= 0; i--)); do
     local d="${CLEANUP_TEMPDIRS[$i]}"
     if [[ -d "$d" ]]; then
       warn "cleanup_force_teardown: removing $d"
@@ -1685,7 +1806,9 @@ _audit_workspace_strays() {
   # Build set of tracked mounts for comparison
   local tracked_mounts=""
   local i
-  for ((i = 0; i < ${#CLEANUP_MOUNTS[@]}; i++)); do
+  local _n=0
+  [[ ${CLEANUP_MOUNTS[0]+_} ]] && _n=${#CLEANUP_MOUNTS[@]}
+  for ((i = 0; i < _n; i++)); do
     tracked_mounts+="${CLEANUP_MOUNTS[$i]}"$'\n'
   done
 
@@ -1722,7 +1845,9 @@ _audit_workspace_strays() {
 
   # Build set of tracked loop backings for comparison
   local tracked_backings=""
-  for ((i = 0; i < ${#CLEANUP_LOOPS[@]}; i++)); do
+  local _n2=0
+  [[ ${CLEANUP_LOOPS[0]+_} ]] && _n2=${#CLEANUP_LOOPS[@]}
+  for ((i = 0; i < _n2; i++)); do
     tracked_backings+="${CLEANUP_LOOP_BACKINGS[$i]}"$'\n'
   done
 

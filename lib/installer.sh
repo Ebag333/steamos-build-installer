@@ -30,12 +30,12 @@ inject_log_collector() {
   mkdir -p "$HOMEMNT/deck/logs/boot"
 
   # The collector script — lives in the image rootfs.
-  cat "$(_heredoc_dir)/static/collect-boot-logs.sh" >"$MNT/usr/local/bin/collect-boot-logs"
+  cat "$(heredoc_dir)/static/collect-boot-logs.sh" >"$MNT/usr/local/bin/collect-boot-logs"
   chmod 755 "$MNT/usr/local/bin/collect-boot-logs"
 
   # Systemd service — runs after home partition is available.
   mkdir -p "$MNT/etc/systemd/system"
-  cat "$(_heredoc_dir)/static/collect-boot-logs.service" >"$MNT/etc/systemd/system/collect-boot-logs.service"
+  cat "$(heredoc_dir)/static/collect-boot-logs.service" >"$MNT/etc/systemd/system/collect-boot-logs.service"
 
   mkdir -p "$MNT/etc/systemd/system/multi-user.target.wants"
   ln -sf ../collect-boot-logs.service \
@@ -81,7 +81,7 @@ install_one_click_installer() {
       # partition.  The clone carries ro=true from the USB image, so clear it first.
       # Inject right after the second imageroot call (the one for rootfs-B).
       _resize_tmp="$(mktemp /tmp/nvidia-resize-block.XXXXXX)"
-      cat "$(_heredoc_dir)/static/resize-btrfs.sh" >"$_resize_tmp"
+      cat "$(heredoc_dir)/static/resize-btrfs.sh" >"$_resize_tmp"
       awk -v blk="$_resize_tmp" '
         /imageroot "\$rootdevice".*FS_ROOT_B/ {
           print; while ((getline line < blk) > 0) print line; close(blk); next
@@ -94,7 +94,7 @@ install_one_click_installer() {
     fi
 
     log "Installing disk-picker wrapper + desktop icons"
-    cat "$(_heredoc_dir)/static/install-to-hd.sh" >"$TOOLS/install_to_hd.sh"
+    cat "$(heredoc_dir)/static/install-to-hd.sh" >"$TOOLS/install_to_hd.sh"
     chmod 755 "$TOOLS/install_to_hd.sh"
 
     # Bake the chosen rootfs size into the wrapper (the heredoc is literal,

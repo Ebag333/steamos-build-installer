@@ -1,4 +1,6 @@
 #!/bin/bash
+# lint-ignore: single-source
+# lint-ignore: strict-mode
 # Stubbed by steamos-build-installer: an OS update would replace the rootfs
 # and remove the NVIDIA driver. Original saved as $0.orig.
 echo "OS updates are held on this system (NVIDIA-patched image)." >&2

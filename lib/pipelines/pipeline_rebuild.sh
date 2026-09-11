@@ -12,6 +12,32 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Patch result tracking (three-state exit model)
+# ---------------------------------------------------------------------------
+#   0  = all patches applied successfully
+#   10 = OS update is bootable, but one or more optional patches failed
+#   1  = critical failure; staged OS should not be booted
+declare -a PATCH_RESULTS=()
+
+# patch_record NAME STATUS [DETAIL]
+#   STATUS is "ok", "fail", or "skip".
+patch_record() {
+  local name="${1:-}" status="${2:-}" detail="${3:-}"
+  [[ -n "$name" && -n "$status" ]] || {
+    warn "patch_record: missing required arguments (name='$name' status='$status')"
+    return 1
+  }
+  [[ "$status" == "ok" || "$status" == "fail" || "$status" == "skip" ]] || {
+    warn "patch_record: invalid status '$status' for '$name' (expected 'ok', 'fail', or 'skip')"
+    return 1
+  }
+  PATCH_RESULTS+=("$name|$status|$detail")
+  if [[ "$status" == "fail" ]]; then
+    warn "Optional patch failed: $name — $detail"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Pipeline Definition
 # ---------------------------------------------------------------------------
 
@@ -335,9 +361,9 @@ _phase_rebuild_sysupgrade() {
   system_upgrade_cleanup
 
   # Re-discover kernel version — -Syu may have upgraded it
-  discover_neptune_kver "$MNT"
-  discover_kernel_pkg "$MNT"
-  construct_hdr_url "$MNT"
+  discover_neptune_kver "$NEWROOT"
+  discover_kernel_pkg "$NEWROOT"
+  construct_hdr_url "$NEWROOT"
   log "Post-upgrade kernel: $KVER ($(basename "$HDR_URL"))"
 
   progress_emit sysupgrade

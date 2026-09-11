@@ -6,7 +6,7 @@
 # Run Valve's real client first; if it actually stages a new OTHER-slot image,
 # rebuild the NVIDIA/hardware payload there before reporting success.
 #
-# If repatch fails, invalidate the staged slot and keep booting the current
+# If rebuild fails, invalidate the staged slot and keep booting the current
 # known-good image.
 
 # lint-ignore: strict-mode  # captures child exit codes; rollback logic must execute on failure
@@ -18,7 +18,7 @@ if [[ -d "/home/.steamos-build/build_cache/lib" ]]; then
   _NVIDIA_DIR="/home/.steamos-build/build_cache"
 fi
 
-REPATCH="$_NVIDIA_DIR/lib/repatch.sh"
+BACKEND="$_NVIDIA_DIR/lib/backend.sh"
 SELF_BUNDLE="$_NVIDIA_DIR/lib/atomupd-wrapper.sh"
 
 if [[ $EUID -eq 0 ]]; then
@@ -213,7 +213,7 @@ _install_self_into_target() {
     return 1
   fi
 
-  # repatch normally clears this already, but keep propagation independently
+  # rebuild normally clears this already, but keep propagation independently
   # safe if Valve stages the root tree with the Btrfs ro property set.
   btrfs_ro="$(btrfs property get -ts "$mnt" ro 2>/dev/null | awk -F= '/^ro=/{print $2}' || true)"
   if [[ "$btrfs_ro" == "true" ]]; then
@@ -312,7 +312,7 @@ other_after="$(_slot_other "$this_after" 2>/dev/null || true)"
 # If we cannot prove which inactive slot belongs to the booted image, do not
 # guess. The Valve operation succeeded, so preserve its return code.
 if [[ -z "$other_before" || -z "$other_after" || "$this_after" != "$this_before" || "$other_after" != "$other_before" ]]; then
-  _alog "No safe A/B target transition could be established; no repatch triggered."
+  _alog "No safe A/B target transition could be established; no rebuild triggered."
   exit "$rc"
 fi
 
@@ -341,7 +341,7 @@ elif ((request_before_ok && request_after_ok)) \
 fi
 
 if [[ -z "$stage_reason" ]]; then
-  _alog "No newly staged OTHER-slot OS image detected; no repatch needed."
+  _alog "No newly staged OTHER-slot OS image detected; no rebuild needed."
   exit "$rc"
 fi
 
@@ -351,8 +351,8 @@ if [[ $EUID -ne 0 ]]; then
   _alog "ERROR: staged OS update detected but atomupd wrapper is not running as root"
   exit 1
 fi
-[[ -x "$REPATCH" ]] || {
-  _alog "ERROR: repatch tool is missing or not executable: $REPATCH"
+[[ -x "$BACKEND" ]] || {
+  _alog "ERROR: rebuild backend is missing or not executable: $BACKEND"
   _rollback_target "$other_after" || true
   exit 1
 }
@@ -360,13 +360,13 @@ fi
 # atomupd normally serializes updates, but guard against a concurrent helper
 # invocation observing the same just-staged slot.
 mkdir -p /run/steamos-build
-exec 9>/run/steamos-build/repatch.lock
+exec 9>/run/steamos-build/rebuild.lock
 if command -v flock >/dev/null 2>&1; then
   flock -x 9
 fi
 
 # Re-check the target after acquiring the lock. If another invocation already
-# rolled the stage back, do not start a second repatch.
+# rolled the stage back, do not start a second rebuild.
 request_locked="$(_boot_value "$other_after" boot-requested-at 2>/dev/null || true)"
 invalid_locked="$(_boot_value "$other_after" image-invalid 2>/dev/null || true)"
 if [[ "$request_locked" == "0" && "$invalid_locked" == "1" ]]; then
@@ -374,23 +374,23 @@ if [[ "$request_locked" == "0" && "$invalid_locked" == "1" ]]; then
   exit 1
 fi
 
-_alog "Update staged. Starting NVIDIA repatch of partset 'other'."
-"$REPATCH" other >>"$LOG" 2>&1
-repatch_rc=$?
+_alog "Update staged. Starting NVIDIA rebuild of partset 'other'."
+"$BACKEND" --action rebuild --partset other >>"$LOG" 2>&1
+rebuild_rc=$?
 
-_alog "Repatch returned rc=$repatch_rc"
+_alog "Rebuild returned rc=$rebuild_rc"
 _dump_boot_state
 
-if [[ $repatch_rc -eq 10 ]]; then
-  # repatch completed but one or more optional patches failed.
+if [[ $rebuild_rc -eq 10 ]]; then
+  # rebuild completed but one or more optional patches failed.
   # The OS update itself is fine — do NOT roll back the staged slot.
   _alog "WARNING: SteamOS update installed, but some optional patches failed."
   _alog "WARNING: The updated OS slot has been left bootable."
-  _alog "WARNING: Review the repatch log: $LOG"
-elif [[ $repatch_rc -ne 0 ]]; then
-  _alog "ERROR: Repatch failed critically (rc=$repatch_rc)."
+  _alog "WARNING: Review the rebuild log: $LOG"
+elif [[ $rebuild_rc -ne 0 ]]; then
+  _alog "ERROR: Rebuild failed critically (rc=$rebuild_rc)."
   _alog "ERROR: The staged SteamOS update will be cancelled."
-  _alog "ERROR: Review the repatch log: $LOG"
+  _alog "ERROR: Review the rebuild log: $LOG"
   _rollback_target "$other_after" || _alog "ERROR: rollback verification failed"
   exit 1
 fi
@@ -398,13 +398,13 @@ fi
 # Propagate the atomupd wrapper into the new slot, so the next OS update
 # is intercepted even after reboot.
 if ! _install_self_into_target "$other_after"; then
-  _alog "ERROR: repatch succeeded but atomupd wrapper could not be propagated."
+  _alog "ERROR: rebuild succeeded but atomupd wrapper could not be propagated."
   _rollback_target "$other_after" || _alog "ERROR: rollback verification failed"
   _alog "Details: $LOG"
   exit 1
 fi
 
-_alog "NVIDIA repatch succeeded; marking updated slot bootable."
+_alog "NVIDIA rebuild succeeded; marking updated slot bootable."
 if ! _edit_slot_conf "$other_after" \
   -e 's/^image-invalid:.*/image-invalid: 0/'; then
   _alog "ERROR: updated boot config could not be marked valid"

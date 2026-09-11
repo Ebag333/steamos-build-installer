@@ -1,4 +1,6 @@
 #!/bin/bash
+# lint-ignore: single-source
+# lint-ignore: strict-mode
 # One-click SteamOS (NVIDIA-patched) installer/upgrader. Picks an internal
 # disk, then runs Valve's repair_device.sh which clones the running USB
 # system onto it.
@@ -20,10 +22,16 @@ case "$MODE" in
     CONFIRM_LABEL="UPGRADE"
     CONFIRM_TEXT_TPL="About to upgrade the SteamOS installation on:\n\n    %s\n\nGames and user data on that disk are preserved.\nOS customisations outside /home will be lost.\nThe machine powers off when done: remove the USB stick and boot."
     ;;
-  *) echo "Usage: $0 [all|system]" >&2; exit 1 ;;
+  *)
+    echo "Usage: $0 [all|system]" >&2
+    exit 1
+    ;;
 esac
 
-_err_exit() { zenity --error --no-wrap --text "$1" 2>/dev/null || echo "ERROR: $1" >&2; exit 1; }
+_err_exit() {
+  zenity --error --no-wrap --text "$1" 2>/dev/null || echo "ERROR: $1" >&2
+  exit 1
+}
 
 # Disk we're running from (the USB) — never offer it as a target.
 # Fail closed: if we can't determine the source disk, refuse to proceed
@@ -34,14 +42,15 @@ if [[ -z "$SRC_DISK" ]]; then
   _err_exit "Cannot determine which disk contains the USB rootfs.\nRefusing to proceed — the USB might be offered as an install target."
 fi
 
-mapfile -t CANDIDATES < <(lsblk -dn -o NAME,SIZE,MODEL,TRAN,TYPE | \
-  awk -v src="$SRC_DISK" '$NF=="disk" && $1!=src && $1 !~ /^(loop|zram|sr|nbd|ram)/ {NF--; print}')
+mapfile -t CANDIDATES < <(lsblk -dn -o NAME,SIZE,MODEL,TRAN,TYPE \
+  | awk -v src="$SRC_DISK" '$NF=="disk" && $1!=src && $1 !~ /^(loop|zram|sr|nbd|ram)/ {NF--; print}')
 
 [[ ${#CANDIDATES[@]} -gt 0 ]] || _err_exit "No target disk found.\nThis machine appears to have no internal drive (other than this USB)."
 
 ROWS=()
 for c in "${CANDIDATES[@]}"; do
-  name="${c%% *}"; rest="${c#* }"
+  name="${c%% *}"
+  rest="${c#* }"
   ROWS+=(FALSE "/dev/$name" "$rest")
 done
 

@@ -588,33 +588,26 @@ def check_update_strategy_selfheal():
     if file_exists(driver_conf, "driver.conf"):
         pass
 
-    repatch = os.path.join(MNT, "usr/lib/steamos-nvidia/repatch.sh")
-    if file_exists(repatch, "repatch.sh"):
-        file_contains(repatch, "repatch", "repatch.sh has content")
+    backend = os.path.join(MNT, "usr/lib/steamos-nvidia/backend.sh")
+    if file_exists(backend, "backend.sh"):
+        file_contains(backend, "rebuild", "backend.sh has rebuild action")
 
-        content = read_text(repatch)
+        content = read_text(backend)
         if content:
             # Verify GRUB reconciliation is called (reconcile_grub orchestrates
             # patch_persistent_defaults → update-grub → patch_kernel_cmdline → finalize_grub).
             if "reconcile_grub" in content:
-                ok("repatch.sh: calls reconcile_grub (full GRUB flow)")
+                ok("backend.sh: calls reconcile_grub (full GRUB flow)")
             elif "patch_kernel_cmdline" in content:
-                ok("repatch.sh: patch_kernel_cmdline present")
+                ok("backend.sh: patch_kernel_cmdline present")
             else:
-                fail("repatch.sh: has reconcile_grub or patch_kernel_cmdline", "not found")
-
-            # Verify the early-exit was replaced with skip-rebuild
-            if "DRIVER_NEEDS_REBUILD" in content:
-                ok("repatch.sh: uses DRIVER_NEEDS_REBUILD (no early exit)")
-            elif "exit 0" in content and "already present" in content:
-                fail("repatch.sh: early-exit removed",
-                     "still has 'exit 0' when driver is present — GRUB will be skipped")
+                fail("backend.sh: has reconcile_grub or patch_kernel_cmdline", "not found")
 
             # Verify EXTRA_CMDLINE_ADD is read from driver.conf
             if "EXTRA_CMDLINE_ADD" in content:
-                ok("repatch.sh: restores EXTRA_CMDLINE_ADD from driver.conf")
+                ok("backend.sh: restores EXTRA_CMDLINE_ADD from driver.conf")
             else:
-                skip("repatch.sh: EXTRA_CMDLINE_ADD",
+                skip("backend.sh: EXTRA_CMDLINE_ADD",
                      "not found (gaming params may not survive self-heal)")
 
     # Verify driver.conf has EXTRA_CMDLINE_ADD

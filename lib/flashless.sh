@@ -13,6 +13,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 : "${FL_IMG_LOOP:=}"
+: "${FL_UDEV_RULE:=}"
 
 # ── Slot detection ────────────────────────────────────────────────────────────
 
@@ -84,9 +85,9 @@ _flashless_extract_image() {
   # Create udev guard BEFORE the loop device exists so udisks2 never sees
   # the partitions as mountable.  Use a broad loop-partition pattern first;
   # the rule is removed on cleanup regardless of which loop device was used.
-  local _flashless_udev_rule="/run/udev/rules.d/89-steamos-build-flashless.rules"
+  FL_UDEV_RULE="/run/udev/rules.d/89-steamos-build-flashless.rules"
   mkdir -p /run/udev/rules.d
-  cat "$(_heredoc_dir)/static/flashless-udev.rule" >"$_flashless_udev_rule"
+  cat "$(heredoc_dir)/static/flashless-udev.rule" >"$FL_UDEV_RULE"
   udevadm control --reload-rules 2>/dev/null || true
 
   log "Loop-mounting built image: $img"
@@ -613,99 +614,5 @@ _flashless_verify_final() {
 }
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
-
-flashless_install() {
-  local img="${1:?flashless_install: missing image path}"
-
-  [[ $EUID -eq 0 ]] || die "Flashless install requires root"
-
-  log "=== Flashless install: $img ==="
-
-  trap 'rm -f "${_flashless_udev_rule:-}" 2>/dev/null; udevadm control --reload-rules 2>/dev/null || true; cleanup_environment' EXIT
-
-  # Greenfield tracking: set workspace boundary
-  cleanup_set_workspace "/tmp" 2>/dev/null || true
-
-  # Ledger: recover from previous run, then initialize
-  pipeline_recover || warn "Ledger recovery failed — proceeding without crash recovery"
-  pipeline_init "" "/home/.steamos-build" || warn "Ledger initialization failed — proceeding without crash recovery"
-
-  # Phase 1: detect + safety.
-  stage_header "preparing & validating"
-  _flashless_detect_slots
-
-  # Preflight safety checks
-  preflight_validate \
-    --scenario "flashless" \
-    --rootfs "/" \
-    --efi "" \
-    --esp "" \
-    --slot "$FL_TARGET" \
-    --variant "${TARGET_VARIANT:-}"
-
-  # Phase 2: attach built image, identify source rootfs, verify it's our build.
-  _flashless_extract_image "$img"
-  _flashless_check_sizes
-
-  # Phase 3: reset target partitions.
-  stage_header "deploying image to target"
-  _flashless_format_target
-
-  # Phase 4: write rootfs (dd → flush → SHA256 verify → btrfstune → btrfs check → resize).
-  _flashless_write_rootfs
-
-  # Phase 5: detach source image — its partitions may be competing with
-  # /dev/disk/by-partsets.  Must succeed; if detach fails, abort.
-  strict_detach_loop "$FL_IMG_LOOP"
-  FL_IMG_LOOP=""
-
-  udevadm trigger --action=change \
-    "$FL_TARGET_ROOTFS" \
-    "$FL_TARGET_EFI" \
-    "$FL_TARGET_VAR" \
-    || die "Could not retrigger udev for target partitions"
-
-  udevadm settle --timeout=10 \
-    || die "udev did not settle after source loop detach"
-
-  # Phase 6: verify partset symlinks returned to the real target partitions.
-  _flashless_verify_partsets
-
-  # Phase 7: restore /etc state (manifest, os-release).
-  stage_header "configuring target system"
-  _flashless_restore_etc
-
-  # Phase 8: rebuild boot environment via steamos-chroot.
-  _flashless_rebuild_boot
-
-  # Phase 9: restore original Btrfs ro state (after all rootfs writes).
-  _flashless_restore_rootfs_ro
-
-  # Phase 10: final verification before activation.
-  stage_header "verification & activation"
-  _flashless_verify_final
-
-  # Phase 11: activate target slot.
-  _flashless_activate_slot
-
-  trap - EXIT
-
-  log "=== Flashless install complete — slot $FL_TARGET is ready ==="
-
-  local out
-  if out="$(steamos-bootconf selected-image 2>&1)"; then
-    log "  selected-image: $out"
-  else
-    log "  selected-image: (unavailable)"
-  fi
-
-  if command -v rauc >/dev/null 2>&1; then
-    log "  RAUC status:"
-    rauc status --detailed 2>&1 | while IFS="" read -r line; do
-      log "    $line"
-    done
-  fi
-
-  log "Reboot to activate.  If the new slot fails to boot, SteamOS will"
-  log "automatically fall back to slot $FL_CURRENT."
-}
+# NOTE: flashless_install() has been migrated to the pipeline framework.
+# See lib/pipelines/pipeline_flashless.sh and _backend_flashless() in lib/backend.sh.

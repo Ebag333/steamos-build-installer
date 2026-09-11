@@ -218,14 +218,19 @@ pacman_sync_db() {
     root)
       pacman_retry _pacman_run_in_root "$root" "pacman $config_args -Fy $noconfirm" \
         > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
+        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
       ;;
     *)
       pacman_retry _pacman_exec "$context" "pacman $config_args -Fy $noconfirm" \
         > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
+        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
       ;;
   esac
+
+  if ((sync_rc != 0)); then
+    warn "Failed to sync file databases (rc=$sync_rc)"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------

@@ -174,6 +174,7 @@ _phase_build_setup() {
   # Clear stale state and create directories
   setup_clear_stale_state
   setup_dirs
+  cleanup_set_workspace "$WORKDIR" 2>/dev/null || true
 
   # Raw pacman output log — preserves complete stdout+stderr for diagnostics
   PACMAN_RAW_LOG="$WORKDIR/backend.pacman.log"

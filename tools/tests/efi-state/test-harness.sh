@@ -35,6 +35,13 @@
 #   test_harness_summary              — Print test results summary
 #   test_harness_exit_code            — Return 0 if all passed, 1 otherwise
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/fixture-factory.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/topology.sh"
+
 # ---------------------------------------------------------------------------
 # Guard: only run when executed directly, not when sourced
 # ---------------------------------------------------------------------------

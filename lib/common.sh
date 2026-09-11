@@ -11,10 +11,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 # Resolve the path to the heredocs directory relative to this file
-_heredoc_dir() {
-    local dir
-    dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    echo "${dir}/heredocs"
+heredoc_dir() {
+  local dir
+  dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  echo "${dir}/heredocs"
 }
 
 # Shared logging/failure framework.  Callers may set these before sourcing:
@@ -575,14 +575,14 @@ append_arch_repos() {
 
   # Idempotency: only append sections that don't already exist
   if ! grep -q '^\[core\]' "$conf" 2>/dev/null; then
-    cat "$(_heredoc_dir)/static/pacman-core.conf" >>"$conf"
+    cat "$(heredoc_dir)/static/pacman-core.conf" >>"$conf"
   fi
 
   if ! grep -q '^\[extra\]' "$conf" 2>/dev/null; then
-    cat "$(_heredoc_dir)/static/pacman-extra.conf" >>"$conf"
+    cat "$(heredoc_dir)/static/pacman-extra.conf" >>"$conf"
   fi
 
   if ! grep -q '^\[multilib\]' "$conf" 2>/dev/null; then
-    cat "$(_heredoc_dir)/static/pacman-multilib.conf" >>"$conf"
+    cat "$(heredoc_dir)/static/pacman-multilib.conf" >>"$conf"
   fi
 }

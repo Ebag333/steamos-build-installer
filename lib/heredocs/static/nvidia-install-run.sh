@@ -1,4 +1,5 @@
 #!/bin/bash
+# lint-ignore: single-source
 # Restricted sudo helper for the one-click installer.
 # Only allows running repair_device.sh as root with the required env vars.
 set -euo pipefail

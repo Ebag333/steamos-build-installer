@@ -513,12 +513,22 @@ setup_clear_stale_state() {
   remaining_overlay_loops="$(loops_for_file "$OVL_IMG")"
 
   if [[ -n "$remaining_overlay_loops" ]]; then
-    warn "Overlay workspace still has loop attachments:"
+    local all_autoclear=1
     while IFS="" read -r dev; do
-      [[ -n "$dev" ]] && warn "  $dev"
+      [[ -n "$dev" ]] || continue
+      local ac
+      ac="$(losetup -l -O AUTOCLEAR "$dev" 2>/dev/null | tail -1 | tr -d ' ')"
+      if [[ "$ac" == "1" ]]; then
+        log "setup_clear_stale_state: $dev still attached but AUTOCLEAR=1 — kernel will auto-detach"
+      else
+        warn "setup_clear_stale_state: $dev still attached without AUTOCLEAR"
+        all_autoclear=0
+      fi
     done <<<"$remaining_overlay_loops"
 
-    die "Could not safely recover the previous overlay workspace; reboot may be required"
+    if ((all_autoclear == 0)); then
+      die "Could not safely recover the previous overlay workspace; reboot may be required"
+    fi
   fi
 
   # ============================================================

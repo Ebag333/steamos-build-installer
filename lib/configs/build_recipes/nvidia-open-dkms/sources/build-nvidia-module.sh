@@ -35,6 +35,12 @@ fi
 
 echo "=== Execution context: $_NV_CONTEXT ==="
 
+# Local helper: resolve heredocs directory from this script's location.
+# The lib/common.sh version is not available inside the build chroot.
+nvidia_heredoc_dir() {
+  cd "$(dirname "${BASH_SOURCE[0]}")/../../../../heredocs" && pwd
+}
+
 # ── 0b. Live-system prerequisite guards ──────────────────────────────────
 # On live systems we must validate a stricter set of prerequisites before
 # touching the running system's DKMS trees.
@@ -324,7 +330,7 @@ _NVIDIA_CONF="/etc/modprobe.d/99-nvidia-patch.conf"
 if [[ ! -s "$_NVIDIA_CONF" ]]; then
   echo "Installing nvidia modprobe config"
   mkdir -p /etc/modprobe.d
-  cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../heredocs/static/nvidia-modprobe-dkms.conf" >"$_NVIDIA_CONF"
+  cat "$(nvidia_heredoc_dir)/static/nvidia-modprobe-dkms.conf" >"$_NVIDIA_CONF"
 fi
 
 if [[ -s "$_NVIDIA_CONF" ]]; then

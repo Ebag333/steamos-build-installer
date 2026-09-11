@@ -119,6 +119,7 @@ _phase_live_validate() {
 }
 
 _phase_live_prepare() {
+  stage_header "live"
   if [[ -z "${config_root:-}" || "${config_root:-}" == "/" ]]; then
     disable_steamos_readonly
   else
@@ -239,6 +240,7 @@ _phase_live_install() {
 }
 
 _phase_live_configure() {
+  stage_header "live"
   local root="${config_root:-/}"
 
   reconcile_initramfs "$root" "$(uname -r)" "${INITRAMFS_MODULES:-}"
@@ -264,6 +266,9 @@ _phase_live_verify() {
   local root="${config_root:-/}"
 
   cleanup_disk_space "${config_root:-/}" "live"
+
+  # Tear down mounts before verifying cleanup
+  cleanup_environment 2>/dev/null || true
 
   # Verify cleanup completeness
   if declare -F cleanup_verify >/dev/null 2>&1; then

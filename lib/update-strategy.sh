@@ -50,7 +50,7 @@ apply_update_strategy() {
           warn "hold: failed to back up $bin"
           continue
         }
-      cat "$(_heredoc_dir)/static/update-stub.sh" > "$MNT/usr/bin/$bin"
+      cat "$(heredoc_dir)/static/update-stub.sh" >"$MNT/usr/bin/$bin"
       chmod 755 "$MNT/usr/bin/$bin" \
         || warn "hold: failed to chmod $bin"
     done

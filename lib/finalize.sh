@@ -97,7 +97,7 @@ finalize() {
   if [[ $UPDATE_MODE == selfheal ]]; then
     grep -q 'self-healing' "$MNT/usr/bin/steamos-update" || die "update wrapper missing"
     [[ -f "$MNT/usr/bin/steamos-update.orig" ]] || die "original steamos-update not preserved"
-    grep -q 'repatch' "/home/.steamos-build/build_cache/lib/repatch.sh" || die "repatch tool missing"
+    [[ -x "/home/.steamos-build/build_cache/lib/backend.sh" ]] || die "rebuild backend missing"
     [[ -f "/home/.steamos-build/build_cache/lib/overlay.sh" ]] || die "overlay helper missing"
     [[ -f "$HOMEMNT/.steamos-build/build.conf" ]] || die "build.conf missing"
     # Verify HID source bundle for self-heal (only if logitech-hid was installed)
@@ -236,7 +236,7 @@ finalize() {
   # Cleanup: overlay + greenfield resource teardown
   overlay_cleanup 2>/dev/null || true
   cleanup_environment 2>/dev/null || true
-  _cleanup_remove_udev_rules 2>/dev/null || true
+  cleanup_remove_udev_rules 2>/dev/null || true
   persist_debug_logs 2>/dev/null || true
   _cleanup_done=1
   trap - EXIT

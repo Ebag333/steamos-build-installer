@@ -421,7 +421,7 @@ install_nvidia_modprobe_conf() {
   log "Installing nvidia modprobe configuration"
 
   mkdir -p "$conf_dir"
-  cat "$(_heredoc_dir)/static/nvidia-modprobe.conf" > "$conf_dir/99-nvidia-patch.conf"
+  cat "$(heredoc_dir)/static/nvidia-modprobe.conf" >"$conf_dir/99-nvidia-patch.conf"
 
   return 0
 }

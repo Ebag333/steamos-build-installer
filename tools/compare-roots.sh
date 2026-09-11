@@ -156,7 +156,7 @@ else
   _compare_file "etc/udev/rules.d/98-thunderbolt-rescan.rules"
   _compare_file "etc/udev/rules.d/99-steamos-tb-autoauth.rules"
   _compare_file "home/.steamos-build/lib/driver.conf"
-  _compare_file "home/.steamos-build/lib/repatch.sh"
+  _compare_file "home/.steamos-build/lib/backend.sh"
   _compare_file "usr/bin/steamos-update"
   _compare_file "etc/systemd/system/multi-user.target.wants/bolt.service"
   _compare_file "home/deck/.config/steamos-manager/state.toml"

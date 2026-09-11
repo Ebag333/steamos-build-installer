@@ -168,6 +168,7 @@ _loopback_cleanup_handler_unmount() {
   for ((i = ${#_LOOPBACK_MOUNT_POINTS[@]} - 1; i >= 0; i--)); do
     local mp="${_LOOPBACK_MOUNT_POINTS[$i]}"
     if mountpoint -q "$mp" 2>/dev/null; then
+      # lint-ignore: strict-mount
       umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
     fi
   done
@@ -439,6 +440,7 @@ _detach_loopback_image() {
     local part_dev
     for part_dev in "${loop_dev}"*; do
       if [[ -b "$part_dev" && "$part_dev" != "$loop_dev" ]]; then
+        # lint-ignore: strict-mount
         umount "$part_dev" 2>/dev/null || umount -l "$part_dev" 2>/dev/null || true
       fi
     done
@@ -618,6 +620,7 @@ _mount_loopback_partitions() {
 
     # Mount the partition
     # shellcheck disable=SC2086
+    # lint-ignore: strict-mount
     if ! mount $mount_opts "$part_dev" "$mount_point" 2>/dev/null; then
       echo "ERROR: _mount_loopback_partitions: mount failed for $part ($part_dev → $mount_point)" >&2
       rc=1
@@ -631,6 +634,7 @@ _mount_loopback_partitions() {
   if mountpoint -q "$mount_base/rootfs-A" 2>/dev/null \
     && mountpoint -q "$mount_base/var-A" 2>/dev/null; then
     # Bind-mount var-A into rootfs-A/var
+    # lint-ignore: strict-mount
     if ! mount --bind "$mount_base/var-A" "$mount_base/rootfs-A/var" 2>/dev/null; then
       echo "WARNING: _mount_loopback_partitions: bind mount var-A into rootfs-A/var failed" >&2
     else
@@ -641,6 +645,7 @@ _mount_loopback_partitions() {
   if [[ "$topology_type" == "dual-slot" ]]; then
     if mountpoint -q "$mount_base/rootfs-B" 2>/dev/null \
       && mountpoint -q "$mount_base/var-B" 2>/dev/null; then
+      # lint-ignore: strict-mount
       if ! mount --bind "$mount_base/var-B" "$mount_base/rootfs-B/var" 2>/dev/null; then
         echo "WARNING: _mount_loopback_partitions: bind mount var-B into rootfs-B/var failed" >&2
       else
@@ -695,6 +700,7 @@ _unmount_loopback_partitions() {
 
   local target
   for target in "${bind_targets[@]}"; do
+    # lint-ignore: strict-mount
     umount "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || {
       rc=1
       true
@@ -726,6 +732,7 @@ _unmount_loopback_partitions() {
   fi
 
   for target in "${regular_mounts[@]}"; do
+    # lint-ignore: strict-mount
     umount "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || {
       rc=1
       true

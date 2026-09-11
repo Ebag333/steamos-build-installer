@@ -14,7 +14,7 @@
 #
 # Exceptions (allowlisted):
 #   - lib/library-loader.sh  — the centralized loader itself
-#   - Entry points           — steamos-build.sh, lib/backend.sh, lib/repatch.sh, etc.
+#   - Entry points           — steamos-build.sh, lib/backend.sh, etc.
 #   - Build subsystem        — lib/build/** (has its own internal architecture)
 #   - Configs                — lib/configs/** (standalone build recipe scripts)
 #   - Optimizations          — lib/optimizations/entry.sh (dynamic module loading)
@@ -70,7 +70,6 @@ fi
 ALLOWED_ENTRYPOINTS=(
   "steamos-build.sh"
   "lib/backend.sh"
-  "lib/repatch.sh"
   "lib/customization.sh"
   "lib/atomupd-wrapper.sh"
   "lib/update-wrapper.sh"
@@ -78,6 +77,7 @@ ALLOWED_ENTRYPOINTS=(
   "lib/scan-hardware.sh"
   "lib/diagnostics/scan-hardware.sh"
   "test-aotofu-e2e.sh"
+  "tools/tests/efi-state/test-harness.sh"
 )
 
 # Directories whose internal sourcing is self-contained
@@ -144,7 +144,7 @@ while IFS= read -r -d '' file; do
       violations=$((violations + 1))
     fi
   done <"$file"
-done < <(find "$REPO_ROOT" -name '*.sh' -print0)
+done < <(find "$REPO_ROOT" -name '*.sh' -not -path '*/tools/tests/efi-state/*' -print0)
 
 # ---------------------------------------------------------------------------
 # BASH_SOURCE Guard Check

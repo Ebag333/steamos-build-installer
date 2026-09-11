@@ -30,9 +30,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=test-harness.sh
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/test-harness.sh"
-# shellcheck source=fixture-factory.sh
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/fixture-factory.sh"
 # shellcheck source=build-helpers.sh
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/build-helpers.sh"

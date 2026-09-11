@@ -36,18 +36,12 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=test-harness.sh
 # shellcheck disable=SC1091
 source "$_SCRIPT_DIR/test-harness.sh"
-# shellcheck source=fixture-factory.sh
-# shellcheck disable=SC1091
-source "$_SCRIPT_DIR/fixture-factory.sh"
 # shellcheck source=build-helpers.sh
 # shellcheck disable=SC1091
 source "$_SCRIPT_DIR/build-helpers.sh"
 # shellcheck source=validators.sh
 # shellcheck disable=SC1091
 source "$_SCRIPT_DIR/validators.sh"
-# shellcheck source=topology.sh
-# shellcheck disable=SC1091
-source "$_SCRIPT_DIR/topology.sh"
 
 # ---------------------------------------------------------------------------
 # B-01: Happy path — all generated artifacts pass semantic validation

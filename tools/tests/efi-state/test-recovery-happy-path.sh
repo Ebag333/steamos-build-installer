@@ -32,12 +32,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=test-harness.sh
 source "$SCRIPT_DIR/test-harness.sh"
 # shellcheck disable=SC1091
-# shellcheck source=fixture-factory.sh
-source "$SCRIPT_DIR/fixture-factory.sh"
-# shellcheck disable=SC1091
-# shellcheck source=topology.sh
-source "$SCRIPT_DIR/topology.sh"
-# shellcheck disable=SC1091
 # shellcheck source=recovery-helpers.sh
 source "$SCRIPT_DIR/recovery-helpers.sh"
 

@@ -27,6 +27,8 @@ BACKEND="$SCRIPT_DIR/lib/backend.sh"
 source "$SCRIPT_DIR/lib/pci-discovery.sh"
 # shellcheck source=lib/args.sh
 source "$SCRIPT_DIR/lib/args.sh"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
 
 # Load build defaults.  If defaults.conf is missing, all flags start blank.
 DEFAULTS_CONF="$SCRIPT_DIR/lib/configs/defaults.conf"
@@ -48,7 +50,7 @@ CLI_MODE=0
 SETUP_MODE=0
 
 usage() { # lint-ignore: no-shadow
-  cat "$(dirname "${BASH_SOURCE[0]}")/lib/heredocs/static/usage-steamos-build.txt"
+  cat "$(heredoc_dir)/static/usage-steamos-build.txt"
 }
 
 # ---------------------------------------------------------------------------
