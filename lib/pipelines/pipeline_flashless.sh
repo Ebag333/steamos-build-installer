@@ -17,11 +17,11 @@ fi
 register_flashless_pipeline() {
   _PIPELINE_NAME="flashless"
   define_pipeline "detect" "extract" "deploy" "configure" "activate"
-  register_phase "detect" "_phase_flashless_detect" "Detect slots and run preflight checks"
-  register_phase "extract" "_phase_flashless_extract" "Extract source image and check sizes"
-  register_phase "deploy" "_phase_flashless_deploy" "Format target, write rootfs, verify partsets"
-  register_phase "configure" "_phase_flashless_configure" "Restore etc, rebuild boot, restore read-only"
-  register_phase "activate" "_phase_flashless_activate" "Verify final state and activate slot"
+  register_phase "detect" "_phase_flashless_detect" "Detect slots and run preflight checks" "preparing & validating"
+  register_phase "extract" "_phase_flashless_extract" "Extract source image and check sizes" "extracting source image"
+  register_phase "deploy" "_phase_flashless_deploy" "Format target, write rootfs, verify partsets" "deploying image to target"
+  register_phase "configure" "_phase_flashless_configure" "Restore etc, rebuild boot, restore read-only" "configuring target system"
+  register_phase "activate" "_phase_flashless_activate" "Verify final state and activate slot" "verification & activation"
 }
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,6 @@ _flashless_cleanup() {
 
 # Phase: detect — detect slots and run preflight checks
 _phase_flashless_detect() {
-  stage_header "preparing & validating"
   flashless_detect_slots
 
   preflight_validate \
@@ -70,7 +69,6 @@ _phase_flashless_detect() {
 
 # Phase: extract — extract source image and check sizes
 _phase_flashless_extract() {
-  stage_header "extracting source image"
   flashless_extract_image "$IMG"
   flashless_check_sizes
   return 0
@@ -78,7 +76,6 @@ _phase_flashless_extract() {
 
 # Phase: deploy — format target, write rootfs, detach source, verify partsets
 _phase_flashless_deploy() {
-  stage_header "deploying image to target"
   flashless_format_target
   flashless_write_rootfs
 
@@ -110,7 +107,6 @@ _phase_flashless_deploy() {
 
 # Phase: configure — restore /etc, rebuild boot, restore read-only
 _phase_flashless_configure() {
-  stage_header "configuring target system"
   flashless_restore_etc
   flashless_rebuild_boot
   flashless_restore_rootfs_ro
@@ -119,7 +115,6 @@ _phase_flashless_configure() {
 
 # Phase: activate — verify final state and activate slot
 _phase_flashless_activate() {
-  stage_header "verification & activation"
   flashless_verify_final
   flashless_activate_slot
   return 0

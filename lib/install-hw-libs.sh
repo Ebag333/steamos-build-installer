@@ -851,6 +851,25 @@ _install_build_recipes() {
       local _install_args=""
       _install_args="$(sed -n 's/^INSTALL_ARGS=//p' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '"' | head -1)"
 
+      # Install BUILD_DEPS and RUNTIME_DEPS from recipe.conf before running the script
+      local _deps=""
+      if [[ -f "$recipe_dir/recipe.conf" ]]; then
+        _deps="$(sed -n '/^BUILD_DEPS=(/,/^)/{/^BUILD_DEPS=(/s///;/^)/s///;p}' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '()"')"
+        _deps+=" $(sed -n '/^RUNTIME_DEPS=(/,/^)/{/^RUNTIME_DEPS=(/s///;/^)/s///;p}' "$recipe_dir/recipe.conf" 2>/dev/null | tr -d '()"')"
+      fi
+      # Trim leading/trailing whitespace before checking emptiness
+      _deps="${_deps## }"
+      _deps="${_deps%% }"
+      if [[ -n "$_deps" ]]; then
+        log "    Installing recipe dependencies: $_deps"
+        # shellcheck disable=SC2086 # _deps is intentionally word-split
+        if ! pacman_install --chroot --no-needed --noconfirm -- $_deps; then
+          warn "    Dependency installation failed for $name — skipping direct install"
+          HW_FAILED_PKGS+=("$name")
+          continue
+        fi
+      fi
+
       mkdir -p "$MERGED/tmp/build/sources"
       if [[ -d "$recipe_dir/sources" ]]; then
         cp -a "$recipe_dir/sources/." "$MERGED/tmp/build/sources/"

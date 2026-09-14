@@ -18,13 +18,13 @@ fi
 # Use -gA (global associative) to ensure arrays persist when sourced from functions
 declare -gA _PIPELINE_PHASES=()
 declare -gA _PIPELINE_PHASE_DESC=()
+declare -gA _PIPELINE_PHASE_STAGE=()
 declare -ga _PIPELINE_ORDER=()
 declare -g _PIPELINE_START_TIME=0
 declare -ga _PIPELINE_RESULTS=()
 declare -g _PIPELINE_PASSED=0
 declare -g _PIPELINE_FAILED=0
 declare -g _PIPELINE_NAME=""
-declare -g _PIPELINE_LOG_FILE=""
 
 # ---------------------------------------------------------------------------
 # Pipeline Definition
@@ -59,8 +59,10 @@ define_pipeline() {
   # Clear the associative arrays
   unset _PIPELINE_PHASES
   unset _PIPELINE_PHASE_DESC
+  unset _PIPELINE_PHASE_STAGE
   declare -gA _PIPELINE_PHASES=()
   declare -gA _PIPELINE_PHASE_DESC=()
+  declare -gA _PIPELINE_PHASE_STAGE=()
 
   # Reset results tracking
   unset _PIPELINE_RESULTS
@@ -70,7 +72,7 @@ define_pipeline() {
 }
 
 # Register a phase implementation.
-# Args: $1 = phase name, $2 = function name, $3 = description (optional)
+# Args: $1 = phase name, $2 = function name, $3 = description (optional), $4 = stage label (optional)
 register_phase() {
   if [[ -z "${1:-}" ]]; then
     warn "register_phase: missing phase name"
@@ -83,6 +85,7 @@ register_phase() {
   local phase="$1"
   local func="$2"
   local desc="${3:-}"
+  local stage="${4:-}"
 
   if ! declare -F "$func" >/dev/null 2>&1; then
     warn "register_phase: '$func' is not a declared function"
@@ -95,6 +98,7 @@ register_phase() {
 
   _PIPELINE_PHASES["$phase"]="$func"
   _PIPELINE_PHASE_DESC["$phase"]="$desc"
+  _PIPELINE_PHASE_STAGE["$phase"]="$stage"
 }
 
 # ---------------------------------------------------------------------------
@@ -144,7 +148,7 @@ run_pipeline() {
   else
     _config_name="(none)"
   fi
-  local _log_path="${_PIPELINE_LOG_FILE:-/dev/stderr}"
+  local _log_path="${_LOG_FILE_PATH:-/dev/stderr}"
 
   log_notice pipeline separator ""
   log_notice pipeline header "pipeline: $_pipe_name"
@@ -152,7 +156,7 @@ run_pipeline() {
   log_notice pipeline header "log: $_log_path"
   log_notice pipeline separator ""
 
-  log "Starting pipeline ($total_phases phases)"
+  log_notice pipeline header "Starting pipeline ($total_phases phases)"
 
   # Print phase list header
   local _phase_list=""
@@ -160,7 +164,7 @@ run_pipeline() {
     [[ -n "$_phase_list" ]] && _phase_list+="  "
     _phase_list+="· ${_PIPELINE_PHASE_DESC[$_p]:-$_p}"
   done
-  log "$_phase_list"
+  log_notice pipeline header "$_phase_list"
 
   # Track results for summary (global so ERR trap can access them)
   _PIPELINE_RESULTS=()
@@ -169,6 +173,7 @@ run_pipeline() {
 
   local phase_num=0
   local func desc phase_start phase_end phase_duration
+  local _prev_stage=""
   for phase in "${phases_to_run[@]}"; do
     phase_num=$((phase_num + 1))
 
@@ -184,6 +189,13 @@ run_pipeline() {
     # Execute phase
     phase_start=$(date +%s)
 
+    # Print stage header if stage changed (before capturing phase output)
+    local _stage="${_PIPELINE_PHASE_STAGE[$phase]:-}"
+    if [[ -n "$_stage" && "$_stage" != "$_prev_stage" ]]; then
+      stage_header "$_stage"
+    fi
+    _prev_stage="$_stage"
+
     local phase_rc=0
     if [[ "${VERBOSE:-0}" -ne 1 && -t 1 ]]; then
       # Non-verbose CLI mode: capture phase output, show only markers
@@ -195,8 +207,26 @@ run_pipeline() {
         mkdir -p "$_phase_tmp_dir" 2>/dev/null || _phase_tmp_dir="/tmp"
       fi
       _phase_log="$(mktemp "${_phase_tmp_dir}/steamos-build-phase.XXXXXX")"
-      # lint-ignore: merged-streams  # Captured for failure diagnostics only; both streams displayed together on error
+
+      # Install a temporary EXIT trap so die()-induced exits still dump phase output.
+      local _saved_phase_exit_trap
+      _saved_phase_exit_trap="$(trap -p EXIT)"
+      trap '
+        if [[ -n "${_phase_log:-}" && -s "${_phase_log:-}" ]]; then
+          warn "Phase output (interrupted by exit):"
+          cat "$_phase_log"
+          rm -f "$_phase_log"
+        fi
+        eval "${_saved_phase_exit_trap:-trap - EXIT}"
+      ' EXIT
+
+      # lint-ignore: merged-streams
       "$func" >"$_phase_log" 2>&1 || phase_rc=$?
+
+      # Phase completed normally — restore EXIT trap and handle output as before.
+      trap - EXIT
+      eval "${_saved_phase_exit_trap:-trap - EXIT}"
+
       if [[ $phase_rc -ne 0 && -s "$_phase_log" ]]; then
         warn "Phase output:"
         cat "$_phase_log"

@@ -20,9 +20,9 @@ fi
 register_flash_pipeline() {
   _PIPELINE_NAME="flash"
   define_pipeline "validate" "write" "finalize"
-  register_phase "validate" "_phase_flash_validate" "Validate inputs and safety checks"
-  register_phase "write" "_phase_flash_write" "Write image to target device"
-  register_phase "finalize" "_phase_flash_finalize" "GPT fixup, partition discovery, mount home"
+  register_phase "validate" "_phase_flash_validate" "Validate inputs and safety checks" "flash validate"
+  register_phase "write" "_phase_flash_write" "Write image to target device" "flash write"
+  register_phase "finalize" "_phase_flash_finalize" "GPT fixup, partition discovery, mount home" "flash finalize"
 }
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,6 @@ register_flash_pipeline() {
 # Validates inputs, checks sizes, and ensures flash can proceed.
 
 _phase_flash_validate() {
-  stage_header "flash validate"
   local img="$IMG" target="$TARGET_DEV"
 
   [[ -f "$img" ]] || {
@@ -72,7 +71,6 @@ _phase_flash_validate() {
 # Unmounts target, computes checksum, writes image via dd, verifies.
 
 _phase_flash_write() {
-  stage_header "flash write"
   local img="$IMG" target="$TARGET_DEV" bs="4M"
 
   # Unmount everything on the target device before writing.
@@ -203,7 +201,6 @@ _phase_flash_write() {
 # GPT fixup, partition discovery, and mount home partition.
 
 _phase_flash_finalize() {
-  stage_header "flash finalize"
   local img="$IMG" target="$TARGET_DEV"
 
   # Raw disk images carry their backup GPT at the end of the IMAGE.  When that

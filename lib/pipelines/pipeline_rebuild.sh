@@ -53,14 +53,14 @@ register_rebuild_pipeline() {
     "configure" \
     "reconcile"
 
-  register_phase "mount" "_phase_rebuild_mount" "Mount target rootfs"
-  register_phase "preflight" "_phase_rebuild_preflight" "Run preflight safety checks"
-  register_phase "discover" "_phase_rebuild_discover" "Discover kernel and packages"
-  register_phase "sysupgrade" "_phase_rebuild_sysupgrade" "System upgrade (pacman -Syu)"
-  register_phase "overlay" "_phase_rebuild_overlay" "Create overlay chroot"
-  register_phase "install" "_phase_rebuild_install" "Install drivers and packages"
-  register_phase "configure" "_phase_rebuild_configure" "Configure system and GRUB"
-  register_phase "reconcile" "_phase_rebuild_reconcile" "Reconcile and verify"
+  register_phase "mount" "_phase_rebuild_mount" "Mount target rootfs" "prepare target"
+  register_phase "preflight" "_phase_rebuild_preflight" "Run preflight safety checks" "preflight"
+  register_phase "discover" "_phase_rebuild_discover" "Discover kernel and packages" ""
+  register_phase "sysupgrade" "_phase_rebuild_sysupgrade" "System upgrade (pacman -Syu)" "system upgrade"
+  register_phase "overlay" "_phase_rebuild_overlay" "Create overlay chroot" "install drivers"
+  register_phase "install" "_phase_rebuild_install" "Install drivers and packages" ""
+  register_phase "configure" "_phase_rebuild_configure" "Configure system and GRUB" "finalize & verify"
+  register_phase "reconcile" "_phase_rebuild_reconcile" "Reconcile and verify" ""
 }
 
 # ---------------------------------------------------------------------------
@@ -126,7 +126,6 @@ register_rebuild_cleanup() {
 
 # Phase: Mount target rootfs
 _phase_rebuild_mount() {
-  stage_header "prepare target"
   # Run boot diagnostics
   if declare -F diagnose_boot_layout >/dev/null 2>&1; then
     diagnose_boot_layout "$PARTSET"
@@ -238,7 +237,6 @@ _phase_rebuild_mount() {
 
 # Phase: Run preflight safety checks
 _phase_rebuild_preflight() {
-  stage_header "preflight"
 
   # Translate PARTSET to slot label
   local slot_label=""
@@ -318,7 +316,6 @@ _phase_rebuild_discover() {
 
 # Phase: System upgrade (pacman -Syu directly on target)
 _phase_rebuild_sysupgrade() {
-  stage_header "system upgrade"
   # Generate machine-id if invalid — systemd-tmpfiles needs it to expand %m
   # EUCLEAN ("Structure needs cleaning") means invalid format, not just empty
   # This is temporary for build-time; restored during finalization
@@ -374,7 +371,6 @@ _phase_rebuild_sysupgrade() {
 
 # Phase: Create overlay chroot
 _phase_rebuild_overlay() {
-  stage_header "install drivers"
   # Prepare temporary ext4 overlay workspace
   log "Preparing temporary ext4 overlay workspace"
 
@@ -472,7 +468,6 @@ _phase_rebuild_install() {
 
 # Phase: Configure system and GRUB
 _phase_rebuild_configure() {
-  stage_header "finalize & verify"
   # Reconcile initramfs
   step "Restoring module autoloading in initramfs"
   reconcile_initramfs "$NEWROOT" "$KVER" "${INITRAMFS_MODULES:-}"

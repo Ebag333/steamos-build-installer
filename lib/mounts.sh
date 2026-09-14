@@ -174,11 +174,11 @@ wait_ext4_gone() {
 # ────────────────────────────────────────────────────────────────────────────────
 
 # _check_bind_propagation TARGET
-#   Check propagation type of a mount if it is a virtual-filesystem bind
-#   (/dev, /sys, /proc or subpaths).
-#   Returns 0 (proceed) for slave, private, or non-virtual binds.
+#   Check propagation type of a mount if it is an actual bind mount
+#   (has "bind" in its mount options).
+#   Returns 0 (proceed) for non-bind mounts, slave, or private propagation.
 #   Returns 1 (abort) for shared propagation, unknown propagation, or
-#   if findmnt is available but cannot determine the source/propagation.
+#   if findmnt is available but cannot determine the propagation.
 #   Returns 0 silently if findmnt is not installed (cannot check).
 #   Sets variable _PROPAGATION_TYPE to the detected type (or "n/a").
 _check_bind_propagation() {
@@ -188,21 +188,19 @@ _check_bind_propagation() {
   # Bail early if findmnt is not available (cannot check, must proceed)
   command -v findmnt >/dev/null 2>&1 || return 0
 
-  # Get mount source to determine if this is a virtual-fs bind
-  local _src
-  _src="$(findmnt -no SOURCE -T "$target" 2>/dev/null)" || {
-    warn "_check_bind_propagation: cannot determine source for $target — aborting"
-    cleanup_log "ABORT (source query failed): $target"
-    return 1
-  }
-
-  # Check if source is a virtual filesystem bind
-  case "$_src" in
-    /dev | /dev/* | /sys | /sys/* | /proc | /proc/*) ;;
+  # Check if mount is actually a bind mount (not just source-path matching)
+  local _opts
+  _opts="$(findmnt -no OPTIONS -T "$target" 2>/dev/null)" || _opts=""
+  case "$_opts" in
+    *bind*) ;;  # Actual bind mount — check propagation
     *)
-      return 0 # Not a virtual-fs bind — proceed
+      return 0 # Not a bind mount — proceed with unmount
       ;;
   esac
+
+  # Get mount source for logging
+  local _src
+  _src="$(findmnt -no SOURCE -T "$target" 2>/dev/null)" || _src="<unknown>"
 
   # Query propagation type
   local _prop
@@ -265,12 +263,21 @@ strict_unmount() {
 
   # Check for shared virtual-fs descendant mounts that would be caught by umount -R
   local _desc_check
-  _desc_check="$(findmnt -rno TARGET,PROPAGATION -M "$target" 2>/dev/null)" || true
+  _desc_check="$(findmnt -rno TARGET,FSTYPE,PROPAGATION -M "$target" 2>/dev/null)" || true
   if [[ -n "$_desc_check" ]]; then
     while IFS= read -r _line; do
-      local _d_target _d_prop
+      local _d_target _d_fstype _d_prop
       _d_target="$(echo "$_line" | awk '{print $1}')"
-      _d_prop="$(echo "$_line" | awk '{print $2}')"
+      _d_fstype="$(echo "$_line" | awk '{print $2}')"
+      _d_prop="$(echo "$_line" | awk '{print $3}')"
+      # Only refuse for virtual-fs descendants (devtmpfs, sysfs, proc),
+      # not block device mounts (ext4, vfat, etc.) that happen to be shared.
+      case "$_d_fstype" in
+        devtmpfs | sysfs | proc) ;;
+        *)
+          continue  # Not a virtual-fs mount — skip
+          ;;
+      esac
       case "$_d_prop" in
         shared | shared:*)
           warn "strict_unmount: descendant shared propagation found: $_d_target (under $target)"
@@ -1178,6 +1185,15 @@ _cleanup_detach_registered_loops() {
     fi
   fi
 
+  # ── sysfs/loop diagnostics ──────────────────────────────────────────────
+  # Dump diagnostic state before entering the detach loop so the cleanup log
+  # records the kernel's view of loop/sysfs regardless of per-loop outcome.
+  cleanup_log "--- sysfs/loop diagnostics ---"
+  cleanup_log "$(findmnt -rn -M /sys -o TARGET,SOURCE,FSTYPE,VFS-OPTIONS,PROPAGATION 2>/dev/null || echo 'findmnt /sys failed')"
+  cleanup_log "$(ls -ld /sys/block/loop0 /sys/block/loop0/loop 2>&1 || true)"
+  cleanup_log "$(ls -l /sys/block/loop0/loop/backing_file 2>&1 || true)"
+  cleanup_log "$(losetup --list --noheadings --output NAME,BACK-FILE,AUTOCLEAR 2>/dev/null || echo 'losetup list failed')"
+
   local _n=0
   [[ ${CLEANUP_LOOPS[0]+_} ]] && _n=${#CLEANUP_LOOPS[@]}
   for ((i = 0; i < _n; i++)); do
@@ -1191,36 +1207,189 @@ _cleanup_detach_registered_loops() {
       continue
     fi
 
-    # Verify loop backing identity before detaching
-    local current_backing_id=""
-
-    # Try sysfs first (gives us the backing path, then we stat it)
-    if [[ -f "/sys/block/${l##*/}/loop/backing_file" ]]; then
-      local current_backing_path
-      current_backing_path="$(cat "/sys/block/${l##*/}/loop/backing_file" 2>/dev/null)" || current_backing_path=""
-      if [[ -n "$current_backing_path" && -e "$current_backing_path" ]]; then
-        current_backing_id="$(stat -c '%d:%i' "$current_backing_path" 2>/dev/null)" || current_backing_id=""
+    # ── Dual-source identity verification ──────────────────────────────────
+    # Source 1: sysfs
+    local _sys_backing="/sys/block/${l##*/}/loop/backing_file"
+    local _sysfs_backing=""
+    local _sys_path="$_sys_backing"
+    if [[ ! -e "$_sys_backing" ]]; then
+      warn "Loop sysfs backing path absent: $_sys_path"
+    elif [[ ! -r "$_sys_backing" ]]; then
+      warn "Loop sysfs backing path unreadable: $_sys_path"
+    else
+      _sysfs_backing="$(< "$_sys_backing")" 2>/dev/null || {
+        warn "Failed reading loop backing path: $_sys_path"
+        _sysfs_backing=""
+      }
+      if [[ -n "$_sysfs_backing" ]]; then
+        debug "Loop backing identity: device=$l sysfs=$_sys_path backing=$_sysfs_backing"
       fi
     fi
 
-    # If sysfs failed, we cannot verify identity — preserve the loop
-    if [[ -z "$current_backing_id" ]]; then
-      warn "_cleanup_detach_registered_loops: cannot verify identity of $l (sysfs unavailable) — preserving"
-      cleanup_log "LOOP_DETACH SKIP (identity unverifiable): $l"
+    # Source 2: losetup
+    local _losetup_backing=""
+    local _losetup_line
+    _losetup_line="$(losetup "$l" 2>/dev/null)" || _losetup_line=""
+    if [[ -n "$_losetup_line" ]]; then
+      # Parse backing file from losetup output
+      # Format: /dev/loop0: []: (/path/to/file)
+      # or:     /dev/loop0: []: (/path/to/file (deleted))
+      _losetup_backing="${_losetup_line#*(}"
+      _losetup_backing="${_losetup_backing%)}"
+      _losetup_backing="${_losetup_backing% (deleted)}"
+    fi
+
+    # Resolve identities (device:inode) for each available source
+    local _sys_id=""
+    local _lo_id=""
+    local _sys_available=0
+    local _lo_available=0
+    local _sys_resolved=0
+    local _lo_resolved=0
+
+    if [[ -n "$_sysfs_backing" ]]; then
+      _sys_available=1
+      if [[ -e "$_sysfs_backing" ]]; then
+        _sys_id="$(stat -c '%d:%i' "$_sysfs_backing" 2>/dev/null)" || _sys_id=""
+        if [[ -n "$_sys_id" ]]; then
+          _sys_resolved=1
+        fi
+      fi
+    fi
+
+    if [[ -n "$_losetup_backing" ]]; then
+      _lo_available=1
+      if [[ -e "$_losetup_backing" ]]; then
+        _lo_id="$(stat -c '%d:%i' "$_losetup_backing" 2>/dev/null)" || _lo_id=""
+        if [[ -n "$_lo_id" ]]; then
+          _lo_resolved=1
+        fi
+      fi
+    fi
+
+    # Log both sources with all resolved identities
+    debug "Identity sources for $l: registered=$expected_backing sysfs=$_sysfs_backing (id=$_sys_id) losetup=$_losetup_backing (id=$_lo_id)"
+    cleanup_log "IDENTITY $l registered=$expected_backing sysfs=$_sysfs_backing (id=$_sys_id) losetup=$_losetup_backing (id=$_lo_id) autoclear=$(losetup -l -O AUTOCLEAR "$l" 2>/dev/null | tail -1 || echo '?')"
+
+    # Decision tree: dual-source identity verification
+    local _current_backing_id=""
+    local _authorize=0
+    local _resolved_mismatch=0
+
+    if ((_sys_resolved && _lo_resolved)); then
+      # Both sources resolved — check for agreement first
+      if [[ "$_sys_id" == "$_lo_id" && -n "$_sys_id" ]]; then
+        # Sources agree with each other — check against registered
+        if [[ "$_sys_id" == "$expected_backing" ]]; then
+          debug "Both sources agree and match registered identity for $l"
+          _current_backing_id="$_sys_id"
+          _authorize=1
+        else
+          warn "$l identity MISMATCH: both sources agree (id=$_sys_id) but registered=$expected_backing"
+          cleanup_log "LOOP_DETACH MISMATCH: $l both=$_sys_id registered=$expected_backing"
+        fi
+      else
+        # Sources disagree — preserve and log
+        warn "$l identity DISAGREEMENT: sysfs=$_sysfs_backing (id=$_sys_id) vs losetup=$_losetup_backing (id=$_lo_id) vs registered=$expected_backing"
+        cleanup_log "LOOP_DETACH DISAGREEMENT: $l sysfs=$_sysfs_backing($_sys_id) losetup=$_losetup_backing($_lo_id) registered=$expected_backing"
+      fi
+    elif ((_sys_resolved && !_lo_resolved)); then
+      # Only sysfs resolved
+      if [[ -n "$_sys_id" && "$_sys_id" == "$expected_backing" ]]; then
+        debug "Only sysfs resolved and matches registered identity for $l"
+        _current_backing_id="$_sys_id"
+        _authorize=1
+      elif [[ -n "$_sys_id" ]]; then
+        # sysfs resolved an identity that doesn't match registered — preserve
+        _resolved_mismatch=1
+      elif [[ -z "$_sys_id" && -n "$_sysfs_backing" ]]; then
+        # sysfs path exists but stat failed — try workspace fallback
+        if [[ -n "${CLEANUP_WORKSPACE_ROOT:-}" ]]; then
+          local _sys_ws_resolved
+          _sys_ws_resolved="$(realpath -m "$_sysfs_backing" 2>/dev/null)" || _sys_ws_resolved="$_sysfs_backing"
+          if [[ "$_sys_ws_resolved" == "${CLEANUP_WORKSPACE_ROOT%/}"/* ]]; then
+            debug "sysfs backing stale but inside workspace — accepting registered identity for $l"
+            cleanup_log "LOOP_DETACH STALE-WORKSPACE fallback: $l sysfs=$_sysfs_backing"
+            _current_backing_id="$expected_backing"
+            _authorize=1
+          fi
+        fi
+      fi
+    elif ((!_sys_resolved && _lo_resolved)); then
+      # Only losetup resolved
+      if [[ -n "$_lo_id" && "$_lo_id" == "$expected_backing" ]]; then
+        debug "Only losetup resolved and matches registered identity for $l"
+        _current_backing_id="$_lo_id"
+        _authorize=1
+      elif [[ -n "$_lo_id" ]]; then
+        # losetup resolved an identity that doesn't match registered — preserve
+        _resolved_mismatch=1
+      elif [[ -n "$_losetup_backing" && -z "$_lo_id" && -n "${CLEANUP_WORKSPACE_ROOT:-}" ]]; then
+        # Backing file deleted/renamed — check if path was in workspace
+        local _lo_ws_resolved
+        _lo_ws_resolved="$(realpath -m "$_losetup_backing" 2>/dev/null)" || _lo_ws_resolved="$_losetup_backing"
+        if [[ "$_lo_ws_resolved" == "${CLEANUP_WORKSPACE_ROOT%/}"/* ]]; then
+          debug "losetup backing deleted but inside workspace — accepting registered identity for $l"
+          cleanup_log "LOOP_DETACH WORKSPACE-DELETED fallback: $l losetup=$_losetup_backing"
+          _current_backing_id="$expected_backing"
+          _authorize=1
+        fi
+      fi
+    fi
+
+    # Workspace fallbacks: only when no source resolved a mismatching identity
+    # (when a source resolved but doesn't match registered, we must preserve
+    # unconditionally — no fallbacks)
+    if ((!_authorize && !_resolved_mismatch)); then
+      local _both_resolved=0
+      if ((_sys_resolved && _lo_resolved)); then
+        _both_resolved=1
+      fi
+
+      if ((_both_resolved)); then
+        # Both sources resolved but neither matched registered identity —
+        # this is a disagreement or agreed-mismatch; preserve unconditionally
+        warn "_cleanup_detach_registered_loops: $l both sources resolved but neither matches — preserving"
+        cleanup_log "LOOP_DETACH PRESERVE (both resolved, no match): $l"
+      elif [[ -n "${CLEANUP_WORKSPACE_ROOT:-}" ]]; then
+        # At least one source unavailable — try workspace fallbacks
+        # Workspace fallback for stale sysfs path (the original rename case)
+        if [[ -z "$_current_backing_id" && -n "$_sysfs_backing" ]]; then
+          local _sys_fb_resolved
+          _sys_fb_resolved="$(realpath -m "$_sysfs_backing" 2>/dev/null)" || _sys_fb_resolved="$_sysfs_backing"
+          if [[ "$_sys_fb_resolved" == "${CLEANUP_WORKSPACE_ROOT%/}"/* ]]; then
+            debug "sysfs backing stale but inside workspace — accepting registered identity for $l"
+            cleanup_log "LOOP_DETACH STALE-WORKSPACE fallback: $l sysfs=$_sysfs_backing"
+            _current_backing_id="$expected_backing"
+            _authorize=1
+          fi
+        fi
+        # Workspace fallback for deleted losetup path
+        if [[ -z "$_current_backing_id" && -n "$_losetup_backing" ]]; then
+          local _lo_fb_resolved
+          _lo_fb_resolved="$(realpath -m "$_losetup_backing" 2>/dev/null)" || _lo_fb_resolved="$_losetup_backing"
+          if [[ "$_lo_fb_resolved" == "${CLEANUP_WORKSPACE_ROOT%/}"/* ]]; then
+            debug "losetup backing deleted but inside workspace — accepting registered identity for $l"
+            cleanup_log "LOOP_DETACH WORKSPACE-DELETED fallback: $l losetup=$_losetup_backing"
+            _current_backing_id="$expected_backing"
+            _authorize=1
+          fi
+        fi
+      fi
+    fi
+
+    # If all identity checks failed, we cannot verify identity — preserve the loop
+    if [[ -z "$_current_backing_id" ]]; then
+      warn "_cleanup_detach_registered_loops: $l identity verification failed — preserving"
+      warn "  registered=$expected_backing sysfs=$_sysfs_backing losetup=$_losetup_backing"
+      cleanup_log "LOOP_DETACH SKIP (identity unverifiable): $l registered=$expected_backing sysfs=$_sysfs_backing losetup=$_losetup_backing"
       rc=1
       continue
     fi
 
-    if [[ -z "$expected_backing" || -z "$current_backing_id" ]]; then
+    if [[ -z "$expected_backing" ]]; then
       warn "_cleanup_detach_registered_loops: cannot verify identity of $l — preserving"
       cleanup_log "LOOP_DETACH SKIP (missing identity): $l"
-      rc=1
-      continue
-    fi
-
-    if [[ "$current_backing_id" != "$expected_backing" ]]; then
-      warn "_cleanup_detach_registered_loops: $l backing changed ($expected_backing → $current_backing_id) — preserving"
-      cleanup_log "LOOP_DETACH SKIP (identity changed): $l ($expected_backing → $current_backing_id)"
       rc=1
       continue
     fi
@@ -1230,6 +1399,7 @@ _cleanup_detach_registered_loops() {
     if [[ -f "/sys/block/${l##*/}/loop/backing_file" ]]; then
       local _pf_bp_path
       _pf_bp_path="$(cat "/sys/block/${l##*/}/loop/backing_file" 2>/dev/null)" || _pf_bp_path=""
+      _pf_bp_path="${_pf_bp_path% (deleted)}"
       if [[ -n "$_pf_bp_path" ]]; then
         _pf_ledger_loop_id="loop:$(realpath "$_pf_bp_path" 2>/dev/null || printf '%s' "$_pf_bp_path")"
       fi
@@ -2280,8 +2450,14 @@ _assert_no_pseudo_mounts() {
   # Refuse destructive operations while virtual/pseudo-filesystem mounts
   # (/dev, /sys, /proc) remain beneath the given root.  These indicate
   # the tree is still an active chroot and must not be torn down.
-  local _pseudo_output
-  if ! _pseudo_output="$(findmnt -rn -R "$root" 2>/dev/null)"; then
+  local _pseudo_output _findmnt_rc=0
+  _pseudo_output="$(findmnt -rn -R "$root" 2>/dev/null)" || _findmnt_rc=$?
+  if [[ $_findmnt_rc -ne 0 ]]; then
+    # Exit code 1 = no match (path is not a mountpoint). Safe: no submounts exist.
+    # Only die on genuine query failures (32 = bad option, 64 = other error).
+    if [[ $_findmnt_rc -eq 1 ]]; then
+      return 0
+    fi
     die "Refusing destructive cleanup: cannot query mount table for $root"
   fi
   if echo "$_pseudo_output" \

@@ -206,7 +206,7 @@ _detect_driver_packages() {
       [[ -z "$fw" ]] && continue
       local fw_path="usr/lib/firmware/$fw"
       local fw_pkg
-      fw_pkg=$(pacman -F "$fw_path" 2>/dev/null | awk '{print $1}' | head -1 | sed 's|.*/||')
+      fw_pkg=$(pacman -F "$fw_path" 2>/dev/null | awk '{print $1}' | head -1 | sed 's|.*/||' || true)
       if [[ -n "$fw_pkg" && "$fw_pkg" != "No" ]]; then
         driver_pkgs["$fw_pkg"]=1
         break

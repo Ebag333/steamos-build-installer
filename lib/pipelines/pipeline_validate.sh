@@ -22,9 +22,9 @@ register_validate_pipeline() {
     "validate" \
     "report"
 
-  register_phase "discover" "_phase_validate_discover" "Discover context and load config"
-  register_phase "validate" "_phase_validate_run" "Run validation checks"
-  register_phase "report" "_phase_validate_report" "Summarize results"
+  register_phase "discover" "_phase_validate_discover" "Discover context and load config" "discovery"
+  register_phase "validate" "_phase_validate_run" "Run validation checks" "validation"
+  register_phase "report" "_phase_validate_report" "Summarize results" "report"
 }
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,6 @@ _validate_skip() {
 # ---------------------------------------------------------------------------
 
 _phase_validate_discover() {
-  stage_header "discovery"
   local root="${VALIDATE_ROOT:-/}"
 
   log "Validation target: $root"
@@ -124,7 +123,6 @@ _phase_validate_discover() {
 # ---------------------------------------------------------------------------
 
 _phase_validate_run() {
-  stage_header "validation"
   local root="${OPT_ROOT:-/}"
 
   log "Running validation checks"
@@ -1150,7 +1148,6 @@ _validate_is_selected() {
 # ---------------------------------------------------------------------------
 
 _phase_validate_report() {
-  stage_header "report"
   # If a config was loaded, cross-reference results against config selections.
   # Items not selected in the config are overridden to SKIP.
   if [[ "$_VALIDATE_HAS_CONFIG" -eq 1 ]]; then

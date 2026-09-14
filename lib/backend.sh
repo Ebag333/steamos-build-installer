@@ -524,14 +524,14 @@ _backend_build() {
     cleanup_stop_background_jobs
     cleanup_remove_udev_rules
     persist_debug_logs 2>/dev/null || true
-    local _trap_cleanup_rc=0
+    _trap_cleanup_rc=0
     overlay_cleanup 2>/dev/null || _trap_cleanup_rc=1
     cleanup_environment 2>/dev/null || _trap_cleanup_rc=1
     if ((_trap_cleanup_rc != 0)); then
       warn "EXIT trap: cleanup failed — workspace may need manual cleanup"
       _trap_rc=1
     fi
-    local _remaining
+    _remaining=""
     _remaining="$(findmnt -rno TARGET,SOURCE,FSTYPE 2>/dev/null | grep -v "^/dev\|^proc\|^sys\|^run\|^tmp\|^home\|^root\|^opt\|^nix\|^srv\|^efi\|^esp" | grep -v "^-")"
     if [[ -n "$_remaining" ]]; then
       warn "Remaining mounts after cleanup:"
@@ -717,6 +717,19 @@ _backend_validate() {
     log " "
   fi
 
+  # Initialize structured logging.
+  mkdir -p "/home/.steamos-build/logs/${BUILD_ID}"
+  local _console_level="info"
+  if ((DEBUG)); then
+    _console_level="debug"
+  elif ((VERBOSE)); then
+    _console_level="debug"
+  fi
+
+  log_init \
+    --log-file "/home/.steamos-build/logs/${BUILD_ID}/validate.jsonl" \
+    --console-level "$_console_level"
+
   register_validate_pipeline
   local rc=0
   run_pipeline || rc=$?
@@ -797,7 +810,7 @@ _backend_live() {
   else
     cleanup_stop_background_jobs
     cleanup_remove_udev_rules
-    local _trap_cleanup_rc=0
+    _trap_cleanup_rc=0
     overlay_cleanup 2>/dev/null || _trap_cleanup_rc=1
     cleanup_environment 2>/dev/null || _trap_cleanup_rc=1
     if ((_trap_cleanup_rc != 0)); then

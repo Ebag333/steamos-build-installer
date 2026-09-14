@@ -43,15 +43,15 @@ register_build_pipeline() {
     "configure" \
     "finalize"
 
-  register_phase "validate" "_phase_build_validate" "Validate build inputs"
+  register_phase "validate" "_phase_build_validate" "Validate build inputs" "preparation"
   register_phase "setup" "_phase_build_setup" "Set up build environment"
   register_phase "prepare" "_phase_build_prepare" "Prepare rootfs and partitions"
-  register_phase "preflight" "_phase_build_preflight" "Run preflight safety checks"
+  register_phase "preflight" "_phase_build_preflight" "Run preflight safety checks" "preflight"
   register_phase "sysupgrade" "_phase_build_sysupgrade" "Prepare package state"
-  register_phase "overlay" "_phase_build_overlay" "Create build overlay"
+  register_phase "overlay" "_phase_build_overlay" "Create build overlay" "build & install"
   register_phase "build" "_phase_build_build" "Build and install drivers"
-  register_phase "configure" "_phase_build_configure" "Configure system and GRUB"
-  register_phase "finalize" "_phase_build_finalize" "Finalize and publish image"
+  register_phase "configure" "_phase_build_configure" "Configure system and GRUB" "configure"
+  register_phase "finalize" "_phase_build_finalize" "Finalize and publish image" "finalize"
 }
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,6 @@ register_build_pipeline() {
 
 # Phase: Validate build inputs
 _phase_build_validate() {
-  stage_header "preparation"
   # Log condensed build configuration
   if [[ -n "${CONFIG_FILE:-}" && -f "$CONFIG_FILE" ]]; then
     log "Build config: $CONFIG_FILE"
@@ -221,8 +220,6 @@ _phase_build_prepare() {
 
 # Phase: Run preflight safety checks
 _phase_build_preflight() {
-  stage_header "preflight"
-
   # Compute source image hash for integrity verification (PF-64)
   local expected_hash=""
   if [[ -n "${IMG:-}" ]]; then
@@ -337,8 +334,6 @@ _phase_build_sysupgrade() {
 
 # Phase: Create build overlay (on top of updated $MNT)
 _phase_build_overlay() {
-  stage_header "build & install"
-
   # Re-mount rootfs — sysupgrade cleanup unmounted it, but the overlay
   # needs the rootfs as its lowerdir.
   if ! mountpoint -q "$MNT" 2>/dev/null; then
@@ -573,8 +568,6 @@ _phase_build_build() {
 
 # Phase: Configure system and GRUB
 _phase_build_configure() {
-  stage_header "configure"
-
   # Re-mount EFI — sysupgrade cleanup unmounted it, but configure needs
   # it for patch_kernel_cmdline() and finalize_grub().
   if ! mountpoint -q "$EFIMNT" 2>/dev/null; then
@@ -648,7 +641,6 @@ _phase_build_configure() {
 
 # Phase: Finalize and publish image
 _phase_build_finalize() {
-  stage_header "finalize"
   # Restore empty machine-id before publishing — don't bake build-time ID into image
   if [[ "${_MACHINE_ID_WAS_EMPTY:-0}" -eq 1 ]]; then
     log "Restoring empty machine-id (build-time ID was temporary)"

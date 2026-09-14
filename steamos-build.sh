@@ -341,7 +341,8 @@ _dump_filtered_stderr() {
     cat "$_file" >&2
   else
     local _matched
-    _matched="$(grep -E '(✓|✗|·|Results:)' "$_file" 2>/dev/null || true)"
+    # Show pipeline summary markers AND structured log lines at notice+ level.
+    _matched="$(grep -E '(✓|✗|·|Results:| (NOTICE|WARN|ERROR) )' "$_file" 2>/dev/null || true)"
     if [[ -n "$_matched" ]]; then
       printf '%s\n' "$_matched" >&2
     else
