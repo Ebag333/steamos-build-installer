@@ -35,9 +35,11 @@ load_workflow_libs() {
   # earlier ones (e.g. overlay needs common helpers, common_drivers needs
   # common_modules and overlay globals).
   local -a common_libs=(
+    logging
     pipeline
     workflow-common
     common
+    protected
     mounts
     pipeline_init
     overlay
@@ -101,7 +103,7 @@ load_workflow_libs() {
       )
       ;;
     *)
-      printf '[loader] WARNING: Unknown workflow type: %s\n' "$workflow" >&2
+      log_warn loader warning "Unknown workflow type: $workflow"
       return 1
       ;;
   esac
@@ -132,7 +134,7 @@ _load_lib() {
   local lib_path="$base_dir/$lib_name.sh"
 
   if [[ ! -f "$lib_path" || ! -r "$lib_path" ]]; then
-    printf '[loader] WARNING: Cannot source library: %s (base_dir=%s) — path is not a readable regular file\n' "$lib_path" "$base_dir" >&2
+    log_warn loader warning "Cannot source library: $lib_path (base_dir=$base_dir) — path is not a readable regular file"
     return 1
   fi
 

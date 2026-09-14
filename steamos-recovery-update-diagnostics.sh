@@ -10,7 +10,7 @@ set -u
 export LC_ALL=C
 
 # shellcheck source=lib/common.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" # lint-ignore: single-source
 
 TS="$(date +%Y%m%d-%H%M%S)"
 HOST="$(hostname 2>/dev/null || echo unknown)"

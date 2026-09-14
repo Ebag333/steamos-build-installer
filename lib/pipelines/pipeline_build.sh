@@ -31,6 +31,7 @@ _diag_os_release() {
 # ---------------------------------------------------------------------------
 
 register_build_pipeline() {
+  _PIPELINE_NAME="build"
   define_pipeline \
     "validate" \
     "setup" \
@@ -172,13 +173,26 @@ _phase_build_setup() {
   OVL_LOOPDEV=""
 
   # Clear stale state and create directories
+  # Ensure workspace root is set before stale cleanup, so safe_rmdir
+  # can distinguish workspace paths from protected host paths.
+  mkdir -p "$WORKDIR" 2>/dev/null || true
+  cleanup_set_workspace "$WORKDIR" 2>/dev/null || true
   setup_clear_stale_state
   setup_dirs
-  cleanup_set_workspace "$WORKDIR" 2>/dev/null || true
 
-  # Raw pacman output log — preserves complete stdout+stderr for diagnostics
-  PACMAN_RAW_LOG="$WORKDIR/backend.pacman.log"
+  # Write pacman log directly to persistent directory for crash resilience
+  local _persist_log_dir
+  # shellcheck disable=SC2153  # BUILD_ID is set by lib/args.sh (via --build-id) or steamos-build.sh
+  _persist_log_dir="/home/.steamos-build/logs/${BUILD_ID}"
+  mkdir -p "$_persist_log_dir" 2>/dev/null || true
+  PACMAN_RAW_LOG="$_persist_log_dir/backend.pacman.log"
+  CLEANUP_LOG="$_persist_log_dir/cleanup.log"
+  : >"$CLEANUP_LOG"
+  ln -sfn "$(basename "$_persist_log_dir")" \
+    "/home/.steamos-build/logs/build-latest" 2>/dev/null || true
   : >"$PACMAN_RAW_LOG"
+  PARTITION_DEBUG_LOG="$_persist_log_dir/partition-debug.log"
+  : >"$PARTITION_DEBUG_LOG"
 
   return 0
 }
@@ -288,11 +302,15 @@ _phase_build_sysupgrade() {
       log "Base OS packages will not be proactively upgraded"
 
       for _attempt in 1 2 3; do
-        if pacman_sync_db --root "$MNT"; then
+        set +e
+        pacman_sync_db --root "$MNT"
+        local _rc=$?
+        set -e
+        if ((_rc == 0)); then
           _ok=1
           break
         fi
-        warn "Package database sync attempt $_attempt failed"
+        warn "Package database sync attempt $_attempt failed (rc=$_rc)"
         sleep "$((_attempt * 2))"
       done
 
@@ -304,13 +322,13 @@ _phase_build_sysupgrade() {
       ;;
   esac
 
-  system_upgrade_cleanup
-
   # Discover kernel version — needed for NVIDIA/header installation in both modes
   discover_neptune_kver "$MNT"
   discover_kernel_pkg "$MNT"
   construct_hdr_url "$MNT"
   log "Build kernel: $KVER ($(basename "$HDR_URL"))"
+
+  system_upgrade_cleanup
 
   progress_emit sysupgrade
 
@@ -320,6 +338,14 @@ _phase_build_sysupgrade() {
 # Phase: Create build overlay (on top of updated $MNT)
 _phase_build_overlay() {
   stage_header "build & install"
+
+  # Re-mount rootfs — sysupgrade cleanup unmounted it, but the overlay
+  # needs the rootfs as its lowerdir.
+  if ! mountpoint -q "$MNT" 2>/dev/null; then
+    log "Remounting rootfs for overlay lowerdir"
+    cleanup_mount "$MNT" "rootfs" -- -o compress-force=zstd:3 "$ROOTPART"
+  fi
+
   # Create overlay filesystem for build environment
   # This overlay sits on top of the already-updated $MNT
   setup_overlay_chroot
@@ -548,6 +574,21 @@ _phase_build_build() {
 # Phase: Configure system and GRUB
 _phase_build_configure() {
   stage_header "configure"
+
+  # Re-mount EFI — sysupgrade cleanup unmounted it, but configure needs
+  # it for patch_kernel_cmdline() and finalize_grub().
+  if ! mountpoint -q "$EFIMNT" 2>/dev/null; then
+    log "Remounting EFI for GRUB configuration"
+    cleanup_mount "$EFIMNT" "efi" -- "$EFIPART"
+  fi
+
+  # Re-mount home — sysupgrade cleanup unmounted it, but configure needs
+  # it for ensure_project_persisted, inject_log_collector, and finalize.
+  if ! mountpoint -q "$HOMEMNT" 2>/dev/null; then
+    log "Remounting home partition"
+    cleanup_mount "$HOMEMNT" "home" -- "$HOMEPART"
+  fi
+
   # Apply all customizations dynamically from config
   step "Applying customizations"
   local all_items
@@ -615,7 +656,6 @@ _phase_build_finalize() {
   fi
 
   _diag_os_release "before finalize"
-  cleanup_disk_space "$MNT" "image-finalize"
   progress_emit finalize
   finalize
 

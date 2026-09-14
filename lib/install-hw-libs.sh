@@ -5,7 +5,7 @@
 # Sourced by the wrapper — do not run directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "lib/install-hw-libs.sh is a library — source it from the wrapper, not run directly." >&2
+  log_error hw library-guard "lib/install-hw-libs.sh is a library — source it from the wrapper, not run directly."
   exit 1
 fi
 
@@ -313,7 +313,7 @@ _check_arch_glibc_compat() {
   log "Checking ${#pkg_files[@]} Arch packages against image glibc $img_glibc"
 
   scan="$WORKDIR/glibc-scan"
-  rm -rf "$scan"
+  safe_rmdir "$scan" 2>/dev/null || true
   mkdir -p "$scan"
 
   # Extract each package independently so files from one package cannot
@@ -344,7 +344,7 @@ _check_arch_glibc_compat() {
   # Firmware/data-only transactions legitimately contain no ELF objects.
   if [[ -z "$max_glibc" ]]; then
     log "Arch package transaction contains no GLIBC symbol requirements"
-    rm -rf "$scan"
+    safe_rmdir "$scan" 2>/dev/null || true
     return 0
   fi
 
@@ -353,7 +353,7 @@ _check_arch_glibc_compat() {
   fi
 
   log "OK: Arch packages need at most glibc $max_glibc (image has $img_glibc)"
-  rm -rf "$scan"
+  safe_rmdir "$scan" 2>/dev/null || true
 }
 
 # Resolve all selected Arch packages as one transaction, download that complete
@@ -404,7 +404,7 @@ _install_arch_hw_manifest() {
   if is_install_chroot; then
     arch_pkgdir_chroot="/tmp/arch-hw-pkgs.$txn_id"
     arch_pkgdir_host="${WORKDIR:?}/arch-hw-pkgs.$txn_id"
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     mkdir -p "$arch_pkgdir_host"
     mkdir -p "$MERGED$arch_pkgdir_chroot"
     cleanup_mount "$MERGED$arch_pkgdir_chroot" "arch pkgcache" -- --bind "$arch_pkgdir_host" \
@@ -413,7 +413,7 @@ _install_arch_hw_manifest() {
   else
     arch_pkgdir_chroot="/tmp/arch-hw-pkgs.$txn_id"
     arch_pkgdir_host="$arch_pkgdir_chroot"
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     mkdir -p "$arch_pkgdir_host"
   fi
 
@@ -433,12 +433,12 @@ _install_arch_hw_manifest() {
     ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
     cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
-      rm -rf "$arch_pkgdir_host"
+      safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
       die "Failed to download Arch hardware packages (required for NVIDIA driver)"
     fi
     warn "  Failed to resolve/download Arch hardware package transaction (non-fatal)"
     HW_FAILED_PKGS+=("${targets[@]}")
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     return 0
   fi
 
@@ -453,12 +453,12 @@ _install_arch_hw_manifest() {
     ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
     cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
-      rm -rf "$arch_pkgdir_host"
+      safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
       die "Failed to install Arch hardware packages (required for NVIDIA driver)"
     fi
     warn "  Failed to install Arch hardware package transaction (non-fatal)"
     HW_FAILED_PKGS+=("${targets[@]}")
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     return 0
   fi
 
@@ -501,7 +501,7 @@ _install_arch_hw_manifest() {
 
   ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
   cleanup_release "$MERGED$arch_pkgdir_chroot" || true
-  rm -rf "$arch_pkgdir_host"
+  safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -573,7 +573,7 @@ _install_arch_hw_manifest_batch() {
   if is_install_chroot; then
     arch_pkgdir_chroot="/tmp/arch-hw-pkgs.$txn_id"
     arch_pkgdir_host="${WORKDIR:?}/arch-hw-pkgs.$txn_id"
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     mkdir -p "$arch_pkgdir_host"
     mkdir -p "$MERGED$arch_pkgdir_chroot"
     cleanup_mount "$MERGED$arch_pkgdir_chroot" "arch pkgcache batch" -- --bind "$arch_pkgdir_host" \
@@ -582,7 +582,7 @@ _install_arch_hw_manifest_batch() {
   else
     arch_pkgdir_chroot="/tmp/arch-hw-pkgs.$txn_id"
     arch_pkgdir_host="$arch_pkgdir_chroot"
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     mkdir -p "$arch_pkgdir_host"
   fi
 
@@ -602,12 +602,12 @@ _install_arch_hw_manifest_batch() {
     ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
     cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
-      rm -rf "$arch_pkgdir_host"
+      safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
       die "Failed to download Arch hardware packages (required for NVIDIA driver)"
     fi
     warn "  Failed to resolve/download Arch hardware package transaction (non-fatal)"
     HW_FAILED_PKGS+=("${targets[@]}")
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     return 0
   fi
 
@@ -622,12 +622,12 @@ _install_arch_hw_manifest_batch() {
     ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
     cleanup_release "$MERGED$arch_pkgdir_chroot" || true
     if ((HW_NVIDIA_REQUESTED)); then
-      rm -rf "$arch_pkgdir_host"
+      safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
       die "Failed to install Arch hardware packages (required for NVIDIA driver)"
     fi
     warn "  Failed to install Arch hardware package transaction (non-fatal)"
     HW_FAILED_PKGS+=("${targets[@]}")
-    rm -rf "$arch_pkgdir_host"
+    safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
     return 0
   fi
 
@@ -670,7 +670,7 @@ _install_arch_hw_manifest_batch() {
 
   ((needs_umount)) && strict_unmount "$MERGED$arch_pkgdir_chroot" "arch pkgcache"
   cleanup_release "$MERGED$arch_pkgdir_chroot" || true
-  rm -rf "$arch_pkgdir_host"
+  safe_rmdir "$arch_pkgdir_host" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -778,15 +778,12 @@ _install_pacman_hw_batch() {
 
   # Post-transaction diagnostics.
   if [[ "${DEBUG:-0}" == 1 ]]; then
-    debug "Post-pacman package database verification:"
-    _run_in_root "pacman -Q nvidia-utils nvidia-open-dkms lib32-nvidia-utils linux-firmware 2>&1 || true" >&2
-    debug "Pacman database:"
-    _run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true" >&2
+    log_debug hw post-pacman-verify "Post-pacman package database verification:" output "$(_run_in_root "pacman -Q nvidia-utils nvidia-open-dkms lib32-nvidia-utils linux-firmware 2>&1 || true" 2>/dev/null || true)"
+    log_debug hw pacman-db "Pacman database:" output "$(_run_in_root "pacman -v 2>/dev/null | grep -E 'Root|DB Path|Cache Dirs' || true" 2>/dev/null || true)"
     if is_install_chroot; then
       local _chroot_dbpath
       _chroot_dbpath="$(resolve_pacman_dbpath "$MERGED")" && _chroot_dbpath="${_chroot_dbpath#"$MERGED"}" || _chroot_dbpath="/usr/lib/holo/pacmandb"
-      debug "NVIDIA local DB entries:"
-      _run_in_root "ls -ld ${_chroot_dbpath}/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true" >&2
+      log_debug hw nvidia-local-db "NVIDIA local DB entries:" output "$(_run_in_root "ls -ld ${_chroot_dbpath}/local/{nvidia-utils,nvidia-open-dkms,lib32-nvidia-utils}-* 2>/dev/null || true" 2>/dev/null || true)"
       # Check for damaged records (missing desc files).
       # shellcheck disable=SC2016 # Variables expand inside the chroot, not here.
       _run_in_root '
@@ -930,7 +927,7 @@ _install_build_recipes() {
       fi
 
       # Clean up temporary recipe dir
-      [[ "$_build_recipe_dir" != "$recipe_dir" ]] && rm -rf "$_build_recipe_dir"
+      [[ "$_build_recipe_dir" != "$recipe_dir" ]] && safe_rmdir "$_build_recipe_dir" 2>/dev/null || true
     fi
 
     if [[ "$built" -eq 0 ]]; then
@@ -1151,7 +1148,7 @@ install_hw_libs() {
       _nv_count="${_nv_count%%[[:space:]]}"
 
       if [[ "$_nv_count" != "1" ]]; then
-        _run_in_root "echo 'ERROR: expected exactly one NVIDIA source tree, found $_nv_count:'; find /usr/src -mindepth 1 -maxdepth 1 -type d -name 'nvidia-*' -printf '  %f\n' || true" >&2 || true
+        log_error hw dkms-source-tree-count "Expected exactly one NVIDIA source tree, found $_nv_count:" sources "$(_run_in_root "find /usr/src -mindepth 1 -maxdepth 1 -type d -name 'nvidia-*' -printf '%f\n' || true" 2>/dev/null || true)"
         die "Expected exactly one NVIDIA source tree in /usr/src, found $_nv_count"
       fi
 

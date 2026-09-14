@@ -81,7 +81,7 @@ _build_devtools_destroy_root() {
 
   if [[ -d "$build_dir" ]]; then
     log "  Destroying build root: $build_dir"
-    rm -rf "$build_dir"
+    safe_rmdir "$build_dir"
   fi
 }
 
@@ -96,10 +96,35 @@ _build_devtools_sync_root() {
   log "  Syncing build root"
 
   # Update the root — Phase 4 already performed pacman -Syu; only refresh databases here.
+  # Defensive: ensure pacman raw log goes to persistent location
+  if [[ -z "${PACMAN_RAW_LOG:-}" || "$PACMAN_RAW_LOG" == /tmp/* ]]; then
+    local _persist_dir="/home/.steamos-build/logs"
+    if [[ -n "${BUILD_ID:-}" ]]; then
+      _persist_dir="/home/.steamos-build/logs/${BUILD_ID}"
+    fi
+    mkdir -p "$_persist_dir" 2>/dev/null || true
+    PACMAN_RAW_LOG="$_persist_dir/devtools-sync.pacman.log"
+  fi
+  local _raw_log="${PACMAN_RAW_LOG}"
+  local _sync_stdout _sync_stderr _sync_rc=0
+  _sync_stdout="$(mktemp /tmp/devtools-sync-stdout.XXXXXX)"
+  _sync_stderr="$(mktemp /tmp/devtools-sync-stderr.XXXXXX)"
   arch-nspawn -C "$pacman_conf" "$root" pacman -Sy --noconfirm --ask=4 \
-    > >(tail -5 | pacman_filter_stdout) \
-    2> >(tee -a "${PACMAN_RAW_LOG:-/dev/null}" | pacman_filter_stderr >&2)
-  if [[ "${PIPESTATUS[0]}" -ne 0 ]]; then
+    >"$_sync_stdout" 2>"$_sync_stderr" || _sync_rc=$?
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_sync_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_sync_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_sync_stdout" ]]; then
+    tail -5 "$_sync_stdout" | pacman_filter_stdout | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_sync_stderr" ]]; then
+    pacman_filter_stderr <"$_sync_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_sync_stdout" "$_sync_stderr"
+  if [[ "$_sync_rc" -ne 0 ]]; then
     warn "Failed to sync build root"
     return 1
   fi
@@ -159,6 +184,12 @@ _build_devtools_run() {
   # -o: install built packages into the chroot before building
   local build_log="$output_dir/build.log"
 
+  local _build_fd
+  : >"$build_log" || return 1
+  if ! exec {_build_fd}>>"$build_log"; then
+    warn "Failed to open build log: $build_log"
+    return 1
+  fi
   (
     cd "$build_src" || exit 1
     local -a makechrootpkg_args=(
@@ -173,10 +204,12 @@ _build_devtools_run() {
     )
     makechrootpkg "${makechrootpkg_args[@]}" \
       2>&1
-  ) | tee "$build_log" || {
+  ) | log_capture_stream --fd "$_build_fd" build info makechrootpkg-output || {
+    exec {_build_fd}>&-
     warn "Build failed — see log: $build_log"
     return 1
   }
+  exec {_build_fd}>&-
 
   # Move any .pkg.tar.* from build_src to output_dir
   find "$build_src" -maxdepth 1 -name '*.pkg.tar.*' -type f -exec mv {} "$output_dir/" \; 2>/dev/null || true

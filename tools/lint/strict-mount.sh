@@ -88,17 +88,22 @@ while IFS= read -r -d '' file; do
   [[ "$skip" == true ]] && continue
 
   lineno=0
+  prev_line=""
   while IFS= read -r line; do
     lineno=$((lineno + 1))
+
+    # Check lint-ignore on current or previous line
+    if [[ "$line" =~ lint-ignore:[[:space:]]*strict-mount ]] \
+      || [[ "$prev_line" =~ lint-ignore:[[:space:]]*strict-mount ]]; then
+      prev_line="$line"
+      continue
+    fi
 
     # Skip comments
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
     # Skip blank lines
     [[ -z "${line// /}" ]] && continue
-
-    # Skip inline ignore
-    [[ "$line" =~ lint-ignore:[[:space:]]*strict-mount ]] && continue
 
     # Skip propagation changes (not mount creation)
     if [[ "$line" =~ --make-rprivate ]] || [[ "$line" =~ --make-rslave ]] || [[ "$line" =~ --make-private ]]; then
@@ -219,6 +224,8 @@ while IFS= read -r -d '' file; do
         violations=$((violations + 1))
       fi
     fi
+
+    prev_line="$line"
   done <"$file"
 done < <(find "$REPO_ROOT" -name '*.sh' -not -path '*/.git/*' -print0)
 

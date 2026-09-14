@@ -540,10 +540,8 @@ reconcile_grub() {
   fi
 
   log "Mounting $label EFI: $efi_dev -> $(readlink -f "$efi_dev" 2>/dev/null || echo '<unresolved>')"
-  # lint-ignore: strict-mount (registered on next line)
-  mount "$efi_dev" "$EFIMNT" \
+  cleanup_mount "$EFIMNT" "$label" -- "$efi_dev" \
     || die "Could not mount EFI for $label"
-  cleanup_track_mount "$EFIMNT"
 
   log "Target EFI mount: $(findmnt -rn -o SOURCE,FSTYPE,OPTIONS,TARGET "$EFIMNT" 2>/dev/null || echo '<unknown>')"
 
@@ -563,8 +561,11 @@ reconcile_grub() {
   # dies) so the trap itself cannot fail while we are already handling an error.
   # shellcheck disable=SC2317  # Called via trap _reconcile_grub_cleanup ERR below
   _reconcile_grub_cleanup() {
+    local _had_e=0
+    [[ -o errexit ]] && _had_e=1
     set +e
     cleanup_unmount_registered 2>/dev/null || true
+    [[ "$_had_e" -eq 1 ]] && set -e
   }
   trap _reconcile_grub_cleanup ERR
 

@@ -314,7 +314,7 @@ build_recipe() {
   if [[ -n "$install_cmd" ]]; then
     BUILD_ARTIFACT=""
     log "Build complete: direct install mode (no artifact)"
-    log ""
+    log " "
     log "IMPORTANT: Direct install mode installs into the build root overlay."
     log "The driver is now available in the build root."
   else
@@ -334,7 +334,7 @@ build_recipe() {
     # shellcheck disable=SC2034 # global set for callers (pipeline_build.sh, validate.sh, etc.)
     BUILD_ARTIFACT="$artifact"
     log "Build complete: $artifact"
-    log ""
+    log " "
     log "IMPORTANT: build_recipe does NOT install into the target."
     log "Use install_build_artifact separately to install the package."
   fi
@@ -408,7 +408,7 @@ _validate_build_artifact() {
     fi
   fi
 
-  log ""
+  log " "
   log "===== ARTIFACT VALIDATION ====="
   log "Package: $pkg_basename"
   [[ -n "$pkg_name" ]] && log "  pkgname: $pkg_name"
@@ -474,7 +474,7 @@ _validate_build_artifact() {
 
   # ── Stage 3: ELF dependency resolution ─────────────────────────────────
   if [[ "$artifact" == *.so || "$artifact" == *.so.* ]]; then
-    log ""
+    log " "
     log "===== ELF DEPENDENCIES ====="
     log "Artifact: $artifact"
 
@@ -520,7 +520,7 @@ _validate_build_artifact() {
     fi
   fi
 
-  log ""
+  log " "
   if ((rc == 0)); then
     log "Artifact validation passed: $pkg_basename"
   else

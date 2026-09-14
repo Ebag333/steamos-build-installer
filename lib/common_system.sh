@@ -5,7 +5,7 @@
 # Sourced by the wrapper — do not run directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "lib/common_system.sh is a library — source it from the wrapper, not run directly." >&2
+  log_error system library-guard "lib/common_system.sh is a library — source it from the wrapper, not run directly."
   exit 1
 fi
 
@@ -63,7 +63,7 @@ rsync_verified() {
 
   if [[ -n "$_diff" ]]; then
     warn "$label verification — content differs:"
-    printf '%s\n' "$_diff" >&2
+    log_debug system rsync-diff "$_diff"
     local m
     for m in "$@"; do strict_unmount "$m" "$label cleanup" || true; done
     die "$label verification failed"
@@ -101,9 +101,8 @@ _cleanup_temporary_files() {
 
   case "$mode" in
     --host)
-      rm -rf -- \
-        /tmp/steamos-build \
-        /dev/shm/steamos-build
+      safe_rmdir /tmp/steamos-build 2>/dev/null || true
+      safe_rmdir /dev/shm/steamos-build 2>/dev/null || true
       ;;
 
     --root)
@@ -111,10 +110,8 @@ _cleanup_temporary_files() {
         warn "_cleanup_temporary_files: refusing --root with /"
         return 1
       }
-
-      rm -rf -- \
-        "$root/tmp/steamos-build" \
-        "$root/var/tmp/steamos-build"
+      safe_rmdir "$root/tmp/steamos-build" 2>/dev/null || true
+      safe_rmdir "$root/var/tmp/steamos-build" 2>/dev/null || true
       ;;
 
     *)
@@ -169,11 +166,17 @@ _cleanup_build_artifacts() {
   local root="${1:-/}"
 
   # makepkg working directories
-  rm -rf -- "$root/tmp/makepkg-"* 2>/dev/null || true
-  rm -rf -- "$root/var/tmp/makepkg-"* 2>/dev/null || true
+  for _mp in "$root"/tmp/makepkg-*; do
+    [[ -e "$_mp" ]] || continue
+    safe_rmdir "$_mp" 2>/dev/null || true
+  done
+  for _mp in "$root"/var/tmp/makepkg-*; do
+    [[ -e "$_mp" ]] || continue
+    safe_rmdir "$_mp" 2>/dev/null || true
+  done
 
   # Root cache (build-user cache cleaned only if populated during build)
-  rm -rf -- "$root/root/.cache" 2>/dev/null || true
+  safe_rmdir "$root/root/.cache" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -202,8 +205,8 @@ _cleanup_dkms_scratch() {
     # Verify installed .ko exists before cleaning scratch
     ko_dir="$root/usr/lib/modules/$kernel"
     if [[ -d "$ko_dir" ]] && find "$ko_dir" -name "${module//-/_}.ko*" -print -quit | grep -q .; then
-      rm -rf -- "$arch_dir/module" 2>/dev/null || true
-      rm -rf -- "$arch_dir/log" 2>/dev/null || true
+      safe_rmdir "$arch_dir/module" 2>/dev/null || true
+      safe_rmdir "$arch_dir/log" 2>/dev/null || true
     fi
   done < <(find "$dkms_dir" -mindepth 3 -maxdepth 3 -type d -print0 2>/dev/null)
 }
@@ -222,8 +225,15 @@ _cleanup_image_finalize() {
 
   # External build intermediates (recovery images, overlay work dirs, etc.)
   # These live outside $root and are safe to remove after image is finalized.
-  rm -rf -- /tmp/steamos-recovery-* 2>/dev/null || true
-  rm -rf -- /tmp/steamos-overlay-* 2>/dev/null || true
+  local _f
+  for _f in /tmp/steamos-recovery-*; do
+    [[ -e "$_f" ]] || continue
+    safe_rmdir "$_f" 2>/dev/null || true
+  done
+  for _f in /tmp/steamos-overlay-*; do
+    [[ -e "$_f" ]] || continue
+    safe_rmdir "$_f" 2>/dev/null || true
+  done
 }
 
 # ---------------------------------------------------------------------------

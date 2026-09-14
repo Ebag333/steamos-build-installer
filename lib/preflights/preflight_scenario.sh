@@ -830,8 +830,6 @@ _preflight_flashless_target_verity_not_active() {
   fi
 
   # --- Check each target device against active dm mappings ---
-  local _pf_dm_check_failed=0
-
   _pf_check_dm_active() {
     local device="$1"
     local label="$2"

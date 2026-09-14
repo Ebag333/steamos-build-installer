@@ -182,7 +182,8 @@ _setup_udev_guard() {
 SUBSYSTEM=="block", KERNEL=="${loop_name}p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0", ENV{ID_PART_ENTRY_UUID}=""
 EOF
 
-  udevadm control --reload-rules || warn "Failed to reload udev rules — quarantine may not be active"
+  log "_setup_udev_guard: reloading host udev rules (udevadm control --reload-rules)"
+  run_dangerous_cmd udevadm control --reload-rules || warn "Failed to reload udev rules — quarantine may not be active"
 }
 
 # Copy (or decompress) the input image into $OUT.  The copy is what we modify;
@@ -280,7 +281,7 @@ setup_loop_mount() {
 
   # Now expose the partitions, with the guard already active.
   partx -a "$LOOPDEV" || die "Failed to register partition devices on $LOOPDEV"
-  udevadm settle --timeout=10
+  run_dangerous_cmd udevadm settle --timeout=10
 
   local checked=0 passed=0
   for part in "$LOOPDEV"p*; do
@@ -288,7 +289,7 @@ setup_loop_mount() {
     ((++checked))
 
     local props
-    props="$(udevadm info -q property -n "$part" 2>/dev/null)" || true
+    props="$(run_dangerous_cmd udevadm info -q property -n "$part" 2>/dev/null)" || true
 
     if echo "$props" | grep -q 'UDISKS_IGNORE=1' \
       && echo "$props" | grep -q 'SYSTEMD_READY=0'; then
@@ -323,11 +324,11 @@ setup_loop_mount() {
   for part in "$LOOPDEV"p*; do
     [[ -b "$part" ]] || continue
 
-    if udevadm info -q symlink -n "$part" 2>/dev/null \
+    if run_dangerous_cmd udevadm info -q symlink -n "$part" 2>/dev/null \
       | tr ' ' '\n' \
       | grep -q '^disk/by-partsets/'; then
       warn "DANGEROUS: $part owns a SteamOS partset DEVLINK"
-      udevadm info -q symlink -n "$part" >&2 || true
+      run_dangerous_cmd udevadm info -q symlink -n "$part" >&2 || true
       collision=1
     fi
   done
@@ -363,11 +364,19 @@ setup_loop_mount() {
     || warn "SteamOS var-A/var partition not found; runtime overlay cleanup will be skipped"
 
   # Diagnostic: check if this is a Btrfs seeding filesystem.
-  log "Rootfs superblock flags:"
-  btrfs inspect-internal dump-super "$ROOTPART" 2>/dev/null | grep -E 'flags|fsid|metadata_uuid' || true
-  log "Inspecting Btrfs FS_TREE root item"
-  btrfs inspect-internal dump-tree -t root "$ROOTPART" 2>/dev/null \
-    | grep -A12 -B2 'key (FS_TREE ROOT_ITEM 0)' || true
+  local _sb_info
+  _sb_info="$(btrfs inspect-internal dump-super "$ROOTPART" 2>/dev/null \
+    | grep -E 'flags|fsid|metadata_uuid')" || true
+  if [[ -n "$_sb_info" ]]; then
+    log_debug setup superblock-flags "$_sb_info"
+  fi
+
+  local _root_item
+  _root_item="$(btrfs inspect-internal dump-tree -t root "$ROOTPART" 2>/dev/null \
+    | grep -A12 -B2 'key (FS_TREE ROOT_ITEM 0)')" || true
+  if [[ -n "$_root_item" ]]; then
+    log_debug setup root-item "$_root_item"
+  fi
   log "mkfs.btrfs version: $(mkfs.btrfs --version 2>/dev/null || echo 'unknown')"
 
   # Unmount any stale mounts backed by our loop partition (use the device,

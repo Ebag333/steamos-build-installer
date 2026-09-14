@@ -110,7 +110,7 @@ pci_discover_modules() {
     mapfile -t mods < <(
       {
         [[ -n "$bound_module" ]] && echo "$bound_module"
-        modprobe -S "$kver" -R "$modalias" 2>/dev/null
+        run_dangerous_cmd modprobe -S "$kver" -R "$modalias" 2>/dev/null
       } \
         | sed '/^[[:space:]]*$/d' \
         | sort -u

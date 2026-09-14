@@ -67,8 +67,10 @@ finalize() {
   # HID module checks — only if logitech-hid was built and installed
   if [[ -d "$MNT/usr/lib/modules/$KVER/updates/logitech" ]]; then
     log "  Checking HID modules at: $MNT/usr/lib/modules/$KVER/updates/logitech/"
+    # lint-ignore: silenced-stdout — compgen -G tests glob match via exit code; output intentionally discarded
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-dj.ko*" >/dev/null \
       || die "hid-logitech-dj.ko missing from image"
+    # lint-ignore: silenced-stdout — compgen -G tests glob match via exit code; output intentionally discarded
     compgen -G "$MNT/usr/lib/modules/$KVER/updates/logitech/hid-logitech-hidpp.ko*" >/dev/null \
       || die "hid-logitech-hidpp.ko missing from image"
     chroot "$MNT" modinfo -k "$KVER" -F alias hid-logitech-dj \
@@ -211,6 +213,8 @@ finalize() {
     OUT="$OUT_FINAL"
   fi
 
+  cleanup_disk_space "$MNT" "image-finalize" 2>/dev/null || warn "Disk cleanup failed"
+
   [[ -s "$OUT" ]] \
     || die "Published image is missing or empty: $OUT"
 
@@ -234,12 +238,37 @@ finalize() {
   # so that a cleanup failure never coexists with a DONE message.
   log "Unmounting"
   # Cleanup: overlay + greenfield resource teardown
-  overlay_cleanup 2>/dev/null || true
-  cleanup_environment 2>/dev/null || true
-  cleanup_remove_udev_rules 2>/dev/null || true
+  local _cleanup_rc=0
+  cleanup_log "finalize: overlay_cleanup"
+  local _stderr_dest="/dev/null"
+  if [[ -n "${CLEANUP_LOG:-}" ]]; then
+    local _log_dir
+    _log_dir="$(dirname "$CLEANUP_LOG")"
+    if [[ -d "$_log_dir" ]] && [[ -w "$_log_dir" ]]; then
+      # Test if we can append to the file (non-truncating)
+      if : >>"$CLEANUP_LOG" 2>/dev/null; then
+        _stderr_dest="$CLEANUP_LOG"
+      fi
+    fi
+  fi
+  overlay_cleanup 2>>"$_stderr_dest" || _cleanup_rc=1
+  cleanup_log "finalize: cleanup_environment"
+  cleanup_environment 2>>"$_stderr_dest" || _cleanup_rc=1
+  cleanup_log "finalize: cleanup_remove_udev_rules"
+  cleanup_remove_udev_rules 2>>"$_stderr_dest" || _cleanup_rc=1
+  cleanup_log "finalize: cleanup done (rc=$_cleanup_rc)"
   persist_debug_logs 2>/dev/null || true
   _cleanup_done=1
   trap - EXIT
+
+  # Finalize the resource ledger for this run
+  if declare -F cleanup_ledger_finish >/dev/null 2>&1 && [[ -n "${_LEDGER_RUN_DIR:-}" ]]; then
+    cleanup_ledger_finish 2>/dev/null || warn "Ledger finalization failed"
+  fi
+
+  if ((_cleanup_rc != 0)); then
+    die "Cleanup failed — workspace preserved at ${WORKDIR:-<unknown>} for manual recovery"
+  fi
 
   # Mark the build as complete — setup_copy_image and flash_image_is_complete
   # check this before reusing a cached image.
@@ -303,29 +332,13 @@ finalize() {
     fi
     rm -f "$WORKDIR"/.steamos-build-overlay-cache-key
 
-    # Safe removal helper: skip directories that are still mountpoints.
-    # If cleanup() partially failed, a directory may still be a live mount;
-    # rm -rf on a mounted directory traverses into it and can destroy host
-    # filesystem entries (e.g. /dev/snd audio devices through an overlay).
-    _safe_rmdir() {
-      local dir="$1"
-      if [[ ! -e "$dir" ]]; then
-        return 0
-      fi
-      if mountpoint -q "$dir" 2>/dev/null; then
-        warn "$dir is still mounted — skipping removal"
-        return 0
-      fi
-      rm -rf "$dir"
-    }
-
-    rm -rf "$WORKDIR"/overlay-mnt
-    _safe_rmdir "$WORKDIR/merged"
-    _safe_rmdir "$WORKDIR/upper"
-    _safe_rmdir "$WORKDIR/ovlwork"
-    _safe_rmdir "${WORKDIR:?}/mnt"
-    _safe_rmdir "$WORKDIR/efi"
-    _safe_rmdir "${WORKDIR:?}/home"
+    safe_rmdir "$WORKDIR/overlay-mnt" || true
+    safe_rmdir "$WORKDIR/merged" || true
+    safe_rmdir "$WORKDIR/upper" || true
+    safe_rmdir "$WORKDIR/ovlwork" || true
+    safe_rmdir "${WORKDIR:?}/mnt" || true
+    safe_rmdir "$WORKDIR/efi" || true
+    safe_rmdir "${WORKDIR:?}/home" || true
     rm -f "$WORKDIR"/*.building
     rm -f "$WORKDIR"/*.building.src-fingerprint
     rm -f "$WORKDIR"/pkgs-before.txt
@@ -338,16 +351,26 @@ finalize() {
     rm -f "$WORKDIR"/build-only-exclusions.txt
     rm -f "$WORKDIR"/custom-payload-files.txt
     rm -f "$WORKDIR"/partitions-before-rootfs-grow.txt
-    rm -rf "$WORKDIR"/hid-src
-    rm -rf "$WORKDIR"/aotofu-src
-    rm -rf "$WORKDIR"/aotofu-build
-    rm -rf "$WORKDIR"/aotofu-base.txt
-    rm -rf "$WORKDIR"/aotofu-runtime.txt
-    rm -rf "$WORKDIR"/aotofu-build.txt
-    rm -rf "$WORKDIR"/aotofu-rebuild
-    rm -rf "$WORKDIR"/effective-etc-*
-    rm -rf "$WORKDIR"/rootfs-*
-    rm -rf "$WORKDIR"/tmp-*
+    safe_rmdir "$WORKDIR"/hid-src || true
+    safe_rmdir "$WORKDIR"/aotofu-src || true
+    safe_rmdir "$WORKDIR"/aotofu-build || true
+    rm -f "$WORKDIR"/aotofu-base.txt
+    rm -f "$WORKDIR"/aotofu-runtime.txt
+    rm -f "$WORKDIR"/aotofu-build.txt
+    safe_rmdir "$WORKDIR"/aotofu-rebuild || true
+    local _f
+    for _f in "$WORKDIR"/effective-etc-*; do
+      [[ -e "$_f" ]] || continue
+      safe_rmdir "$_f" 2>/dev/null || true
+    done
+    for _f in "$WORKDIR"/rootfs-*; do
+      [[ -e "$_f" ]] || continue
+      safe_rmdir "$_f" 2>/dev/null || true
+    done
+    for _f in "$WORKDIR"/tmp-*; do
+      [[ -e "$_f" ]] || continue
+      safe_rmdir "$_f" 2>/dev/null || true
+    done
   fi
 
   log "DONE — $OUT"

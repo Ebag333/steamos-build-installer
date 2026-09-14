@@ -29,6 +29,8 @@ source "$SCRIPT_DIR/lib/pci-discovery.sh"
 source "$SCRIPT_DIR/lib/args.sh"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/logging.sh
+source "$SCRIPT_DIR/lib/logging.sh"
 
 # Load build defaults.  If defaults.conf is missing, all flags start blank.
 DEFAULTS_CONF="$SCRIPT_DIR/lib/configs/defaults.conf"
@@ -48,6 +50,8 @@ TARGET_DEV=""
 CONFIG_FILE=""
 CLI_MODE=0
 SETUP_MODE=0
+CLEANUP_RUN_ID=""
+CLEANUP_PURGE=0
 
 usage() { # lint-ignore: no-shadow
   cat "$(heredoc_dir)/static/usage-steamos-build.txt"
@@ -201,8 +205,8 @@ _run_setup() {
   # Initialize pacman keyring if missing — pacman -S will fail without it.
   if [[ ! -d /etc/pacman.d/gnupg ]] || ! pacman-key --list-keys >/dev/null 2>&1; then
     echo "Initializing pacman keyring..."
-    pacman-key --init
-    pacman-key --populate archlinux holo
+    pacman-key --init >/dev/null
+    pacman-key --populate archlinux holo >/dev/null
   fi
 
   # Keep the canonical dependency list in lib/check-deps.sh when available.
@@ -246,6 +250,18 @@ while [[ $# -gt 0 ]]; do
       CLI_MODE=0
       shift
       ;;
+    --run-id)
+      [[ $# -ge 2 ]] || {
+        echo "--run-id requires a value" >&2
+        exit 2
+      }
+      CLEANUP_RUN_ID="$2"
+      shift 2
+      ;;
+    --purge)
+      CLEANUP_PURGE=1
+      shift
+      ;;
     --)
       shift
       [[ $# -eq 0 ]] || {
@@ -284,12 +300,15 @@ _build_backend_args() {
   [[ -n "${VALIDATE_OUTPUT_FILE:-}" ]] && BACKEND_ARGS+=(--output "$VALIDATE_OUTPUT_FILE")
   [[ "${DEBUG:-0}" -eq 1 ]] && BACKEND_ARGS+=(--debug)
   [[ "${VERBOSE:-0}" -eq 1 ]] && BACKEND_ARGS+=(--verbose)
+  [[ -n "${CLEANUP_RUN_ID:-}" ]] && BACKEND_ARGS+=(--run-id "$CLEANUP_RUN_ID")
+  [[ "${CLEANUP_PURGE:-0}" -eq 1 ]] && BACKEND_ARGS+=(--purge)
+  [[ -n "${BUILD_ID:-}" ]] && BACKEND_ARGS+=(--build-id "$BUILD_ID")
   return 0
 }
 
 _backend_needs_root() {
   case "$1" in
-    build | flash | flashless | validate | reboot) return 0 ;;
+    build | flash | flashless | validate | reboot | cleanup) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -315,41 +334,159 @@ _backend_action_from_args() {
   return 1
 }
 
+_dump_filtered_stderr() {
+  local _file="${1:-}"
+  [[ -n "$_file" && -s "$_file" ]] || return 0
+  if [[ "${VERBOSE:-0}" -eq 1 ]]; then
+    cat "$_file" >&2
+  else
+    local _matched
+    _matched="$(grep -E '(✓|✗|·|Results:)' "$_file" 2>/dev/null || true)"
+    if [[ -n "$_matched" ]]; then
+      printf '%s\n' "$_matched" >&2
+    else
+      echo "[cli] Backend failed with no pipeline output. Last 50 lines of stderr:" >&2
+      tail -50 "$_file" >&2
+    fi
+  fi
+}
+
 _run_backend_cli() {
+  # Generate a shared build ID so the frontend and backend write logs
+  # to the same directory.  Must happen before _build_backend_args so
+  # the ID is included in the backend's argument list.
+  if [[ -z "${BUILD_ID:-}" ]]; then
+    local _build_ts
+    _build_ts="$(date +%Y%m%d-%H%M%S)"
+    BUILD_ID="build-${_build_ts}-$$"
+  fi
+
+  # Initialize structured logging for the frontend.
+  local _frontend_log_dir="/home/.steamos-build/logs/${BUILD_ID}"
+  sudo mkdir -p "$_frontend_log_dir" 2>/dev/null || mkdir -p "$_frontend_log_dir" 2>/dev/null || true
+
+  # Pre-create the JSONL log file so log_init can open it as the deck user
+  # (the directory is created by sudo and owned by root).
+  local _frontend_jsonl="${_frontend_log_dir}/frontend.jsonl"
+  if [[ ! -f "$_frontend_jsonl" ]]; then
+    sudo touch "$_frontend_jsonl" 2>/dev/null || true
+    sudo chmod 666 "$_frontend_jsonl" 2>/dev/null || true
+  fi
+
+  local _console_level="info"
+  if ((DEBUG)); then
+    _console_level="debug"
+  elif ((VERBOSE)); then
+    _console_level="debug"
+  fi
+
+  log_init \
+    --log-file "$_frontend_jsonl" \
+    --console-level "$_console_level"
+
   _build_backend_args
-  echo "[cli] ACTION=$ACTION EUID=$EUID" >&2
+  log_info frontend action "ACTION=$ACTION EUID=$EUID"
 
   if _backend_needs_mount_namespace "$ACTION"; then
-    echo "[cli] needs mount namespace" >&2
+    log_info frontend needs_namespace "needs mount namespace"
     command -v unshare >/dev/null 2>&1 || {
       echo "unshare is required for build mount isolation." >&2
       exit 1
     }
+    local _backend_stderr
+    _backend_stderr="$(mktemp /tmp/steamos-build-stderr.XXXXXX)"
+
+    # Persistent log file for full backend stderr output.
+    # The backend creates its own persistent logs inside the namespace, but
+    # the frontend also needs a copy on the host filesystem so the user can
+    # inspect build output after the temp file is cleaned up.
+    # Use BUILD_ID so frontend and backend logs end up in the same directory.
+    local _backend_log_file
+    _backend_log_file="/home/.steamos-build/logs/${BUILD_ID}/frontend.log"
+
+    # Create the log directory with sudo if needed
+    if [[ ! -d "$(dirname "$_backend_log_file")" ]]; then
+      sudo mkdir -p "$(dirname "$_backend_log_file")" 2>/dev/null || true
+    fi
+
+    # Create the log file with sudo if needed
+    if [[ ! -f "$_backend_log_file" ]]; then
+      sudo touch "$_backend_log_file" 2>/dev/null || _backend_log_file="/dev/null"
+      sudo chmod 666 "$_backend_log_file" 2>/dev/null || true
+    fi
+
+    # Save the existing ERR trap (set by common.sh) so we can restore it.
+    local _saved_err_trap
+    _saved_err_trap="$(trap -p ERR)" || _saved_err_trap=""
+
+    # Save the existing INT/TERM traps so we can restore them.
+    local _saved_int_trap _saved_term_trap
+    _saved_int_trap="$(trap -p INT)" || _saved_int_trap=""
+    _saved_term_trap="$(trap -p TERM)" || _saved_term_trap=""
+
+    # Save and set an EXIT trap to ensure _backend_stderr is cleaned up on
+    # ALL exit paths: success, ERR, SIGINT, SIGTERM, etc.
+    local _saved_exit_trap
+    _saved_exit_trap="$(trap -p EXIT)"
+    trap 'rm -f "${_backend_stderr:-}"; trap - EXIT; eval "${_saved_exit_trap:-trap - EXIT}"' EXIT
+
+    trap 'rm -f "${_backend_stderr:-}"; trap - INT; eval "${_saved_int_trap:-trap - INT}"' INT
+    trap 'rm -f "${_backend_stderr:-}"; trap - TERM; eval "${_saved_term_trap:-trap - TERM}"' TERM
+
+    # shellcheck disable=SC2154  # _trap_rc is assigned inside the trap handler string
+    trap '_trap_rc=$?; trap - ERR; set +e
+if [[ -n "${_backend_stderr:-}" && -s "${_backend_stderr:-}" ]]; then
+    _dump_filtered_stderr "${_backend_stderr:-}"
+fi
+rm -f "${_backend_stderr:-}"
+# Restore the original ERR trap before invoking it.
+eval "${_saved_err_trap:-trap - ERR}"
+if declare -F report_failure >/dev/null 2>&1; then
+    report_failure "$_trap_rc" "${BASH_LINENO[0]:-0}" "$BASH_COMMAND" "backend failed" "${BASH_SOURCE[1]:-}" "${FUNCNAME[1]:-}"
+else
+    exit $_trap_rc
+fi' ERR
+    local _rc=0
     if [[ $EUID -ne 0 ]]; then
       sudo unshare --mount --propagation private -- \
-        bash "$BACKEND" "${BACKEND_ARGS[@]}"
-      return $?
+        bash "$BACKEND" "${BACKEND_ARGS[@]}" 2>"$_backend_stderr" || _rc=$?
+    else
+      unshare --mount --propagation private -- \
+        bash "$BACKEND" "${BACKEND_ARGS[@]}" 2>"$_backend_stderr" || _rc=$?
     fi
-    unshare --mount --propagation private -- \
-      bash "$BACKEND" "${BACKEND_ARGS[@]}"
-    return $?
+    # Backend has fully exited, so _backend_stderr is complete.
+    # Copy to persistent log and console synchronously, then filter.
+    if [[ -s "$_backend_stderr" ]]; then
+      cat "$_backend_stderr" >>"$_backend_log_file"
+      _dump_filtered_stderr "$_backend_stderr"
+    fi
+    rm -f "$_backend_stderr"
+    eval "${_saved_exit_trap:-trap - EXIT}"
+    eval "${_saved_err_trap:-trap - ERR}"
+    eval "${_saved_int_trap:-trap - INT}"
+    eval "${_saved_term_trap:-trap - TERM}"
+    # Suppress the ERR trap so that a non-zero return code does not fire it
+    # (set -E inherits the ERR trap into functions; returning non-zero from
+    # inside the function would trigger the trap before control reaches the
+    # caller's `|| ...`).
+    trap - ERR
+    return $_rc
   fi
 
-  echo "[cli] checking root" >&2
+  log_info frontend checking_root "checking root"
   if _backend_needs_root "$ACTION" && [[ $EUID -ne 0 ]]; then
-    echo "[cli] needs root, checking sudo" >&2
-    if ! command -v sudo >/dev/null 2>&1; then
-      echo "Error: $ACTION requires root. Run with sudo or as root." >&2
-      exit 1
-    fi
-    echo "[cli] running with sudo" >&2
-    sudo bash "$BACKEND" "${BACKEND_ARGS[@]}"
-    return $?
+    log_info frontend needs_root "needs root, running with sudo"
+    local _rc=0
+    sudo bash "$BACKEND" "${BACKEND_ARGS[@]}" || _rc=$?
+    trap - ERR
+    return $_rc
   fi
 
-  echo "[cli] running directly" >&2
-  bash "$BACKEND" "${BACKEND_ARGS[@]}"
-  return $?
+  log_info frontend running_directly "running directly"
+  local _rc=0
+  bash "$BACKEND" "${BACKEND_ARGS[@]}" || _rc=$?
+  trap - ERR
+  return $_rc
 }
 
 _ui_error() {
@@ -383,9 +520,16 @@ _feed_progress() {
   while [[ ! -f "$rcfile" ]]; do
     if IFS= read -r line < <(tail -c +$((offset + 1)) "$logfile" 2>/dev/null | head -n 1); then
       offset=$((offset + $(printf '%s\n' "$line" | wc -c)))
-      if [[ "$line" =~ @@PROGRESS:([0-9]+)@@ ]]; then
+      # Extract all @@PROGRESS:N@@ markers from the line
+      local rest="$line"
+      local has_progress=0
+      while [[ "$rest" =~ @@PROGRESS:([0-9]+)@@(.*) ]]; do
         printf '%s\n' "${BASH_REMATCH[1]}"
-      elif [[ "$show_log" == "log" ]]; then
+        rest="${BASH_REMATCH[2]}"
+        has_progress=1
+      done
+      # If no progress markers, forward as log line if log mode is enabled
+      if ((!has_progress)) && [[ "$show_log" == "log" ]]; then
         printf '# %s\n' "$line"
       fi
     else
@@ -401,9 +545,14 @@ _feed_progress() {
   # Drain any remaining output after the runner exited.
   tail -c +$((offset + 1)) "$logfile" 2>/dev/null | while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if [[ "$line" =~ @@PROGRESS:([0-9]+)@@ ]]; then
+    local rest="$line"
+    local _drain_had_progress=0
+    while [[ "$rest" =~ @@PROGRESS:([0-9]+)@@(.*) ]]; do
       printf '%s\n' "${BASH_REMATCH[1]}"
-    elif [[ "$show_log" == "log" ]]; then
+      rest="${BASH_REMATCH[2]}"
+      _drain_had_progress=1
+    done
+    if ((!_drain_had_progress)) && [[ "$show_log" == "log" ]]; then
       printf '# %s\n' "$line"
     fi
   done
@@ -462,7 +611,25 @@ _run_backend_gui() {
   local logfile rcfile
   local tmpdir
   tmpdir="$(mktemp -d /tmp/steamos-build.XXXXXX)"
-  logfile="$tmpdir/backend.log"
+
+  # Generate a shared build ID so frontend and backend write logs
+  # to the same directory (mirrors _run_backend_cli behavior).
+  if [[ -z "${BUILD_ID:-}" ]]; then
+    local _build_ts
+    _build_ts="$(date +%Y%m%d-%H%M%S)"
+    BUILD_ID="build-${_build_ts}-$$"
+  fi
+
+  # Validate BUILD_ID contains only safe characters (no path traversal).
+  if [[ ! "$BUILD_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "[gui] ERROR: invalid BUILD_ID '$BUILD_ID'" >&2
+    return 1
+  fi
+
+  # Assign log paths (no sudo needed for variable assignment).
+  local _log_dir="/home/.steamos-build/logs/${BUILD_ID}"
+  logfile="$_log_dir/backend.log"
+
   rcfile="$tmpdir/rc"
   echo "[gui] logfile=$logfile" >&2
   echo "[gui] rcfile=$rcfile" >&2
@@ -470,7 +637,19 @@ _run_backend_gui() {
   local backend_action
   backend_action="$(_backend_action_from_args "$@" || true)"
 
-  local -a launcher=(bash "$BACKEND" "$@")
+  # Ensure BUILD_ID is passed to the backend so it writes structured logs
+  # to the same subdirectory as the frontend backend.log.
+  local -a _be_args=("$@")
+  local _has_build_id=0
+  local _a
+  for _a in "${_be_args[@]}"; do
+    [[ "$_a" == "--build-id" ]] && _has_build_id=1
+  done
+  if [[ "$_has_build_id" -eq 0 ]]; then
+    _be_args+=(--build-id "$BUILD_ID")
+  fi
+
+  local -a launcher=(bash "$BACKEND" "${_be_args[@]}")
   if [[ "$backend_action" == "build" ]]; then
     # Build runs in a private mount namespace so loop devices, overlay
     # filesystems, and chroot mounts never leak into the desktop session.
@@ -486,12 +665,12 @@ _run_backend_gui() {
         _gui_cache_sudo_password "build" "Enter your password to run the build as root:" || return 1
         launcher=(sudo
           unshare --mount --propagation private --
-          bash "$BACKEND" "$@")
+          bash "$BACKEND" "${_be_args[@]}")
         echo "[gui] using sudo + private mount namespace" >&2
       elif command -v pkexec >/dev/null 2>&1; then
         launcher=(pkexec
           unshare --mount --propagation private --
-          bash "$BACKEND" "$@")
+          bash "$BACKEND" "${_be_args[@]}")
         echo "[gui] using pkexec + private mount namespace" >&2
       else
         echo "[gui] ERROR: no sudo or pkexec available" >&2
@@ -501,17 +680,17 @@ _run_backend_gui() {
       fi
     else
       launcher=(unshare --mount --propagation private --
-        bash "$BACKEND" "$@")
+        bash "$BACKEND" "${_be_args[@]}")
       echo "[gui] using private mount namespace" >&2
     fi
   elif [[ $EUID -ne 0 ]]; then
     # Non-build actions (flash, reboot, etc.) — no namespace isolation.
     if command -v sudo >/dev/null 2>&1; then
       _gui_cache_sudo_password "non-build" "Enter your password to run as root:" || return 1
-      launcher=(sudo bash "$BACKEND" "$@")
+      launcher=(sudo bash "$BACKEND" "${_be_args[@]}")
       echo "[gui] using sudo for elevation" >&2
     elif command -v pkexec >/dev/null 2>&1; then
-      launcher=(pkexec bash "$BACKEND" "$@")
+      launcher=(pkexec bash "$BACKEND" "${_be_args[@]}")
       echo "[gui] using pkexec for elevation" >&2
     else
       echo "[gui] ERROR: no sudo or pkexec available" >&2
@@ -521,6 +700,15 @@ _run_backend_gui() {
     fi
   else
     echo "[gui] already root, no elevation needed" >&2
+  fi
+
+  # Initialize the log directory and file AFTER authentication succeeds.
+  # sudo mkdir/touch/chmod may fail without cached credentials; deferring
+  # ensures the user has authenticated before we attempt privileged I/O.
+  sudo mkdir -p "$_log_dir" 2>/dev/null || mkdir -p "$_log_dir" 2>/dev/null || true
+  if [[ ! -f "$logfile" ]]; then
+    sudo touch "$logfile" 2>/dev/null || true
+    sudo chmod 666 "$logfile" 2>/dev/null || true
   fi
 
   # Run the complete launcher in a wrapper owned by this shell.
@@ -2512,7 +2700,7 @@ case "$ACTION" in
       echo "Build requires --image FILE or a config that supplies IMG." >&2
       exit 2
     }
-    _run_backend_cli
+    _run_backend_cli || exit $?
     ;;
   flash)
     [[ -n "$IMG" ]] || {
@@ -2544,7 +2732,7 @@ case "$ACTION" in
       echo "Live action requires --config FILE." >&2
       exit 2
     }
-    _run_backend_cli
+    _run_backend_cli || exit $?
     ;;
   reboot)
     if [[ $EUID -ne 0 ]]; then
@@ -2553,7 +2741,10 @@ case "$ACTION" in
     exec bash "$BACKEND" --action reboot
     ;;
   validate)
-    _run_backend_cli
+    _run_backend_cli || exit $?
+    ;;
+  cleanup)
+    _run_backend_cli || exit $?
     ;;
   *)
     echo "Unsupported action: $ACTION" >&2

@@ -77,6 +77,7 @@ pipeline_init_check_lock() {
 #   Check for and recover any incomplete runs.
 #   Returns 0 if clean (no recovery needed or recovery succeeded),
 #   Returns 1 if recovery failed or workspace is locked.
+# shellcheck disable=SC2120  # optional $1 defaults to $_PIPELINE_LEDGER_BASE
 pipeline_recover() {
   local state_root="${1:-$_PIPELINE_LEDGER_BASE}"
 
@@ -146,6 +147,6 @@ pipeline_init() {
   _PIPELINE_LEDGER_STATE_ROOT="$_LEDGER_STATE_ROOT"
   _PIPELINE_LEDGER_RUN_ID="$_LEDGER_RUN_ID"
 
-  log "pipeline_init: ledger initialized (state=$state_root, run=$_PIPELINE_LEDGER_RUN_ID)"
+  log_info pipeline ledger_initialized "pipeline_init: ledger initialized (state=$state_root, run=$_PIPELINE_LEDGER_RUN_ID)"
   return 0
 }

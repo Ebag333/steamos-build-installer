@@ -12,6 +12,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 register_live_pipeline() {
+  _PIPELINE_NAME="live"
   define_pipeline \
     "validate" \
     "prepare" \

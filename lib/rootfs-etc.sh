@@ -13,7 +13,7 @@
 # Sourced by the wrapper — do not run directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "lib/rootfs-etc.sh is a library — source it from the wrapper, not run directly." >&2
+  log_error system direct_run "lib/rootfs-etc.sh is a library — source it from the wrapper, not run directly."
   exit 1
 fi
 
@@ -106,23 +106,17 @@ _log_rootfs_btrfs_diagnostics() {
   local root="${1:?_log_rootfs_btrfs_diagnostics: missing root}"
   local label="${2:-rootfs}"
 
-  debug_cmd findmnt -T "$root" -o TARGET,SOURCE,FSTYPE,OPTIONS \
-    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
+  log_debug filesystem btrfs_findmnt "findmnt for $label" root "$root" output "$(findmnt -T "$root" -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true)"
 
-  debug_cmd btrfs filesystem usage -T "$root" \
-    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
+  log_debug filesystem btrfs_usage "btrfs filesystem usage for $label" root "$root" output "$(btrfs filesystem usage -T "$root" 2>/dev/null || true)"
 
-  debug_cmd btrfs subvolume list "$root" \
-    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
+  log_debug filesystem btrfs_subvol_list "btrfs subvolume list for $label" root "$root" output "$(btrfs subvolume list "$root" 2>/dev/null || true)"
 
-  log "$label: default subvolume"
-  btrfs subvolume get-default "$root" >&2 || true
+  log_info filesystem default_subvolume "$label: default subvolume" output "$(btrfs subvolume get-default "$root" 2>/dev/null || true)"
 
-  debug_cmd btrfs subvolume show "$root" \
-    >>"${BTRFS_DEBUG_LOG}" 2>&1 || true
+  log_debug filesystem btrfs_subvol_show "btrfs subvolume show for $label" root "$root" output "$(btrfs subvolume show "$root" 2>/dev/null || true)"
 
-  log "$label: read-only property"
-  btrfs property get -ts "$root" ro >&2 || true
+  log_info filesystem ro_property "$label: read-only property" output "$(btrfs property get -ts "$root" ro 2>/dev/null || true)"
 }
 
 # Save the *effective* /etc before rebuilding rootfs.
@@ -140,7 +134,7 @@ _snapshot_runtime_etc() {
   ETC_VAR_MNT="$WORKDIR/etc-var-mnt"
   ETC_MERGED="$WORKDIR/etc-merged"
 
-  rm -rf "$ETC_SNAPSHOT"
+  safe_rmdir "$ETC_SNAPSHOT"
   mkdir -p "$ETC_SNAPSHOT" "$ETC_VAR_MNT" "$ETC_MERGED"
 
   # Defensive: clean stale mounts from a prior interrupted run.
@@ -190,7 +184,7 @@ _snapshot_runtime_etc() {
   find "$upper" -mindepth 1 -printf '%P\n' 2>/dev/null \
     | grep -Ei '(^|/)(steam|steamos|oobe|rauc|atom|mkinit|modprobe|systemd|network|fstab|os-release)' \
     | sort \
-    | sed 's/^/  /' >&2 || true
+    | sed 's/^/  /' | log_capture_stream filesystem debug etc_upper_files || true
 
   log "Snapshotting effective runtime /etc"
 
@@ -202,7 +196,7 @@ _snapshot_runtime_etc() {
   fi
 
   log "Original effective /etc mount:"
-  findmnt -T "$ETC_MERGED" -o TARGET,SOURCE,FSTYPE,OPTIONS >&2 || true
+  log_debug filesystem findmnt_merged "findmnt for original effective /etc" output "$(findmnt -T "$ETC_MERGED" -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true)"
 
   # Verify the snapshot itself before destroying the old lower filesystem.
   # --checksum is cheap for /etc and catches same-size/same-mtime content drift.
@@ -268,13 +262,15 @@ _restore_runtime_etc() {
   if [[ -d "$ovl" ]]; then
     log "Preserving non-upper/work entries under the /etc overlay root:"
     find "$ovl" -mindepth 1 -maxdepth 1 \
-      ! -name upper ! -name work -printf '  %f\n' 2>/dev/null | sort >&2 || true
+      ! -name upper ! -name work -printf '  %f\n' 2>/dev/null | sort | log_capture_stream filesystem debug ovl_preserve_entries || true
   fi
 
   # Discard only the OverlayFS upper/work state that refers to the old lower.
   # Preserve unknown sibling metadata Valve may keep under lib/overlays/etc.
-  rm -rf "$upper" "$work" \
-    || die "Failed to remove stale runtime /etc upper/work state"
+  safe_rmdir "$upper" \
+    || die "Failed to remove stale runtime /etc upper state"
+  safe_rmdir "$work" \
+    || die "Failed to remove stale runtime /etc work state"
   mkdir -p "$upper" "$work"
 
   if ! cleanup_mount "$merged" "rebuilt /etc overlay" -- -t overlay overlay \
@@ -285,7 +281,7 @@ _restore_runtime_etc() {
   fi
 
   log "Fresh effective /etc mount:"
-  findmnt -T "$merged" -o TARGET,SOURCE,FSTYPE,OPTIONS >&2 || true
+  log_debug filesystem findmnt_fresh "findmnt for fresh effective /etc" output "$(findmnt -T "$merged" -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true)"
 
   # Replay the old effective filesystem through the NEW overlay.
   # --delete is important: if the stock upper contained a whiteout for a
@@ -310,7 +306,7 @@ _restore_runtime_etc() {
   strict_unmount "$rootmnt" "rebuilt rootfs after /etc overlay restore" \
     || die "Failed to unmount rebuilt rootfs"
 
-  rm -rf "$ETC_SNAPSHOT"
+  safe_rmdir "$ETC_SNAPSHOT" 2>/dev/null || true
   rmdir "$merged" "$varmnt" "$rootmnt" 2>/dev/null || true
 
   ETC_SNAPSHOT_VALID=0
@@ -365,8 +361,8 @@ _prepare_writable_rootfs_rebuild() {
   _log_rootfs_btrfs_diagnostics "$srcmnt" "Original rootfs"
 
   log "Original rootfs disk usage:"
-  debug_cmd du -sh "$srcmnt" >&2 || true
-  debug_cmd du -sh --apparent-size "$srcmnt" >&2 || true
+  log_debug filesystem disk_usage "du for original rootfs" output "$(du -sh "$srcmnt" 2>/dev/null || true)"
+  log_debug filesystem disk_usage_apparent "du --apparent-size for original rootfs" output "$(du -sh --apparent-size "$srcmnt" 2>/dev/null || true)"
 
   # Snapshot the effective /etc BEFORE mkfs destroys the old lower filesystem.
   _snapshot_runtime_etc "$srcmnt"
@@ -437,7 +433,7 @@ _prepare_writable_rootfs_rebuild() {
   rm -f "$root_tmp"
 
   # Make sure userspace sees the newly written filesystem.
-  udevadm settle
+  run_dangerous_cmd udevadm settle
   btrfs device scan "$ROOTPART" >/dev/null 2>&1 || true
 
   # --shrink trimmed the image to minimum size; expand back to fill the partition.
@@ -551,8 +547,8 @@ _prepare_writable_rootfs_native() {
   super_before="$(btrfs inspect-internal dump-super "$ROOTPART" 2>/dev/null \
     | grep -E '^(magic|generation|flags|root |total_bytes|bytes_used|nodesize|sectorsize|fsid|dev_item\.fsid)' \
     | sort)" || true
-  debug_cmd log "Native rootfs superblock before conversion:"
-  debug_cmd printf '%s\n' "$super_before" >&2
+  log_debug filesystem superblock_before "Native rootfs superblock before conversion:"
+  log_debug filesystem superblock_before_data "Native rootfs superblock data before conversion" data "$super_before"
 
   # A read-only subvolume can still live on a filesystem mounted rw.  The
   # subvolume ro property is what rejects writes, so mount the top-level tree
@@ -631,9 +627,9 @@ _prepare_writable_rootfs_native() {
   write_test="$mnt/.steamos-build-native-rw-test.$$"
   if ! touch "$write_test" 2>/dev/null; then
     log "Native rootfs mount after failed write test:"
-    findmnt -T "$mnt" -o TARGET,SOURCE,FSTYPE,OPTIONS >&2 || true
+    log_debug filesystem findmnt_write_fail "findmnt after failed write test" output "$(findmnt -T "$mnt" -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true)"
     log "Recent Btrfs kernel messages:"
-    dmesg | grep -i btrfs | tail -50 >&2 || true
+    log_debug system dmesg_btrfs "dmesg btrfs messages" output "$(dmesg 2>/dev/null | grep -i btrfs | tail -50 || true)"
     strict_unmount "$mnt" "native rootfs after failed write test" || true
     die "Rootfs ro property is false but an actual write still failed"
   fi
@@ -695,7 +691,7 @@ _prepare_writable_rootfs_native() {
   cleanup_release "$mnt" || true
   rmdir "$mnt" 2>/dev/null || true
 
-  udevadm settle
+  run_dangerous_cmd udevadm settle
 
   # Verify the on-disk root item after the transaction has been committed and
   # the filesystem is unmounted.  This directly checks the condition that made
@@ -736,14 +732,14 @@ _prepare_writable_rootfs_native() {
   super_after="$(btrfs inspect-internal dump-super "$ROOTPART" 2>/dev/null \
     | grep -E '^(magic|generation|flags|root |total_bytes|bytes_used|nodesize|sectorsize|fsid|dev_item\.fsid)' \
     | sort)" || true
-  debug_cmd log "Native rootfs superblock after conversion:"
-  debug_cmd printf '%s\n' "$super_after" >&2
+  log_debug filesystem superblock_after "Native rootfs superblock after conversion:"
+  log_debug filesystem superblock_after_data "Native rootfs superblock data after conversion" data "$super_after"
 
   if [[ "$super_before" != "$super_after" ]]; then
-    debug_cmd log "Native rootfs superblock diff (expected: generation may change):"
-    debug_cmd diff <(printf '%s\n' "$super_before") <(printf '%s\n' "$super_after") >&2 || true
+    log_debug filesystem superblock_diff "Native rootfs superblock diff (expected: generation may change):"
+    log_debug filesystem superblock_diff_data "Native rootfs superblock diff data" diff "$(diff <(printf '%s\n' "$super_before") <(printf '%s\n' "$super_after") 2>/dev/null || true)"
   else
-    debug_cmd log "Native rootfs superblock: identical"
+    log_debug filesystem superblock_identical "Native rootfs superblock: identical"
   fi
 
   log "Native writable-rootfs conversion completed without rebuilding the filesystem"
@@ -869,7 +865,7 @@ _prepare_image_rootfs_size() {
   log "Source rootfs-A:         ${current_mib} MiB"
   log "Requested ROOTFS_SIZE:   ${requested_mib} MiB"
   log "Growth required:         ${delta_mib} MiB"
-  log ""
+  log " "
   if ((${#trailing[@]} > 0)); then
     log "Partitions to relocate:"
     local entry
@@ -880,7 +876,7 @@ _prepare_image_rootfs_size() {
       log "  ${p_lbl} (p${pnum}): +${delta_mib} MiB"
     done
   fi
-  log ""
+  log " "
   log "Projected image size:    ${new_image_mib} MiB"
   log "rootfs-A start:          unchanged"
   log "rootfs-A end:            +${delta_mib} MiB"
@@ -957,8 +953,8 @@ _prepare_image_rootfs_size() {
     log "Moving ${p_lbl} (partition ${pnum}): start ${old_start} → ${new_start}"
     if ! printf 'start=%s, size=%s\n' "$new_start" "$psize_sectors" \
       | sfdisk --move-data --move-use-fsync -N "$pnum" "$LOOPDEV" \
-        >>"$PARTITION_DEBUG_LOG" 2>&1; then
-      cat "$PARTITION_DEBUG_LOG" >&2
+        >>"$PARTITION_DEBUG_LOG" 2>&1; then # lint-ignore: merged-streams — intentional: both streams go to dedicated partition debug log
+      log_debug system partition_debug_log "Partition debug log" output "$(cat "$PARTITION_DEBUG_LOG" 2>/dev/null || true)"
       die "Failed to move partition ${pnum} (${p_lbl})"
     fi
 
@@ -974,7 +970,7 @@ _prepare_image_rootfs_size() {
     if [[ "$kernel_start" != "$new_start" ]]; then
       log "  Refreshing stale kernel geometry for $pdev"
       partx -u -n "$pnum" "$LOOPDEV" 2>/dev/null || true
-      udevadm settle --timeout=10 2>/dev/null || true
+      run_dangerous_cmd udevadm settle --timeout=10 2>/dev/null || true
       kernel_start="$(lsblk -ndo START "$pdev" 2>/dev/null || true)"
     fi
 
@@ -1019,12 +1015,12 @@ _prepare_image_rootfs_size() {
 
   if ! printf 'start=%s, size=%s\n' "$root_start" "$target_root_sectors" \
     | sfdisk -N "$root_partnum" "$LOOPDEV" \
-      >>"$PARTITION_DEBUG_LOG" 2>&1; then
-    cat "$PARTITION_DEBUG_LOG" >&2
+      >>"$PARTITION_DEBUG_LOG" 2>&1; then # lint-ignore: merged-streams — intentional: both streams go to dedicated partition debug log
+    log_debug system partition_debug_log "Partition debug log" output "$(cat "$PARTITION_DEBUG_LOG" 2>/dev/null || true)"
     die "Failed to grow rootfs-A partition"
   fi
 
-  udevadm settle --timeout=10 2>/dev/null || true
+  run_dangerous_cmd udevadm settle --timeout=10 2>/dev/null || true
 
   sgdisk -v "$LOOPDEV" >/dev/null 2>&1 \
     || die "GPT verification failed after growing rootfs-A"
@@ -1037,7 +1033,7 @@ _prepare_image_rootfs_size() {
   if [[ "$kernel_root_bytes" != "$expected_root_bytes" ]]; then
     log "  Refreshing stale kernel geometry for rootfs-A"
     partx -u -n "$root_partnum" "$LOOPDEV" 2>/dev/null || true
-    udevadm settle --timeout=10 2>/dev/null || true
+    run_dangerous_cmd udevadm settle --timeout=10 2>/dev/null || true
     kernel_root_bytes="$(blockdev --getsize64 "$ROOTPART" 2>/dev/null || echo 0)"
   fi
 

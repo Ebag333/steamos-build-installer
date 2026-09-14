@@ -28,17 +28,7 @@ heredoc_dir() {
 #   failure_snapshot_extra   -> emits caller-specific diagnostic sections
 # Debug log line — only prints when DEBUG=1.  Goes to stderr to avoid
 # polluting pipelines.
-debug() {
-  [[ "${DEBUG:-0}" == 1 ]] || return 0
-  printf 'DEBUG: %s\n' "$*" >&2
-}
-
-# Run a command only when DEBUG=1.  Returns 0 immediately otherwise.
-# Use for expensive diagnostics that should not slow normal builds.
-debug_cmd() {
-  [[ "${DEBUG:-0}" == 1 ]] || return 0
-  "$@" || true
-}
+debug() { log_debug pipeline debug "$@"; }
 
 : "${LOG_TAG:=nvidia-usb}"
 : "${LOGGER_TAG:=steamos-build}"
@@ -47,25 +37,17 @@ debug_cmd() {
 : "${FAILURE_REPORTED:=0}"
 : "${PACMAN_RAW_LOG:=/tmp/steamos-pacman-raw.log}"
 : "${PARTITION_DEBUG_LOG:=/tmp/steamos-partition.log}"
-: "${BTRFS_DEBUG_LOG:=/dev/null}"
 : "${DEBUG:=0}"
 : "${VERBOSE:=0}"
 
-log() {
-  if [[ "${LOG_COLOR:-1}" -eq 1 ]]; then
-    printf '\e[1;35m[%s]\e[0m %s\n' "$LOG_TAG" "$*" >&2
-  else
-    printf '[%s] %s\n' "$LOG_TAG" "$*" >&2
-  fi
-}
+# When set to 1, cleanup_check_host_namespace() allows cleanup to proceed
+# in the init namespace. Use only when entering a specific build's namespace
+# via nsenter or when the build's namespace is confirmed dead.
+: "${CLEANUP_NAMESPACE_OVERRIDE:=0}"
 
-warn() {
-  if [[ "${LOG_COLOR:-1}" -eq 1 ]]; then
-    printf '\e[1;33m[%s] WARNING:\e[0m %s\n' "$LOG_TAG" "$*" >&2
-  else
-    printf '[%s] WARNING: %s\n' "$LOG_TAG" "$*" >&2
-  fi
-}
+log() { log_info pipeline log "$@"; }
+
+warn() { log_warn pipeline warn "$@"; }
 
 emit_prefixed_lines() {
   local emitter="${1:?emit_prefixed_lines: missing emitter}"
@@ -84,31 +66,23 @@ emit_prefixed_lines() {
 
 step() {
   CURRENT_STEP="$*"
-  log "STEP: $CURRENT_STEP"
-  logger -t "$LOGGER_TAG" -- "STEP: $CURRENT_STEP" 2>/dev/null || true
+  logging_set_step "$*"
+  log_info pipeline step "$*"
 }
 
 # stage_header LABEL
 #   Print a prominent visual separator for a major build stage.
 #   LABEL is uppercased automatically.  Uses raw output (no [nvidia-usb]
 #   prefix) so headers stand out clearly in log streams.
-stage_header() {
-  local label="${1:?stage_header: missing label}"
-  local width=60
-  local sep
-  sep="$(printf '%*s' "$width" '' | tr ' ' '=')"
-  if [[ "${LOG_COLOR:-1}" -eq 1 ]]; then
-    printf '\e[1;36m%s\n%s\n%s\e[0m\n' "$sep" "${label^^}" "$sep"
-  else
-    printf '%s\n%s\n%s\n' "$sep" "${label^^}" "$sep"
-  fi
-}
+stage_header() { log_stage pipeline "${1:?stage_header: missing label}"; }
 
 _failure_snapshot() {
   local rc="${1:?_failure_snapshot: missing rc}"
   local line="${2:?_failure_snapshot: missing line}"
   local cmd="${3:-}"
   local reason="${4:-}"
+  local source="${5:-}"
+  local func="${6:-}"
   local journal_cmd journal_reason journal_context=""
 
   warn "FAILURE"
@@ -116,7 +90,38 @@ _failure_snapshot() {
   warn "  step:    ${CURRENT_STEP:-unknown}"
   warn "  line:    $line"
   warn "  command: $cmd"
+  [[ -n "$source" ]] && warn "  file:    $source"
+  [[ -n "$func" ]] && warn "  func:    $func"
   [[ -n "$reason" ]] && warn "  reason:  $reason"
+  warn "  cwd:     ${PWD:-<unknown>}"
+  warn "  env:     WORKDIR=${WORKDIR:-unset} NEWROOT=${NEWROOT:-unset} DEBUG=${DEBUG:-0} VERBOSE=${VERBOSE:-0}"
+  if [[ -n "${_LOG_FILE_PATH:-}" ]]; then
+    warn "  log:     $_LOG_FILE_PATH"
+  fi
+
+  # Full call stack
+  local _depth=${#FUNCNAME[@]}
+  if ((_depth > 2)); then
+    warn "  stack:"
+    local _i
+    for ((_i = 1; _i <= 10 && _i < _depth; _i++)); do
+      local _sf="${BASH_SOURCE[$_i]:-<unknown>}"
+      local _ff="${FUNCNAME[$((_i + 1))]:-<toplevel>}"
+      local _sl="${BASH_LINENO[$_i]:-?}"
+      warn "    $_i: ${_sf}:${_sl} in ${_ff}"
+    done
+  fi
+
+  # Active shell options (relevant to debugging)
+  local _active_opts
+  _active_opts="$(set -o 2>/dev/null | grep -E '(errexit|pipefail|nounset|errtrace|tracevars) +on$' | awk '{print $1}' | tr '\n' ' ')" || true
+  if [[ -n "$_active_opts" ]]; then
+    warn "  shell-options: $_active_opts"
+  fi
+
+  if [[ -n "${_PIPESTATUS_STR:-}" && "$_PIPESTATUS_STR" != "0" ]]; then
+    warn "  pipestatus: $_PIPESTATUS_STR"
+  fi
 
   journal_cmd="${cmd//$'\n'/ }"
   journal_reason="${reason//$'\n'/ }"
@@ -129,46 +134,41 @@ _failure_snapshot() {
     journal_context="${journal_context:0:300}"
   fi
 
-  logger -t "$LOGGER_TAG" -- \
-    "FAIL rc=$rc step='${CURRENT_STEP:-unknown}' line=$line${journal_context:+ $journal_context} command='$journal_cmd' reason='${journal_reason:-unspecified}' log='${RUN_LOG:-<stdout>}'" \
-    2>/dev/null || true
-
   # Let the caller add domain-specific state (RAUC/slot state for repatch,
   # image/build state for the builder, etc.) without coupling common.sh to it.
   if declare -F failure_snapshot_extra >/dev/null 2>&1; then
     failure_snapshot_extra "$rc" "$line" "$cmd" "$reason" || true
   fi
 
-  echo >&2
-  echo "=== MOUNTS ===" >&2
-  findmnt 2>&1 || true
+  log_error pipeline failure-diagnostics "MOUNTS"
+  findmnt 2>&1 | log_capture_stream pipeline error mount-info || true
 
-  echo >&2
-  echo "=== LOOP DEVICES ===" >&2
-  losetup -a 2>&1 || true
+  log_error pipeline failure-diagnostics "LOOP DEVICES"
+  losetup -a 2>&1 | log_capture_stream pipeline error loop-info || true
 
-  echo >&2
-  echo "=== SPACE ===" >&2
-  df -h /home 2>&1 || df -h 2>&1 || true
+  log_error pipeline failure-diagnostics "SPACE"
+  df -h /home 2>&1 | log_capture_stream pipeline error space-info || true
 
   # Dump raw Pacman log tail on failure
   if [[ -s "${PACMAN_RAW_LOG:-}" ]]; then
     warn "Pacman raw output (last 100 lines):"
-    tail -100 "$PACMAN_RAW_LOG" >&2
+    tail -100 "$PACMAN_RAW_LOG" | log_capture_stream pipeline error pacman-output || true
   fi
 
   # Dump partition debug log tail on failure
   if [[ -s "${PARTITION_DEBUG_LOG:-}" ]]; then
     warn "Partition operations raw output (last 50 lines):"
-    tail -50 "$PARTITION_DEBUG_LOG" >&2
+    tail -50 "$PARTITION_DEBUG_LOG" | log_capture_stream pipeline error partition-output || true
   fi
 }
 
-_report_failure() {
-  local rc="${1:?_report_failure: missing rc}"
-  local line="${2:?_report_failure: missing line}"
+report_failure() {
+  local rc="${1:?report_failure: missing rc}"
+  local line="${2:?report_failure: missing line}"
   local cmd="${3:-}"
   local reason="${4:-}"
+  local source="${5:-}"
+  local func="${6:-}"
 
   # A manually invoked die() might follow a command that returned 0.
   ((rc != 0)) || rc=1
@@ -183,20 +183,31 @@ _report_failure() {
   trap - ERR
   set +e
 
-  _failure_snapshot "$rc" "$line" "$cmd" "$reason"
+  _failure_snapshot "$rc" "$line" "$cmd" "$reason" "$source" "$func"
   exit "$rc"
 }
 
 _on_err() {
   local rc=$?
-  local line="${BASH_LINENO[0]:-${LINENO}}"
-  local cmd="$BASH_COMMAND"
+  local line="${1:-${LINENO}}"
+  local cmd="${2:-$BASH_COMMAND}"
+  local source="${3:-${BASH_SOURCE[1]:-}}"
+  local func="${4:-${FUNCNAME[1]:-}}"
 
-  _report_failure \
+  warn "ERR trap fired: line=$line command=$cmd source=$source func=$func"
+
+  # Emit pipeline summary before reporting failure (if a pipeline is active)
+  if [[ ${_PIPELINE_ORDER+x} && ${#_PIPELINE_ORDER[@]} -gt 0 ]]; then
+    pipeline_print_summary
+  fi
+
+  report_failure \
     "$rc" \
     "$line" \
     "$cmd" \
-    "unhandled command failure"
+    "unhandled command failure" \
+    "$source" \
+    "$func"
 }
 
 die() {
@@ -204,21 +215,30 @@ die() {
   local rc=$?
   local reason="$*"
   local line="${BASH_LINENO[0]:-${LINENO}}"
+  local source="${BASH_SOURCE[1]:-}"
+  local func="${FUNCNAME[1]:-}"
 
   ((rc != 0)) || rc=1
 
-  _report_failure \
+  # Emit pipeline summary before reporting failure (if a pipeline is active)
+  if [[ ${_PIPELINE_ORDER+x} && ${#_PIPELINE_ORDER[@]} -gt 0 ]]; then
+    pipeline_print_summary
+  fi
+
+  report_failure \
     "$rc" \
     "$line" \
     "die: $reason" \
-    "$reason"
+    "$reason" \
+    "$source" \
+    "$func"
 }
 
 # ERR inheritance is required for failures originating inside functions,
 # command substitutions, and subshells.  This is already enabled by repatch;
 # enabling it here gives the builder the same enriched failure handling.
 set -E
-trap _on_err ERR
+trap '_PIPESTATUS_STR="${PIPESTATUS[*]}"; _on_err "$LINENO" "$BASH_COMMAND" "${BASH_SOURCE[1]:-}" "${FUNCNAME[1]:-}"' ERR
 
 # ensure_steamos_build_dirs [BASE_PATH]
 #   Create the persistent /home/.steamos-build tree (logs + recovery).
@@ -400,47 +420,25 @@ curl_retry() {
 _PROGRESS_TOTAL=98
 _PROGRESS_SO_FAR=0
 
-progress_emit() {
-  local step="${1:?progress_emit: missing step name}"
-  local weight=0
-  case "$step" in
-    decompress) weight=20 ;;
-    create_fs) weight=5 ;;
-    write_fs) weight=2 ;;
-    mount) weight=1 ;;
-    resolve_driver) weight=8 ;;
-    setup_chroot) weight=5 ;;
-    install_headers) weight=5 ;;
-    install_driver) weight=25 ;;
-    build_hid) weight=2 ;;
-    install_hw) weight=15 ;;
-    copy_payload) weight=3 ;;
-    configure_grub) weight=3 ;;
-    patch_installer) weight=1 ;;
-    finalize) weight=2 ;;
-    cleanup) weight=1 ;;
-  esac
-  if ((weight > 0)); then
-    _PROGRESS_SO_FAR=$((_PROGRESS_SO_FAR + weight))
-    ((_PROGRESS_SO_FAR > _PROGRESS_TOTAL)) && _PROGRESS_SO_FAR=$_PROGRESS_TOTAL
-    local pct=$((_PROGRESS_SO_FAR * 100 / _PROGRESS_TOTAL))
-    printf '%s\n' "@@PROGRESS:$pct@@"
-  fi
-}
+progress_emit() { log_progress pipeline progress "$1"; }
 
-# persist_debug_logs
-#   When DEBUG=1, copy all .log and .txt diagnostic files from WORKDIR to
-#   /tmp/steamos-build-logs-<timestamp>-<pid>/ before cleanup removes the
-#   workspace.  Preserves the directory structure (e.g. packages/build.log
-#   → /tmp/steamos-build-logs-.../packages/build.log).
-#   No-op when DEBUG!=1 or WORKDIR is unset/missing.
 persist_debug_logs() {
-  [[ "${DEBUG:-0}" == 1 ]] || return 0
+  debug "persist_debug_logs: WORKDIR=${WORKDIR:-unset} BUILD_ID=${BUILD_ID:-unset}"
+  debug "persist_debug_logs: looking for *.log and *.txt files in ${WORKDIR:-unset}"
   [[ -n "${WORKDIR:-}" && -d "$WORKDIR" ]] || return 0
 
-  local dest
-  dest="/tmp/steamos-build-logs-$(date +%Y%m%d-%H%M%S)-$$"
-  mkdir -p "$dest" || return 0
+  # Reuse the BUILD_ID directory created by the frontend when available.
+  # Fall back to generating a standalone name only when BUILD_ID is not set
+  # (e.g. a bare --action cleanup invocation without a frontend).
+  local persist_dir
+  if [[ -n "${BUILD_ID:-}" ]]; then
+    persist_dir="/home/.steamos-build/logs/${BUILD_ID}"
+  else
+    local ts
+    ts="$(date +%Y%m%d-%H%M%S)"
+    persist_dir="/home/.steamos-build/logs/build-${ts}-$$"
+  fi
+  mkdir -p "$persist_dir" 2>/dev/null || return 0
 
   local count=0
   local log_file
@@ -448,22 +446,36 @@ persist_debug_logs() {
     local rel="${log_file#"$WORKDIR"/}"
     local sub_dir
     sub_dir="$(dirname "$rel")"
-    [[ "$sub_dir" != "." ]] && mkdir -p "$dest/$sub_dir"
-    cp -- "$log_file" "$dest/$rel" 2>/dev/null && ((++count))
+    [[ "$sub_dir" != "." ]] && mkdir -p "$persist_dir/$sub_dir"
+    cp -- "$log_file" "$persist_dir/$rel" 2>/dev/null && ((++count))
   done < <(find "$WORKDIR" -maxdepth 3 \( -name '*.log' -o -name '*.txt' \) -type f -print0 2>/dev/null)
 
   if ((count > 0)); then
-    log "cleanup: persisted $count diagnostic file(s) to $dest"
+    log "cleanup: persisted $count diagnostic file(s) to $persist_dir"
+    # The build-latest symlink is also created by pipeline_build.sh (which
+    # correctly uses BUILD_ID).  Only update it here for the fallback case
+    # where BUILD_ID is not set (standalone cleanup).
+    if [[ -z "${BUILD_ID:-}" ]]; then
+      ln -sfn "$(basename "$persist_dir")" \
+        "/home/.steamos-build/logs/build-latest" 2>/dev/null || true
+    fi
   fi
 }
 
 # cleanup_check_host_namespace
 #   Returns 0 if safe to clean up (not in init namespace),
 #   Returns 1 if in init namespace (PID 1 mount namespace).
+#   Set CLEANUP_NAMESPACE_OVERRIDE=1 to allow cleanup in init namespace
+#   when entering a build's namespace via nsenter.
 cleanup_check_host_namespace() {
   if [[ -e /proc/self/ns/mnt && -e /proc/1/ns/mnt ]]; then
     if [[ "$(readlink /proc/self/ns/mnt)" == "$(readlink /proc/1/ns/mnt)" ]]; then
-      warn "cleanup_check_host_namespace: detected init (PID 1) mount namespace — refusing aggressive cleanup"
+      if ((CLEANUP_NAMESPACE_OVERRIDE)); then
+        debug "cleanup_check_host_namespace: override active — proceeding in init namespace"
+        return 0
+      fi
+      warn "cleanup_check_host_namespace: running in init namespace — refusing to proceed"
+      warn "  Set CLEANUP_NAMESPACE_OVERRIDE=1 only when entering a build namespace via nsenter"
       return 1
     fi
   fi
@@ -482,10 +494,79 @@ cleanup_stop_background_jobs() {
 # cleanup_remove_udev_rules
 #   Remove udev rules created during build.
 cleanup_remove_udev_rules() {
-  if [[ -n "${UDEV_RULE:-}" && -f "$UDEV_RULE" ]]; then
-    rm -f "$UDEV_RULE"
-    udevadm control --reload 2>/dev/null || true
+  log_debug pipeline cleanup "cleanup_remove_udev_rules: start"
+  if [[ -z "${UDEV_RULE:-}" ]]; then
+    warn "cleanup_remove_udev_rules: UDEV_RULE is unset; nothing to remove"
+    log_debug pipeline cleanup "cleanup_remove_udev_rules: done"
+    return 0
   fi
+  if [[ ! -f "$UDEV_RULE" ]]; then
+    log_debug pipeline cleanup "cleanup_remove_udev_rules: $UDEV_RULE does not exist; skipping"
+    log_debug pipeline cleanup "cleanup_remove_udev_rules: done"
+    return 0
+  fi
+  log "cleanup_remove_udev_rules: removing udev rule $UDEV_RULE"
+  rm -f "$UDEV_RULE"
+  log "cleanup_remove_udev_rules: reloading host udev rules (udevadm control --reload)"
+  if ! run_dangerous_cmd udevadm control --reload 2>/dev/null; then
+    warn "cleanup_remove_udev_rules: udevadm control --reload failed"
+  fi
+  log_debug pipeline cleanup "cleanup_remove_udev_rules: done"
+}
+
+run_dangerous_cmd() {
+  local cmd="${1:?run_dangerous_cmd: missing command}"
+  shift
+
+  local _rdc_start_ms _rdc_end_ms _rdc_duration_ms=0
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+    local _s _ms
+    _s="${EPOCHREALTIME%%.*}"
+    _ms="${EPOCHREALTIME#*.}"
+    _ms="${_ms:0:3}"
+    _rdc_start_ms=$((10#${_s} * 1000 + 10#${_ms}))
+  fi
+
+  local _rc=0
+  "$cmd" "$@" || _rc=$?
+
+  if [[ -n "${_rdc_start_ms:-}" ]]; then
+    if [[ -n "${EPOCHREALTIME:-}" ]]; then
+      local _s _ms
+      _s="${EPOCHREALTIME%%.*}"
+      _ms="${EPOCHREALTIME#*.}"
+      _ms="${_ms:0:3}"
+      _rdc_end_ms=$((10#${_s} * 1000 + 10#${_ms}))
+      _rdc_duration_ms=$((_rdc_end_ms - _rdc_start_ms))
+      ((_rdc_duration_ms < 0)) && _rdc_duration_ms=0
+    fi
+  fi
+
+  local _rdc_in_cleanup="${CLEANUP_RUNNING:-0}"
+
+  local _rdc_args_str="$*"
+  ((${#_rdc_args_str} > 200)) && _rdc_args_str="${_rdc_args_str:0:200}…"
+
+  # Sanitize for flat log (remove control chars)
+  local _rdc_args_safe="${_rdc_args_str//[[:cntrl:]]/?}"
+
+  if declare -F cleanup_log >/dev/null 2>&1; then
+    local _rdc_status="OK"
+    ((_rc != 0)) && _rdc_status="FAIL(rc=$_rc)"
+    cleanup_log "CMD $_rdc_status ${cmd} ${_rdc_args_safe} (${_rdc_duration_ms}ms cleanup=${_rdc_in_cleanup})"
+  fi
+
+  if ((_rc != 0)); then
+    log_warn pipeline dangerous-cmd "command failed" \
+      cmd "$cmd" args "$_rdc_args_str" rc "$_rc" \
+      duration_ms "$_rdc_duration_ms" cleanup "$_rdc_in_cleanup"
+  else
+    log_debug pipeline dangerous-cmd "command succeeded" \
+      cmd "$cmd" args "$_rdc_args_str" rc "$_rc" \
+      duration_ms "$_rdc_duration_ms" cleanup "$_rdc_in_cleanup"
+  fi
+
+  return "$_rc"
 }
 
 # Diff the chroot's new packages against the pristine image db to get the list

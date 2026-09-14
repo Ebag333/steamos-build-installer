@@ -34,7 +34,6 @@ overlay_mount() {
   MERGED="$merged"
 
   mkdir -p "$UPPER" "$OVLWORK" "$MERGED"
-  mkdir -p "$MERGED/proc" "$MERGED/sys" "$MERGED/dev" "$MERGED/tmp"
 
   if mountpoint -q "$MERGED" 2>/dev/null; then
     die "Overlay merge point is already mounted: $MERGED"
@@ -43,7 +42,11 @@ overlay_mount() {
   # workdir is scratch state, not cache state.  After an interrupted/lazy
   # unmount it can contain OverlayFS-internal residue that prevents a clean
   # remount.  It is safe to empty while the overlay is not mounted.
-  find "$OVLWORK" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
+  local _ovl_scratch
+  for _ovl_scratch in "$OVLWORK"/*; do
+    [[ -e "$_ovl_scratch" ]] || continue
+    safe_rmdir "$_ovl_scratch" 2>/dev/null || true
+  done
 
   # OverlayFS requires upperdir and workdir to live on the same filesystem.
   local upper_dev work_dev
@@ -65,29 +68,33 @@ overlay_mount() {
   cleanup_mount "$MERGED" "overlay merge" -- -t overlay overlay -o "$overlay_opts"
   mount --make-rprivate "$MERGED"
 
+  # Create mount points INSIDE the overlay so they exist in the merged view.
+  mkdir -p "$MERGED/proc" "$MERGED/sys" "$MERGED/dev" "$MERGED/tmp"
+
   # Mount virtual filesystems for chroot operations.
-  cleanup_mount "$MERGED/proc" "chroot proc" -- -t proc proc "$MERGED/proc"
-  cleanup_mount "$MERGED/sys" "chroot sys" -- --rbind /sys "$MERGED/sys"
-  mount --make-rslave "$MERGED/sys"
+  cleanup_mount "$MERGED/proc" "chroot proc" -- -t proc proc
+  cleanup_mount_readonly_sysfs "$MERGED/sys" "chroot sys" \
+    || die "Failed to mount sysfs in chroot"
+  log "overlay: sysfs mounted read-only in chroot ($MERGED/sys)"
 
-  # /dev: non-recursive bind to avoid cloning /dev/shm/steamos-build mounts.
-  cleanup_mount "$MERGED/dev" "chroot dev" -- --bind /dev "$MERGED/dev"
-  mount --make-private "$MERGED/dev"
+  # /dev: recursive bind; --make-rslave keeps submounts (pts, shm) in sync.
+  cleanup_mount "$MERGED/dev" "chroot dev" -- --rbind /dev
+  mount --make-rslave "$MERGED/dev" \
+    || die "Failed to set /dev propagation to rslave in chroot"
 
-  # Pseudoterminals.
-  mkdir -p "$MERGED/dev/pts"
-  cleanup_mount "$MERGED/dev/pts" "chroot dev/pts" -- --bind /dev/pts "$MERGED/dev/pts"
-  mount --make-private "$MERGED/dev/pts"
-
-  # Private shared-memory filesystem — pacman/GnuPG use /dev/shm,
-  # but the chroot must NOT see /dev/shm/steamos-build (our build mounts).
+  # Private shared-memory filesystem — remove inherited bind from rbind, then mount fresh tmpfs
   mkdir -p "$MERGED/dev/shm"
-  cleanup_mount "$MERGED/dev/shm" "chroot dev/shm" -- -t tmpfs tmpfs "$MERGED/dev/shm" -o mode=1777,nosuid,nodev
+  if mountpoint -q "$MERGED/dev/shm" 2>/dev/null; then
+    strict_unmount "$MERGED/dev/shm" "inherited chroot dev/shm" 2>/dev/null || {
+      warn "Failed to remove inherited /dev/shm — attempting to continue"
+    }
+  fi
+  cleanup_mount "$MERGED/dev/shm" "chroot dev/shm" -- -t tmpfs tmpfs -o mode=1777,nosuid,nodev
 
   # Bind-mount host /tmp into the chroot — the overlay mount path doesn't
   # match inside the chroot (host sees /path/to/merged, chroot sees /), so
   # pacman can't resolve mount points for its cachedir space check.
-  cleanup_mount "$MERGED/tmp" "chroot tmp" -- --bind /tmp "$MERGED/tmp"
+  cleanup_mount "$MERGED/tmp" "chroot tmp" -- --bind /tmp
   mount --make-private "$MERGED/tmp"
 
   # Set up chroot essentials.
@@ -96,14 +103,13 @@ overlay_mount() {
   ln -sf /proc/self/mounts "$MERGED/etc/mtab"
 
   # Diagnostic: log the chroot /dev mount tree.
-  log "Chroot /dev mount tree:"
-  findmnt -R "$MERGED/dev" -o TARGET,SOURCE,FSTYPE,PROPAGATION >&2 2>/dev/null || true
+  log_debug overlay dev-mount-tree "Chroot /dev mount tree:" mounts "$(findmnt -R "$MERGED/dev" -o TARGET,SOURCE,FSTYPE,PROPAGATION 2>/dev/null || true)" # lint-ignore: strict-mount
 
   # Sanity check: verify no build mounts leaked into chroot /dev.
   if findmnt -R "$MERGED/dev" -n -o TARGET 2>/dev/null \
     | grep -Fq "$MERGED/dev/shm/steamos-build/"; then
     warn "Build workspace mount tree leaked into chroot /dev:"
-    findmnt -R "$MERGED/dev" -o TARGET,SOURCE,FSTYPE,PROPAGATION >&2 2>/dev/null || true
+    log_debug overlay mount-leak-tree mounts "$(findmnt -R "$MERGED/dev" -o TARGET,SOURCE,FSTYPE,PROPAGATION 2>/dev/null || true)" # lint-ignore: strict-mount
     die "Build workspace mounts leaked into chroot /dev"
   fi
 
@@ -195,7 +201,8 @@ _overlay_check_cache() {
     log "Previous build identity: $current_key"
   fi
   log "Starting fresh overlay upper for this build"
-  rm -rf "${UPPER:?}" "${OVLWORK:?}"
+  safe_rmdir "${UPPER:?}"
+  safe_rmdir "${OVLWORK:?}"
   mkdir -p "$UPPER" "$OVLWORK"
 
   printf '%s\n' "$expected_key" >"$marker"
@@ -269,7 +276,11 @@ _overlay_mount_with_image() {
   else
     # Even without persistent caching, workdir is scratch and must not carry
     # residue from a previous mount.
-    find "$OVLWORK" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
+    local _ovl_scratch
+    for _ovl_scratch in "$OVLWORK"/*; do
+      [[ -e "$_ovl_scratch" ]] || continue
+      safe_rmdir "$_ovl_scratch" 2>/dev/null || true
+    done
   fi
 
   overlay_mount "$lowerdir" "$OVL_MNT" "$merged"
@@ -301,7 +312,7 @@ setup_pacman_conf() {
   mkdir -p "$overlay_storage/pkg-cache" "$MERGED/tmp/pkgcache"
 
   if ! mountpoint -q "$MERGED/tmp/pkgcache" 2>/dev/null; then
-    cleanup_mount "$MERGED/tmp/pkgcache" "pacman cache" -- --bind "$overlay_storage/pkg-cache" "$MERGED/tmp/pkgcache"
+    cleanup_mount "$MERGED/tmp/pkgcache" "pacman cache" -- --bind "$overlay_storage/pkg-cache"
   fi
 
   # SteamOS stores its pacman db at /usr/lib/holo/pacmandb/, not the default
@@ -425,7 +436,7 @@ mount_effective_etc() {
 
   _EFFECTIVE_ETC_MOUNTED=1
   log "  Effective /etc overlay mounted on $root/etc"
-  findmnt -T "$root/etc" -o TARGET,SOURCE,FSTYPE,OPTIONS >&2 || true
+  log_debug overlay etc-overlay-mounted mounts "$(findmnt -T "$root/etc" -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true)"
 }
 
 # Unmount the effective /etc overlay.  Safe to call unconditionally — no-ops if
@@ -465,7 +476,7 @@ clean_overlay_state() {
 
   if [[ -d "$root/var/lib/overlays" ]]; then
     log "  Removing hidden rootfs overlay state: $root/var/lib/overlays"
-    rm -rf "$root/var/lib/overlays" \
+    safe_rmdir "$root/var/lib/overlays" \
       || die "Failed to remove stale overlay state from $root"
   else
     log "  No hidden rootfs overlay state found in $root"
@@ -633,7 +644,7 @@ setup_clear_stale_state() {
       kill "$_jbd2_pid" 2>/dev/null || true
       local _wait_i
       for _wait_i in $(seq 1 30); do
-        losetup "$dev" >/dev/null 2>&1 || break
+        losetup "$dev" >/dev/null 2>&1 || break # lint-ignore: strict-mount
         if [[ "$_wait_i" -eq 10 ]]; then
           kill -9 "$_jbd2_pid" 2>/dev/null || true
         fi
@@ -688,12 +699,9 @@ setup_clear_stale_state() {
   # ============================================================
   for m in "$MERGED" "$UPPER" "$OVLWORK"; do
     [[ -n "$m" && -e "$m" ]] || continue
-
-    if mountpoint -q "$m" 2>/dev/null; then
-      die "Refusing to remove mounted stale directory: $m"
+    if ! safe_rmdir "$m"; then
+      die "Refusing to remove stale directory with active mounts: $m"
     fi
-
-    rm -rf "$m"
   done
 
   # ============================================================
@@ -724,7 +732,9 @@ _cleanup_stale_build_roots() {
     if [[ -z "$stale_loops" ]]; then
       # No loop attached — just remove the directory
       log "  Removing orphaned build root: $stale_dir"
-      rm -rf "$stale_dir"
+      if ! safe_rmdir "$stale_dir"; then
+        die "Refusing to remove stale build root with active mounts: $stale_dir"
+      fi
       continue
     fi
 
@@ -751,7 +761,7 @@ _cleanup_stale_build_roots() {
       done < <(mounts_for_loop "$loop")
 
       # Also try unmounting known paths inside the build root
-      for m in "$merged/dev/pts" "$merged/dev/shm" "$merged/dev" "$merged/sys" "$merged/proc" "$merged/tmp" "$merged"; do
+      for m in "$merged/dev/shm" "$merged/dev" "$merged/sys" "$merged/proc" "$merged/tmp" "$merged"; do
         [[ -e "$m" ]] || continue
         if mountpoint -q "$m" 2>/dev/null; then
           warn "  Unmounting stale build root path: $m"
@@ -770,14 +780,16 @@ _cleanup_stale_build_roots() {
         strict_detach_loop "$loop" || warn "  Could not detach $loop"
       else
         warn "  $loop ext4 superblock still alive; attempting detach anyway"
-        losetup -d "$loop" 2>/dev/null || true
+        strict_detach_loop "$loop" || warn "  Could not detach $loop despite live superblock"
       fi
     done <<<"$stale_loops"
 
     # Remove directory if no loops remain
     stale_loops="$(loops_for_file "$stale_img")"
     if [[ -z "$stale_loops" ]]; then
-      rm -rf "$stale_dir"
+      if ! safe_rmdir "$stale_dir"; then
+        die "Refusing to remove stale build root with active mounts: $stale_dir"
+      fi
     else
       warn "  Build root $stale_dir still has active loops; preserving"
     fi
@@ -828,7 +840,7 @@ for dev in data.get("loopdevices", []):
   while IFS=$'\t' read -r loop backing; do
     [[ -n "$loop" ]] || continue
     warn "Cleaning stale build loop from previous run: $loop ($backing)"
-    if losetup -d "$loop" 2>/dev/null; then
+    if strict_detach_loop "$loop"; then
       log "  Detached $loop"
     else
       warn "  Could not detach $loop (may already be gone)"
@@ -846,13 +858,16 @@ overlay_init_keyring() {
   : "${MERGED:?overlay_init_keyring: MERGED is not set}"
   mountpoint -q "$MERGED" || die "overlay_init_keyring: MERGED ($MERGED) is not a mountpoint"
 
-  rm -rf "$MERGED/etc/pacman.d/gnupg"
-  in_chroot "pacman-key --init" || die "pacman-key --init failed"
+  safe_rmdir "$MERGED/etc/pacman.d/gnupg" 2>/dev/null || true
+  # lint-ignore: silenced-stdout — stdout intentionally suppressed; stderr preserved for diagnostics
+  in_chroot "pacman-key --init >/dev/null" || die "pacman-key --init failed"
 
   if [[ -n "$extra_keyrings" ]]; then
-    in_chroot "pacman-key --populate $extra_keyrings" || die "pacman-key --populate failed"
+    # lint-ignore: silenced-stdout — stdout intentionally suppressed; stderr preserved for diagnostics
+    in_chroot "pacman-key --populate $extra_keyrings >/dev/null" || die "pacman-key --populate failed"
   else
-    in_chroot "pacman-key --populate" || die "pacman-key --populate failed"
+    # lint-ignore: silenced-stdout — stdout intentionally suppressed; stderr preserved for diagnostics
+    in_chroot "pacman-key --populate >/dev/null" || die "pacman-key --populate failed"
   fi
 
   # Diagnostic: log keyring state after bootstrap
@@ -893,9 +908,14 @@ overlay_cleanup() {
   : "${OVL_IMG:=${WORKDIR:+$WORKDIR/overlay-work.img}}"
   : "${OVL_MNT:=${WORKDIR:+$WORKDIR/overlay-mnt}}"
 
+  cleanup_log "=== overlay_cleanup: start ==="
+  cleanup_log_namespace
+  cleanup_log_mount_state
+
   # ------------------------------------------------------------
   # 1. Kill known chroot daemons before touching mount topology.
   # ------------------------------------------------------------
+  cleanup_log "overlay_cleanup: kill gpg-agent"
   if [[ -n "${MERGED:-}" &&
     -d "$MERGED/etc/pacman.d/gnupg" ]]; then
     gpgconf \
@@ -907,12 +927,12 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   # 2. Remove mounts INSIDE the OverlayFS.
   #
-  # /dev children (pts, shm) must be unmounted before /dev itself.
+  # /dev children (shm) must be unmounted before /dev itself.
   # ------------------------------------------------------------
+  cleanup_log "overlay_cleanup: unmount chroot children"
   if [[ -n "${MERGED:-}" ]]; then
     for m in \
       "$MERGED/tmp/pkgcache" \
-      "$MERGED/dev/pts" \
       "$MERGED/dev/shm" \
       "$MERGED/dev" \
       "$MERGED/sys" \
@@ -932,6 +952,7 @@ overlay_cleanup() {
 
   if ((rc != 0)); then
     warn "overlay_cleanup: chroot child mounts remain; refusing to tear down OverlayFS"
+    cleanup_log "overlay_cleanup: FAIL — chroot children remain (rc=$rc)"
     [[ "$_had_e" -eq 1 ]] && set -e
     return 1
   fi
@@ -939,17 +960,18 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   # 3. Remove MERGED itself.
   # ------------------------------------------------------------
+  cleanup_log "overlay_cleanup: unmount MERGED"
   if [[ -n "${MERGED:-}" ]] \
     && mountpoint -q "$MERGED" 2>/dev/null; then
     if [[ "${DEBUG:-0}" == 1 ]]; then
-      echo "=== PRE-MERGED-UNMOUNT ==="
-      findmnt -R "$MERGED" 2>/dev/null || true
-      fuser -vm "$MERGED" 2>/dev/null || true
-      grep -F "$MERGED" /proc/self/mountinfo 2>/dev/null || true
+      log_debug overlay pre-merged-unmount "=== PRE-MERGED-UNMOUNT ==="
+      log_debug overlay pre-merged-unmount-tree mounts "$(findmnt -R "$MERGED" 2>/dev/null || true)"
+      log_debug overlay pre-merged-unmount-users users "$(fuser -vm "$MERGED" 2>/dev/null || true)"
+      log_debug overlay pre-merged-unmount-mountinfo mountinfo "$(grep -F "$MERGED" /proc/self/mountinfo 2>/dev/null || true)"
       if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        log_debug overlay pre-merged-unmount-loop loop "$(findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true)"
         [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive before MERGED unmount"
+          && log_debug overlay pre-merged-unmount-ext4 "${OVL_LOOPDEV##/dev/} ext4 still alive before MERGED unmount"
       fi
     fi
 
@@ -961,18 +983,18 @@ overlay_cleanup() {
     else
       # Dump diagnostics on failure
       warn "overlay_cleanup: MERGED unmount failed (rc=$umount_merged_rc)"
-      findmnt -R "$MERGED" 2>/dev/null || true
-      fuser -vm "$MERGED" 2>/dev/null || true
-      grep -F "$MERGED" /proc/self/mountinfo 2>/dev/null || true
+      log_debug overlay merged-unmount-fail-tree mounts "$(findmnt -R "$MERGED" 2>/dev/null || true)"
+      log_debug overlay merged-unmount-fail-users users "$(fuser -vm "$MERGED" 2>/dev/null || true)"
+      log_debug overlay merged-unmount-fail-mountinfo mountinfo "$(grep -F "$MERGED" /proc/self/mountinfo 2>/dev/null || true)"
     fi
 
     if [[ "${DEBUG:-0}" == 1 ]]; then
-      echo "=== AFTER MERGED ==="
-      findmnt -R "$MERGED" 2>/dev/null || true
+      log_debug overlay post-merged-unmount "=== AFTER MERGED ==="
+      log_debug overlay post-merged-unmount-tree mounts "$(findmnt -R "$MERGED" 2>/dev/null || true)"
       if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        log_debug overlay post-merged-unmount-loop loop "$(findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true)"
         [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after MERGED unmount"
+          && log_debug overlay post-merged-unmount-ext4 "${OVL_LOOPDEV##/dev/} ext4 still alive after MERGED unmount"
       fi
     fi
 
@@ -994,17 +1016,18 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   # 4. Now — and only now — unmount the ext4 overlay workspace.
   # ------------------------------------------------------------
+  cleanup_log "overlay_cleanup: unmount OVL_MNT"
   if [[ -n "${OVL_MNT:-}" ]] \
     && mountpoint -q "$OVL_MNT" 2>/dev/null; then
     if [[ "${DEBUG:-0}" == 1 ]]; then
-      echo "=== PRE-OVL_MNT-UNMOUNT ==="
-      findmnt -R "$OVL_MNT" 2>/dev/null || true
-      fuser -vm "$OVL_MNT" 2>/dev/null || true
-      grep -F "$OVL_MNT" /proc/self/mountinfo 2>/dev/null || true
+      log_debug overlay pre-ovl-mnt-unmount "=== PRE-OVL_MNT-UNMOUNT ==="
+      log_debug overlay pre-ovl-mnt-unmount-tree mounts "$(findmnt -R "$OVL_MNT" 2>/dev/null || true)"
+      log_debug overlay pre-ovl-mnt-unmount-users users "$(fuser -vm "$OVL_MNT" 2>/dev/null || true)"
+      log_debug overlay pre-ovl-mnt-unmount-mountinfo mountinfo "$(grep -F "$OVL_MNT" /proc/self/mountinfo 2>/dev/null || true)"
       if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        log_debug overlay pre-ovl-mnt-unmount-loop loop "$(findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true)"
         [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive before OVL_MNT unmount"
+          && log_debug overlay pre-ovl-mnt-unmount-ext4 "${OVL_LOOPDEV##/dev/} ext4 still alive before OVL_MNT unmount"
       fi
     fi
 
@@ -1016,9 +1039,9 @@ overlay_cleanup() {
     else
       # Dump diagnostics on failure
       warn "overlay_cleanup: OVL_MNT unmount failed (rc=$umount_ovl_rc)"
-      findmnt -R "$OVL_MNT" 2>/dev/null || true
-      fuser -vm "$OVL_MNT" 2>/dev/null || true
-      grep -F "$OVL_MNT" /proc/self/mountinfo 2>/dev/null || true
+      log_debug overlay ovl-mnt-unmount-fail-tree mounts "$(findmnt -R "$OVL_MNT" 2>/dev/null || true)"
+      log_debug overlay ovl-mnt-unmount-fail-users users "$(fuser -vm "$OVL_MNT" 2>/dev/null || true)"
+      log_debug overlay ovl-mnt-unmount-fail-mountinfo mountinfo "$(grep -F "$OVL_MNT" /proc/self/mountinfo 2>/dev/null || true)"
     fi
 
     # Flush pending writes so the jbd2 thread releases the superblock
@@ -1028,12 +1051,12 @@ overlay_cleanup() {
     fi
 
     if [[ "${DEBUG:-0}" == 1 ]]; then
-      echo "=== AFTER OVL_MNT ==="
-      findmnt -R "$OVL_MNT" 2>/dev/null || true
+      log_debug overlay post-ovl-mnt-unmount "=== AFTER OVL_MNT ==="
+      log_debug overlay post-ovl-mnt-unmount-tree mounts "$(findmnt -R "$OVL_MNT" 2>/dev/null || true)"
       if [[ -n "${OVL_LOOPDEV:-}" ]]; then
-        findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true
+        log_debug overlay post-ovl-mnt-unmount-loop loop "$(findmnt -S "$OVL_LOOPDEV" 2>/dev/null || true)"
         [[ -d "/sys/fs/ext4/${OVL_LOOPDEV##/dev/}" ]] \
-          && echo "${OVL_LOOPDEV##/dev/} ext4 still alive after OVL_MNT unmount"
+          && log_debug overlay post-ovl-mnt-unmount-ext4 "${OVL_LOOPDEV##/dev/} ext4 still alive after OVL_MNT unmount"
       fi
     fi
 
@@ -1047,14 +1070,15 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   # 5. Find every loop associated with overlay-work.img.
   # ------------------------------------------------------------
+  cleanup_log "overlay_cleanup: find loops for overlay-work.img"
   if [[ -n "${OVL_IMG:-}" ]]; then
     loops="$(loops_for_file "$OVL_IMG")"
   fi
 
   # Include the loop we explicitly allocated even if losetup's backing-file
   # presentation is unusual.
-  if [[ -n "${OVL_LOOPDEV:-}" ]] \
-    && losetup "$OVL_LOOPDEV" >/dev/null 2>&1 \
+  # lint-ignore: strict-mount (read-only existence check)
+  if [[ -n "${OVL_LOOPDEV:-}" ]] && losetup "$OVL_LOOPDEV" >/dev/null 2>&1 \
     && ! grep -qxF "$OVL_LOOPDEV" <<<"$loops"; then
     loops="${loops:+$loops$'\n'}$OVL_LOOPDEV"
   fi
@@ -1062,6 +1086,7 @@ overlay_cleanup() {
   # ------------------------------------------------------------
   # 6. Wait for ext4 superblock release, but don't block on it.
   # ------------------------------------------------------------
+  cleanup_log "overlay_cleanup: wait ext4 superblock release"
   while IFS="" read -r m; do
     [[ -n "$m" ]] || continue
 
@@ -1075,7 +1100,7 @@ overlay_cleanup() {
       # The filesystem is no longer accessible to userspace after unmount.
       # The jbd2 thread is just flushing metadata in the background.
       # losetup -d may succeed even if the superblock appears alive.
-      if losetup -d "$m" 2>/dev/null; then
+      if strict_detach_loop "$m"; then
         log "overlay_cleanup: $m detached successfully despite live superblock"
         # Kill the jbd2 journal thread so the ext4 superblock releases.
         # Without this, loops_for_file still sees the loop as attached.
@@ -1087,7 +1112,7 @@ overlay_cleanup() {
           # Wait for the loop to fully disappear from losetup
           local _wait_i
           for _wait_i in $(seq 1 30); do
-            losetup "$m" >/dev/null 2>&1 || break
+            losetup "$m" >/dev/null 2>&1 || break # lint-ignore: strict-mount
             # Escalate to SIGKILL if SIGTERM didn't work
             if [[ "$_wait_i" -eq 10 ]]; then
               log "overlay_cleanup: jbd2 still alive, sending SIGKILL to $m"
@@ -1113,13 +1138,13 @@ overlay_cleanup() {
             _clean="${_backing%\ (deleted)}"
             if [[ -n "${WORKDIR:-}" && "$_clean" == "$WORKDIR"* ]]; then
               log "overlay_cleanup: detaching WORKDIR-owned loop $_dev (backing: $_clean)"
-              if ! losetup -d "$_dev" 2>/dev/null; then
+              if ! strict_detach_loop "$_dev"; then
                 warn "overlay_cleanup: could not detach $_dev"
                 _targeted_rc=1
               fi
             elif [[ "$_clean" == */overlay-work.img ]]; then
               log "overlay_cleanup: detaching overlay-work.img loop $_dev (backing: $_clean)"
-              if ! losetup -d "$_dev" 2>/dev/null; then
+              if ! strict_detach_loop "$_dev"; then
                 warn "overlay_cleanup: could not detach $_dev"
                 _targeted_rc=1
               fi
@@ -1149,6 +1174,7 @@ for dev in data.get("loopdevices", []):
   # ------------------------------------------------------------
   # 7. Detach loops and verify.
   # ------------------------------------------------------------
+  cleanup_log "overlay_cleanup: detach loops"
   while IFS="" read -r m; do
     [[ -n "$m" ]] || continue
 
@@ -1182,10 +1208,12 @@ for dev in data.get("loopdevices", []):
     fi
   fi
 
+  cleanup_log "overlay_cleanup: verify remaining loops"
   if ((rc == 0)); then
     OVL_LOOPDEV=""
   fi
 
+  cleanup_log "=== overlay_cleanup: done (rc=$rc) ==="
   [[ "$_had_e" -eq 1 ]] && set -e
   return "$rc"
 }

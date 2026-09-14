@@ -21,7 +21,7 @@ fi
 # Cross-checks steamos-bootconf against RAUC — disagreement or ambiguity is
 # fatal.  All target device paths are resolved to canonical /dev/... (not
 # symlinks) so a later loop-mount cannot hijack the partset namespace.
-_flashless_detect_slots() {
+flashless_detect_slots() {
   local bootconf_slot rauc_slot rauc_booted
 
   bootconf_slot="$(steamos-bootconf this-image 2>/dev/null)" \
@@ -77,7 +77,7 @@ _flashless_detect_slots() {
 # We explicitly select rootfs-A (the partition our builder modifies), then
 # mount it read-only and verify it is actually our build.
 # Sets: FL_IMG_LOOP, FL_IMG_ROOTFS
-_flashless_extract_image() {
+flashless_extract_image() {
   local img="$1"
 
   [[ -f "$img" ]] || die "Built image not found: $img"
@@ -88,7 +88,7 @@ _flashless_extract_image() {
   FL_UDEV_RULE="/run/udev/rules.d/89-steamos-build-flashless.rules"
   mkdir -p /run/udev/rules.d
   cat "$(heredoc_dir)/static/flashless-udev.rule" >"$FL_UDEV_RULE"
-  udevadm control --reload-rules 2>/dev/null || true
+  run_dangerous_cmd udevadm control --reload-rules 2>/dev/null || true
 
   log "Loop-mounting built image: $img"
   FL_IMG_LOOP="$(losetup -f --show --partscan "$img" 2>/dev/null)" \
@@ -96,7 +96,7 @@ _flashless_extract_image() {
   cleanup_track_loop "$FL_IMG_LOOP" "$img" "flashless source image"
   log "  Loop device: $FL_IMG_LOOP"
 
-  udevadm settle --timeout=10 2>/dev/null || true
+  run_dangerous_cmd udevadm settle --timeout=10 2>/dev/null || true
 
   # Identify source rootfs by PARTLABEL — select rootfs-A specifically.
   # NOTE: --partscan temporarily exposes image partitions in the global
@@ -135,7 +135,7 @@ _flashless_extract_image() {
     die "Source rootfs-A is not an NVIDIA-patched build (atomupd wrapper missing)"
   fi
 
-  # Capture the source image's update branch so _flashless_restore_etc can
+  # Capture the source image's update branch so flashless_restore_etc can
   # preserve it instead of falling back to the hardcoded default.
   local _src_manifest="$verify_mnt/usr/lib/steamos-atomupd/manifest.json"
   FL_SOURCE_BRANCH=""
@@ -156,7 +156,7 @@ _flashless_extract_image() {
 
 # ── Size check ────────────────────────────────────────────────────────────────
 
-_flashless_check_sizes() {
+flashless_check_sizes() {
   local src_bytes tgt_bytes
   src_bytes="$(blockdev --getsize64 "$FL_IMG_ROOTFS" 2>/dev/null)" \
     || die "Could not determine source rootfs size"
@@ -171,7 +171,7 @@ _flashless_check_sizes() {
 
 # ── Target reset ──────────────────────────────────────────────────────────────
 
-_flashless_format_target() {
+flashless_format_target() {
   log "Formatting target EFI: $FL_TARGET_EFI"
   mkfs.vfat -F 32 -n "efi-$FL_TARGET" "$FL_TARGET_EFI" 2>/dev/null \
     || mkfs.vfat -F 32 "$FL_TARGET_EFI" \
@@ -184,7 +184,7 @@ _flashless_format_target() {
 
 # ── Rootfs write ──────────────────────────────────────────────────────────────
 
-_flashless_write_rootfs() {
+flashless_write_rootfs() {
   local src_bytes tgt_bytes
   src_bytes="$(blockdev --getsize64 "$FL_IMG_ROOTFS" 2>/dev/null)" \
     || die "Could not determine source rootfs size for write"
@@ -207,7 +207,7 @@ _flashless_write_rootfs() {
 
   sync -f "$FL_TARGET_ROOTFS" 2>/dev/null || sync
   blockdev --flushbufs "$FL_TARGET_ROOTFS" 2>/dev/null || true
-  udevadm settle --timeout=10 2>/dev/null || true
+  run_dangerous_cmd udevadm settle --timeout=10 2>/dev/null || true
 
   # Raw SHA256 verification — MUST happen BEFORE btrfstune -u.
   log "Verifying written rootfs ($src_bytes bytes)"
@@ -254,7 +254,7 @@ _flashless_write_rootfs() {
 
 # After detaching the loop image, verify that /dev/disk/by-partsets has
 # returned to pointing at the real target partitions.
-_flashless_verify_partsets() {
+flashless_verify_partsets() {
   log "Verifying partset symlinks point to real target devices"
 
   local resolved
@@ -333,7 +333,7 @@ _flashless_migrate_passwords() {
 
 # The freshly formatted var has no overlay yet, so the rootfs lower /etc
 # is authoritative until the first boot creates the runtime overlay.
-_flashless_restore_etc() {
+flashless_restore_etc() {
   local target_mnt
   target_mnt="$(mktemp -d /tmp/flashless-etc.XXXXXX)" \
     || die "Could not create temporary mount point"
@@ -343,7 +343,7 @@ _flashless_restore_etc() {
     || die "Could not mount target rootfs for /etc restoration"
 
   # Clear ro if set — but do NOT restore it here.  reconcile_grub still
-  # needs to write to the rootfs.  Restored in _flashless_restore_rootfs_ro()
+  # needs to write to the rootfs.  Restored in flashless_restore_rootfs_ro()
   # after all modifications are complete.
   local btrfs_ro
   btrfs_ro="$(
@@ -361,7 +361,7 @@ _flashless_restore_etc() {
 
   # Preserve the source image's update branch instead of falling back to
   # the hardcoded default (stable).  FL_SOURCE_BRANCH was captured from the
-  # source manifest during _flashless_extract_image.
+  # source manifest during flashless_extract_image.
   if [[ -n "${FL_SOURCE_BRANCH:-}" ]]; then
     UPDATE_BRANCH="$FL_SOURCE_BRANCH"
     log "  Preserving source branch: $UPDATE_BRANCH"
@@ -389,7 +389,7 @@ _flashless_restore_etc() {
 
 # ── Boot environment ──────────────────────────────────────────────────────────
 
-_flashless_rebuild_boot() {
+flashless_rebuild_boot() {
   log "Rebuilding boot environment for slot $FL_TARGET"
 
   local -a chroot_cmd=(
@@ -461,7 +461,7 @@ _flashless_rebuild_boot() {
 
 # Restore the target rootfs's original Btrfs ro property after all
 # modifications are complete.  Called once, after reconcile_grub succeeds.
-_flashless_restore_rootfs_ro() {
+flashless_restore_rootfs_ro() {
   ((${FL_ROOTFS_WAS_RO:-0})) || return 0
 
   local mnt
@@ -485,7 +485,7 @@ _flashless_restore_rootfs_ro() {
 
 # ── Slot activation ───────────────────────────────────────────────────────────
 
-_flashless_activate_slot() {
+flashless_activate_slot() {
   local rauc_slot
   case "$FL_TARGET" in
     A) rauc_slot="rootfs.0" ;;
@@ -508,7 +508,7 @@ _flashless_activate_slot() {
 
 # ── Final verification ────────────────────────────────────────────────────────
 
-_flashless_verify_final() {
+flashless_verify_final() {
   log "Final verification before activation"
 
   local target_mnt

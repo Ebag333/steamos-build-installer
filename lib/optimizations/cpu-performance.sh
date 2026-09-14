@@ -109,8 +109,8 @@ _apply_scx_lavd() {
 
   # Live mode: reload and restart immediately
   if is_live; then
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl restart scx.service 2>/dev/null \
+    run_dangerous_cmd systemctl daemon-reload 2>/dev/null || true
+    run_dangerous_cmd systemctl restart scx.service 2>/dev/null \
       || warn "Failed to start scx.service (will activate on next boot)"
   fi
 
@@ -222,7 +222,7 @@ _verify_scx_lavd() {
   root="$(get_root)"
   [[ -f "${root}/etc/scx_loader/config.toml" ]] || return 1
   if is_live; then
-    systemctl is-enabled scx.service &>/dev/null
+    run_dangerous_cmd systemctl is-enabled scx.service &>/dev/null
   else
     [[ -L "${root}/etc/systemd/system/multi-user.target.wants/scx.service" ]]
   fi

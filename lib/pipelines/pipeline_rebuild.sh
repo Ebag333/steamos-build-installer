@@ -19,16 +19,16 @@ fi
 #   1  = critical failure; staged OS should not be booted
 declare -a PATCH_RESULTS=()
 
-# patch_record NAME STATUS [DETAIL]
+# _patch_record NAME STATUS [DETAIL]
 #   STATUS is "ok", "fail", or "skip".
-patch_record() {
+_patch_record() {
   local name="${1:-}" status="${2:-}" detail="${3:-}"
   [[ -n "$name" && -n "$status" ]] || {
-    warn "patch_record: missing required arguments (name='$name' status='$status')"
+    warn "_patch_record: missing required arguments (name='$name' status='$status')"
     return 1
   }
   [[ "$status" == "ok" || "$status" == "fail" || "$status" == "skip" ]] || {
-    warn "patch_record: invalid status '$status' for '$name' (expected 'ok', 'fail', or 'skip')"
+    warn "_patch_record: invalid status '$status' for '$name' (expected 'ok', 'fail', or 'skip')"
     return 1
   }
   PATCH_RESULTS+=("$name|$status|$detail")
@@ -42,6 +42,7 @@ patch_record() {
 # ---------------------------------------------------------------------------
 
 register_rebuild_pipeline() {
+  _PIPELINE_NAME="rebuild"
   define_pipeline \
     "mount" \
     "preflight" \
@@ -353,7 +354,7 @@ _phase_rebuild_sysupgrade() {
 
   if ((_upgrade_ok)); then
     log "System upgrade completed successfully"
-    patch_record "System upgrade" "ok"
+    _patch_record "System upgrade" "ok"
   else
     die "System upgrade failed after retries"
   fi
@@ -449,19 +450,19 @@ _phase_rebuild_install() {
   in_chroot "curl -sfL '$HDR_URL' -o /tmp/headers.pkg.tar.zst"
 
   log "Refreshing Valve package database for header dependencies"
-  pacman_sync_db
+  pacman_sync_db || die "Package database sync failed"
 
   log "Installing exact-match kernel headers"
   pacman_install_local -- /tmp/headers.pkg.tar.zst
 
   # Install hardware packages (NVIDIA + optional)
   install_hw_libs
-  patch_record "NVIDIA driver + hardware packages" "ok"
+  _patch_record "NVIDIA driver + hardware packages" "ok"
 
   # Copy payload
   step "Copying reconciled payload into $PARTSET rootfs"
   copy_driver_payload "$NEWROOT" "$WORK/before.txt" "$WORK"
-  patch_record "Payload copy" "ok"
+  _patch_record "Payload copy" "ok"
 
   # Ensure flatpak staging service is installed (idempotent)
   ensure_flatpak_service "$NEWROOT"
@@ -475,7 +476,7 @@ _phase_rebuild_configure() {
   # Reconcile initramfs
   step "Restoring module autoloading in initramfs"
   reconcile_initramfs "$NEWROOT" "$KVER" "${INITRAMFS_MODULES:-}"
-  patch_record "Initramfs modules" "ok"
+  _patch_record "Initramfs modules" "ok"
 
   # Apply all customizations dynamically from config
   step "Reconciling target system configuration"
@@ -484,9 +485,9 @@ _phase_rebuild_configure() {
   if [[ -n "$all_items" ]]; then
     for _item in $all_items; do
       if apply_optimization_for_item "$_item" "rebuild" "$NEWROOT"; then
-        patch_record "$_item" "ok"
+        _patch_record "$_item" "ok"
       else
-        patch_record "$_item" "fail"
+        _patch_record "$_item" "fail"
       fi
     done
   fi
@@ -494,13 +495,13 @@ _phase_rebuild_configure() {
   # Enable nvidia power services
   if nvidia_is_selected; then
     if enable_nvidia_power_services "$NEWROOT"; then
-      patch_record "nvidia-power" "ok"
+      _patch_record "nvidia-power" "ok"
     else
-      patch_record "nvidia-power" "fail" "could not enable nvidia power services"
+      _patch_record "nvidia-power" "fail" "could not enable nvidia power services"
     fi
   else
     log "Skipping nvidia power services (nvidia not selected)"
-    patch_record "nvidia-power" "skip" "nvidia not selected"
+    _patch_record "nvidia-power" "skip" "nvidia not selected"
   fi
 
   return 0

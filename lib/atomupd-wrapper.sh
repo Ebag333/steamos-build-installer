@@ -32,10 +32,26 @@ chmod 777 /home/.steamos-build/recovery 2>/dev/null || true
 LOG="$LOGDIR/atomupd-$(date +%Y%m%d-%H%M%S)-$$.log"
 ln -sfn "$(basename "$LOG")" "$LOGDIR/atomupd-latest.log"
 
-_alog() {
-  printf '[steamos-build-atomupd] %s\n' "$*" | tee -a "$LOG" >&2
-  logger -t steamos-build-atomupd -- "$*" 2>/dev/null || true
+# Source structured logging library.
+# _NVIDIA_DIR is resolved above; logging.sh lives alongside this script.
+# shellcheck source=lib/logging.sh
+source "${_NVIDIA_DIR:+$_NVIDIA_DIR/}lib/logging.sh" 2>/dev/null || {
+  # Fallback shim if logging.sh is unavailable (e.g. minimal chroot).
+  log_info() {                                                     # lint-ignore: no-shadow
+    printf '[steamos-build-atomupd] %s\n' "$3" | tee -a "$LOG" >&2 # lint-ignore: tee-redirect
+    logger -t steamos-build-atomupd -- "$3" 2>/dev/null || true
+  }
+  log_warn() {                                                           # lint-ignore: no-shadow
+    printf '[steamos-build-atomupd] WARN: %s\n' "$3" | tee -a "$LOG" >&2 # lint-ignore: tee-redirect
+    logger -t steamos-build-atomupd -- "$3" 2>/dev/null || true
+  }
+  log_error() {                                                           # lint-ignore: no-shadow
+    printf '[steamos-build-atomupd] ERROR: %s\n' "$3" | tee -a "$LOG" >&2 # lint-ignore: tee-redirect
+    logger -t steamos-build-atomupd -- "$3" 2>/dev/null || true
+  }
 }
+
+log_init --log-file "$LOG" --console-level info --no-color 2>/dev/null || true
 
 _slot_other() {
   case "$1" in
@@ -138,13 +154,13 @@ _edit_slot_conf() {
   local conf="/esp/SteamOS/conf/$slot.conf"
 
   [[ -f "$conf" ]] || {
-    _alog "ERROR: boot config missing for target slot $slot: $conf"
+    log_error update missing_boot_config "Boot config missing for target slot" slot "$slot" conf "$conf"
     return 1
   }
 
-  _alog "Editing boot config for target slot $slot: $conf"
+  log_info update edit_slot_conf "Editing boot config for target slot" slot "$slot" conf "$conf"
   sed -i "$@" "$conf" || {
-    _alog "ERROR: failed editing $conf"
+    log_error update edit_slot_conf_failed "Failed editing boot config" conf "$conf"
     return 1
   }
 
@@ -165,27 +181,27 @@ _rollback_target() {
   local slot="${1:?_rollback_target: missing slot}"
   local ok=1
 
-  _alog "Cancelling staged update in slot $slot."
+  log_info update rollback "Cancelling staged update in slot" slot "$slot"
 
   if ! _edit_slot_conf "$slot" \
     -e 's/^boot-requested-at:.*/boot-requested-at: 0/' \
     -e 's/^boot-attempts:.*/boot-attempts: 0/' \
     -e 's/^image-invalid:.*/image-invalid: 1/'; then
-    _alog "ERROR: failed to invalidate updated slot $slot"
+    log_error update rollback_failed "Failed to invalidate updated slot" slot "$slot"
     ok=0
   fi
 
   if ! _verify_slot_boot_value "$slot" image-invalid 1 \
     || ! _verify_slot_boot_value "$slot" boot-attempts 0 \
     || ! _verify_slot_boot_value "$slot" boot-requested-at 0; then
-    _alog "ERROR: target slot $slot did not reach rollback state"
+    log_error update rollback_state_failed "Target slot did not reach rollback state" slot "$slot"
     ok=0
   fi
 
   if steamos-bootconf set-mode booted 2>/dev/null; then
-    _alog "Restored currently booted slot as boot-ok"
+    log_info update boot_ok_restored "Restored currently booted slot as boot-ok"
   else
-    _alog "WARNING: steamos-bootconf set-mode booted failed"
+    log_warn update set_mode_booted_failed "steamos-bootconf set-mode booted failed"
   fi
 
   _dump_boot_state
@@ -198,17 +214,17 @@ _install_self_into_target() {
   local mnt btrfs_ro
 
   [[ -x "$SELF_BUNDLE" ]] || {
-    _alog "ERROR: self-heal atomupd wrapper bundle is missing: $SELF_BUNDLE"
+    log_error update self_bundle_missing "Self-heal atomupd wrapper bundle is missing" path "$SELF_BUNDLE"
     return 1
   }
   [[ -e "$dev" ]] || {
-    _alog "ERROR: target rootfs device is missing: $dev"
+    log_error update rootfs_missing "Target rootfs device is missing" device "$dev"
     return 1
   }
 
   mnt="$(mktemp -d /tmp/steamos-build-propagate.XXXXXX)" || return 1
   if ! mount "$dev" "$mnt" 2>/dev/null; then
-    _alog "ERROR: could not mount $slot rootfs to propagate atomupd wrapper"
+    log_error update mount_failed "Could not mount rootfs to propagate atomupd wrapper" slot "$slot"
     rmdir "$mnt" 2>/dev/null || true
     return 1
   fi
@@ -218,7 +234,7 @@ _install_self_into_target() {
   btrfs_ro="$(btrfs property get -ts "$mnt" ro 2>/dev/null | awk -F= '/^ro=/{print $2}' || true)"
   if [[ "$btrfs_ro" == "true" ]]; then
     btrfs property set -ts "$mnt" ro false || {
-      _alog "ERROR: could not clear Btrfs ro property on $slot during wrapper propagation"
+      log_error update btrfs_ro_clear_failed "Could not clear Btrfs ro property on slot during wrapper propagation" slot "$slot"
       umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
       rmdir "$mnt" 2>/dev/null || true
       return 1
@@ -227,14 +243,14 @@ _install_self_into_target() {
 
   if [[ ! -e "$mnt/usr/bin/steamos-atomupd-client.orig" ]]; then
     [[ -e "$mnt/usr/bin/steamos-atomupd-client" || -L "$mnt/usr/bin/steamos-atomupd-client" ]] || {
-      _alog "ERROR: Valve steamos-atomupd-client is missing from staged slot $slot"
+      log_error update valve_client_missing "Valve steamos-atomupd-client is missing from staged slot" slot "$slot"
       umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
       rmdir "$mnt" 2>/dev/null || true
       return 1
     }
     mv "$mnt/usr/bin/steamos-atomupd-client" \
       "$mnt/usr/bin/steamos-atomupd-client.orig" || {
-      _alog "ERROR: could not preserve Valve atomupd client in slot $slot"
+      log_error update preserve_client_failed "Could not preserve Valve atomupd client in slot" slot "$slot"
       umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
       rmdir "$mnt" 2>/dev/null || true
       return 1
@@ -242,7 +258,7 @@ _install_self_into_target() {
   fi
 
   install -m 755 "$SELF_BUNDLE" "$mnt/usr/bin/steamos-atomupd-client" || {
-    _alog "ERROR: could not install atomupd self-heal wrapper into slot $slot"
+    log_error update install_wrapper_failed "Could not install atomupd self-heal wrapper into slot" slot "$slot"
     umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
     rmdir "$mnt" 2>/dev/null || true
     return 1
@@ -250,8 +266,8 @@ _install_self_into_target() {
 
   sync -f "$mnt/usr/bin/steamos-atomupd-client" 2>/dev/null || sync
   umount "$mnt" 2>/dev/null || {
-    _alog "ERROR: could not cleanly unmount $slot after wrapper propagation"
-    _alog "WARNING: falling back to lazy unmount; data integrity may be compromised"
+    log_error update unmount_failed "Could not cleanly unmount after wrapper propagation" slot "$slot"
+    log_warn update lazy_unmount_fallback "Falling back to lazy unmount; data integrity may be compromised"
     umount -l "$mnt" 2>/dev/null || true
     # Wait briefly for lazy unmount to release the mount point, then clean up
     local _retries=0
@@ -260,16 +276,16 @@ _install_self_into_target() {
       sleep 1
       _retries=$((_retries + 1))
     done
-    rmdir "$mnt" 2>/dev/null || _alog "WARNING: could not remove mount point $mnt"
+    rmdir "$mnt" 2>/dev/null || log_warn update rmdir_mount_point_failed "Could not remove mount point" mnt "$mnt"
     return 1
   }
   rmdir "$mnt" 2>/dev/null || true
 
-  _alog "Propagated atomupd self-heal wrapper into slot $slot"
+  log_info update wrapper_propagated "Propagated atomupd self-heal wrapper into slot" slot "$slot"
 }
 
 [[ -x "$REAL" ]] || {
-  _alog "ERROR: Valve atomupd client is missing or not executable: $REAL"
+  log_error update valve_client_missing_or_not_executable "Valve atomupd client is missing or not executable" path "$REAL"
   exit 127
 }
 
@@ -290,14 +306,14 @@ if [[ -n "$other_before" ]]; then
   fi
 fi
 
-_alog "Starting Valve atomupd client: $REAL $*"
-_alog "Pre-state: self=${this_before:-unknown} other=${other_before:-unknown} build=${build_before:-unknown} boot-requested-at=${request_before:-unknown}"
+log_info update starting_valve_client "Starting Valve atomupd client" client "$REAL" args "$*"
+log_info update pre_state "Pre-state" self "${this_before:-unknown}" other "${other_before:-unknown}" build "${build_before:-unknown}" boot_requested_at "${request_before:-unknown}"
 _dump_boot_state
 
 "$REAL" "$@"
 rc=$?
 
-_alog "Valve atomupd client returned rc=$rc"
+log_info update valve_client_returned "Valve atomupd client returned" rc "$rc"
 _dump_boot_state
 
 # A failed/check/query operation must retain Valve's exact result and must not
@@ -312,7 +328,7 @@ other_after="$(_slot_other "$this_after" 2>/dev/null || true)"
 # If we cannot prove which inactive slot belongs to the booted image, do not
 # guess. The Valve operation succeeded, so preserve its return code.
 if [[ -z "$other_before" || -z "$other_after" || "$this_after" != "$this_before" || "$other_after" != "$other_before" ]]; then
-  _alog "No safe A/B target transition could be established; no rebuild triggered."
+  log_info update no_safe_ab_transition "No safe A/B target transition could be established; no rebuild triggered"
   exit "$rc"
 fi
 
@@ -328,7 +344,7 @@ if request_after="$(_boot_value "$other_after" boot-requested-at 2>/dev/null)"; 
   request_after_ok=1
 fi
 
-_alog "Post-state: self=$this_after other=$other_after build=${build_after:-unknown} boot-requested-at=${request_after:-unknown}"
+log_info update post_state "Post-state" self "$this_after" other "$other_after" build "${build_after:-unknown}" boot_requested_at "${request_after:-unknown}"
 
 stage_reason=""
 if ((build_before_ok && build_after_ok)) && [[ "$build_after" != "$build_before" ]]; then
@@ -341,18 +357,18 @@ elif ((request_before_ok && request_after_ok)) \
 fi
 
 if [[ -z "$stage_reason" ]]; then
-  _alog "No newly staged OTHER-slot OS image detected; no rebuild needed."
+  log_info update no_staged_image "No newly staged OTHER-slot OS image detected; no rebuild needed."
   exit "$rc"
 fi
 
-_alog "Detected staged OS update: $stage_reason"
+log_info update staged_update_detected "Detected staged OS update: $stage_reason"
 
 if [[ $EUID -ne 0 ]]; then
-  _alog "ERROR: staged OS update detected but atomupd wrapper is not running as root"
+  log_error update not_root "Staged OS update detected but atomupd wrapper is not running as root"
   exit 1
 fi
 [[ -x "$BACKEND" ]] || {
-  _alog "ERROR: rebuild backend is missing or not executable: $BACKEND"
+  log_error update backend_missing "Rebuild backend is missing or not executable: $BACKEND"
   _rollback_target "$other_after" || true
   exit 1
 }
@@ -370,55 +386,55 @@ fi
 request_locked="$(_boot_value "$other_after" boot-requested-at 2>/dev/null || true)"
 invalid_locked="$(_boot_value "$other_after" image-invalid 2>/dev/null || true)"
 if [[ "$request_locked" == "0" && "$invalid_locked" == "1" ]]; then
-  _alog "Target slot was already rolled back by another updater invocation."
+  log_info update already_rolled_back "Target slot was already rolled back by another updater invocation."
   exit 1
 fi
 
-_alog "Update staged. Starting NVIDIA rebuild of partset 'other'."
-"$BACKEND" --action rebuild --partset other >>"$LOG" 2>&1
+log_info update rebuild_start "Update staged. Starting NVIDIA rebuild of partset 'other'."
+"$BACKEND" --action rebuild --partset other >>"$LOG" 2>&1 # lint-ignore: merged-streams — intentional diagnostic capture; backend has its own structured JSONL log
 rebuild_rc=$?
 
-_alog "Rebuild returned rc=$rebuild_rc"
+log_info update rebuild_returned "Rebuild returned rc=$rebuild_rc"
 _dump_boot_state
 
 if [[ $rebuild_rc -eq 10 ]]; then
   # rebuild completed but one or more optional patches failed.
   # The OS update itself is fine — do NOT roll back the staged slot.
-  _alog "WARNING: SteamOS update installed, but some optional patches failed."
-  _alog "WARNING: The updated OS slot has been left bootable."
-  _alog "WARNING: Review the rebuild log: $LOG"
+  log_warn update optional_patches_failed "SteamOS update installed, but some optional patches failed."
+  log_warn update slot_left_bootable "The updated OS slot has been left bootable."
+  log_warn update review_rebuild_log "Review the rebuild log: $LOG"
 elif [[ $rebuild_rc -ne 0 ]]; then
-  _alog "ERROR: Rebuild failed critically (rc=$rebuild_rc)."
-  _alog "ERROR: The staged SteamOS update will be cancelled."
-  _alog "ERROR: Review the rebuild log: $LOG"
-  _rollback_target "$other_after" || _alog "ERROR: rollback verification failed"
+  log_error update rebuild_failed "Rebuild failed critically (rc=$rebuild_rc)."
+  log_error update cancelling_update "The staged SteamOS update will be cancelled."
+  log_error update review_rebuild_log "Review the rebuild log: $LOG"
+  _rollback_target "$other_after" || log_error update rollback_verification_failed "Rollback verification failed"
   exit 1
 fi
 
 # Propagate the atomupd wrapper into the new slot, so the next OS update
 # is intercepted even after reboot.
 if ! _install_self_into_target "$other_after"; then
-  _alog "ERROR: rebuild succeeded but atomupd wrapper could not be propagated."
-  _rollback_target "$other_after" || _alog "ERROR: rollback verification failed"
-  _alog "Details: $LOG"
+  log_error update propagation_failed "Rebuild succeeded but atomupd wrapper could not be propagated."
+  _rollback_target "$other_after" || log_error update rollback_verification_failed "Rollback verification failed"
+  log_error update details "Details: $LOG"
   exit 1
 fi
 
-_alog "NVIDIA rebuild succeeded; marking updated slot bootable."
+log_info update rebuild_succeeded "NVIDIA rebuild succeeded; marking updated slot bootable."
 if ! _edit_slot_conf "$other_after" \
   -e 's/^image-invalid:.*/image-invalid: 0/'; then
-  _alog "ERROR: updated boot config could not be marked valid"
-  _rollback_target "$other_after" || _alog "ERROR: rollback verification failed"
+  log_error update mark_valid_failed "Updated boot config could not be marked valid"
+  _rollback_target "$other_after" || log_error update rollback_verification_failed "Rollback verification failed"
   exit 1
 fi
 
 if ! _verify_slot_boot_value "$other_after" image-invalid 0; then
-  _alog "ERROR: target slot did not verify as image-invalid=0"
-  _rollback_target "$other_after" || _alog "ERROR: rollback verification failed"
+  log_error update verify_image_invalid_failed "Target slot did not verify as image-invalid=0"
+  _rollback_target "$other_after" || log_error update rollback_verification_failed "Rollback verification failed"
   exit 1
 fi
 
-_alog "Updated slot boot state after activation:"
+log_info update post_activation_state "Updated slot boot state after activation:"
 _dump_boot_state
-_alog "NVIDIA driver installed into updated OS. Safe to reboot."
+log_info update safe_to_reboot "NVIDIA driver installed into updated OS. Safe to reboot."
 exit "$rc"

@@ -77,11 +77,37 @@ _build_overlay_create_root() {
   }
 
   # Mount essential filesystems
-  cleanup_mount "$merged/dev" "build dev" -- --bind /dev "$merged/dev" || true
-  cleanup_mount "$merged/dev/pts" "build dev/pts" -- --bind /dev/pts "$merged/dev/pts" || true
-  cleanup_mount "$merged/dev/shm" "build dev/shm" -- --bind /dev/shm "$merged/dev/shm" || true
-  cleanup_mount "$merged/proc" "build proc" -- --bind /proc "$merged/proc" || true
-  cleanup_mount "$merged/sys" "build sys" -- --bind /sys "$merged/sys" || true
+  cleanup_mount "$merged/dev" "build dev" -- --rbind /dev || {
+    warn "Failed to bind-mount /dev into build root" >&2
+    strict_unmount "$merged" "build overlay (rollback)"
+    strict_unmount "$ovl_mnt" "build ext4 workspace (rollback)"
+    strict_detach_loop "$ovl_loop"
+    return 1
+  }
+  if ! mount --make-rslave "$merged/dev"; then
+    warn "Failed to set /dev propagation to rslave in build root" >&2
+    strict_unmount "$merged/dev" "build dev (rollback)"
+    strict_unmount "$merged" "build overlay (rollback)"
+    strict_unmount "$ovl_mnt" "build ext4 workspace (rollback)"
+    strict_detach_loop "$ovl_loop"
+    return 1
+  fi
+  mkdir -p "$merged/dev/shm"
+  if mountpoint -q "$merged/dev/shm" 2>/dev/null; then
+    strict_unmount "$merged/dev/shm" "inherited dev/shm" 2>/dev/null || {
+      warn "Failed to remove inherited /dev/shm — attempting to continue"
+    }
+  fi
+  cleanup_mount "$merged/dev/shm" "build dev/shm" -- -t tmpfs tmpfs -o mode=1777,nosuid,nodev
+  cleanup_mount "$merged/proc" "build proc" -- -t proc proc
+  if ! cleanup_mount_readonly_sysfs "$merged/sys" "build sys"; then
+    warn "Failed to mount sysfs in build root" >&2
+    strict_unmount "$merged/dev" "build dev (rollback)"
+    strict_unmount "$merged" "build overlay (rollback)"
+    strict_unmount "$ovl_mnt" "build ext4 workspace (rollback)"
+    strict_detach_loop "$ovl_loop"
+    return 1
+  fi
 
   log "  Overlay build root created" >&2
   echo "$build_dir"
@@ -117,7 +143,6 @@ _build_overlay_destroy_root() {
   if mountpoint -q "$merged" 2>/dev/null; then
     local m
     for m in \
-      "$merged/dev/pts" \
       "$merged/dev/shm" \
       "$merged/dev" \
       "$merged/sys" \
@@ -208,7 +233,7 @@ _build_overlay_destroy_root() {
   # 7. Remove build directory only if cleanup succeeded.
   # ------------------------------------------------------------
   if ((rc == 0)); then
-    rm -rf "$build_dir"
+    safe_rmdir "$build_dir"
   else
     warn "_build_overlay_destroy_root: preserving $build_dir due to cleanup errors"
   fi
@@ -618,7 +643,7 @@ _build_overlay_diagnostics() {
     echo "===== BUILD ENVIRONMENT ====="
     chroot "$root" env | grep -E '^(PKG_CONFIG|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH|LIBRARY_PATH|LD_LIBRARY_PATH)=' 2>/dev/null || echo "  (no build env vars set)"
     echo ""
-  } >"$diag_log" 2>&1
+  } >"$diag_log" 2>&1 # lint-ignore: merged-streams — intentional: diagnostic dump captures all output
 
   # Log diagnostics
   while IFS="" read -r line; do
@@ -743,16 +768,24 @@ _build_overlay_run_direct() {
   fi
 
   log "  Using direct install: $install_cmd $install_args (from $work_dir)"
+  local _build_fd
+  : >"$build_log" || return 1
+  if ! exec {_build_fd}>>"$build_log"; then
+    warn "Failed to open build log: $build_log"
+    return 1
+  fi
   (
     cd "$root$work_dir" || exit 1
     chroot "$root" /bin/bash -c "
       cd $work_dir
       $install_cmd $install_args 2>&1
     "
-  ) | tee "$build_log" || {
+  ) | log_capture_stream --fd "$_build_fd" build info install-output || {
+    exec {_build_fd}>&-
     _build_capture_diagnostics "$root" "$output_dir" "$build_log"
     return 1
   }
+  exec {_build_fd}>&-
 }
 
 # Run package build mode (makepkg).
@@ -763,6 +796,12 @@ _build_overlay_run_makepkg() {
   local build_log="${3:?}"
 
   log "  Building package with makepkg"
+  local _build_fd
+  : >"$build_log" || return 1
+  if ! exec {_build_fd}>>"$build_log"; then
+    warn "Failed to open build log: $build_log"
+    return 1
+  fi
   (
     cd "$root/tmp/build" || exit 1
     chroot "$root" /bin/bash -c '
@@ -771,10 +810,12 @@ _build_overlay_run_makepkg() {
       # -s is omitted because dependencies are pre-installed
       runuser -u nobody -- makepkg --noconfirm --noprogressbar 2>&1
     '
-  ) | tee "$build_log" || {
+  ) | log_capture_stream --fd "$_build_fd" build info makepkg-output || {
+    exec {_build_fd}>&-
     _build_capture_diagnostics "$root" "$output_dir" "$build_log"
     return 1
   }
+  exec {_build_fd}>&-
 
   # Move any .pkg.tar.* from build dir to output_dir
   find "$root/tmp/build" -maxdepth 1 -name '*.pkg.tar.*' -type f -exec cp {} "$output_dir/" \; 2>/dev/null || true

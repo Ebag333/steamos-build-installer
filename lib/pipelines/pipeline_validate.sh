@@ -16,6 +16,7 @@ fi
 # ---------------------------------------------------------------------------
 
 register_validate_pipeline() {
+  _PIPELINE_NAME="validate"
   define_pipeline \
     "discover" \
     "validate" \

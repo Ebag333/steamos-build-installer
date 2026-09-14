@@ -81,6 +81,12 @@ parse_common_arg() {
       _ARG_SHIFT=1
       return 0
       ;;
+    --build-id)
+      # shellcheck disable=SC2034 # consumed by lib/backend.sh, lib/pipelines/pipeline_build.sh
+      BUILD_ID="${2:?--build-id requires a value}"
+      _ARG_SHIFT=2
+      return 0
+      ;;
     --*=*)
       local key="${1%%=*}"
       local val="${1#*=}"
@@ -118,6 +124,12 @@ parse_common_arg() {
         --output)
           # shellcheck disable=SC2034 # consumed by steamos-build.sh, lib/backend.sh
           VALIDATE_OUTPUT_FILE="$val"
+          _ARG_SHIFT=1
+          return 0
+          ;;
+        --build-id)
+          # shellcheck disable=SC2034 # consumed by lib/backend.sh, lib/pipelines/pipeline_build.sh
+          BUILD_ID="$val"
           _ARG_SHIFT=1
           return 0
           ;;

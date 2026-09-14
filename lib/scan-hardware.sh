@@ -100,7 +100,7 @@ while IFS="" read -r line; do
       vendor="${vendor_device%:*}"
       device="${vendor_device#*:}"
       modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
-      modules=$(modprobe -R "$modalias" 2>/dev/null | head -3 || true)
+      modules=$(run_dangerous_cmd modprobe -R "$modalias" 2>/dev/null | head -3 || true)
     fi
 
     if [[ -n "$modules" ]]; then
@@ -172,7 +172,7 @@ if [[ $unclaimed -gt 0 ]]; then
       vendor="${vendor_device%:*}"
       device="${vendor_device#*:}"
       modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
-      modules=$(modprobe -R "$modalias" 2>/dev/null | head -5 || true)
+      modules=$(run_dangerous_cmd modprobe -R "$modalias" 2>/dev/null | head -5 || true)
       if [[ -n "$modules" ]]; then
         printf '  %s [%s]: %s\n' "$dev" "$vendor_device" "$desc"
         echo "    Modules: $modules"

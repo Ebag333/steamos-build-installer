@@ -160,6 +160,10 @@ is_interactive() {
 pacman_sync_db() {
   local config="" context="auto" noconfirm="--noconfirm" root=""
 
+  local _old_e
+  _old_e=$(set +o | grep 'errexit')
+  set +e # prevent ERR trap in process substitution subshells
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --config)
@@ -192,45 +196,76 @@ pacman_sync_db() {
 
   log "Syncing package databases"
   local sync_rc=0
-  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
+  local _raw_log="${PACMAN_RAW_LOG:-}"
+  local _sync_stdout _sync_stderr
+  _sync_stdout="$(mktemp /tmp/pacman-sync-stdout.XXXXXX)"
+  _sync_stderr="$(mktemp /tmp/pacman-sync-stderr.XXXXXX)"
   # shellcheck disable=SC2086 # word-splitting is intentional
   case "$context" in
     root)
       pacman_retry _pacman_run_in_root "$root" "pacman $config_args -Sy $noconfirm" \
-        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
+        >"$_sync_stdout" 2>"$_sync_stderr" || sync_rc=$?
       ;;
     *)
       pacman_retry _pacman_exec "$context" "pacman $config_args -Sy $noconfirm" \
-        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
+        >"$_sync_stdout" 2>"$_sync_stderr" || sync_rc=$?
       ;;
   esac
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_sync_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_sync_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_sync_stdout" ]]; then
+    pacman_filter_stdout <"$_sync_stdout" | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_sync_stderr" ]]; then
+    pacman_filter_stderr <"$_sync_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_sync_stdout" "$_sync_stderr"
 
   if ((sync_rc != 0)); then
     warn "Failed to sync package databases (rc=$sync_rc)"
+    eval "$_old_e" # restore caller's errexit state
     return 1
   fi
 
   log "Syncing file databases"
+  _sync_stdout="$(mktemp /tmp/pacman-sync-stdout.XXXXXX)"
+  _sync_stderr="$(mktemp /tmp/pacman-sync-stderr.XXXXXX)"
   # shellcheck disable=SC2086 # word-splitting is intentional
   case "$context" in
     root)
       pacman_retry _pacman_run_in_root "$root" "pacman $config_args -Fy $noconfirm" \
-        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
+        >"$_sync_stdout" 2>"$_sync_stderr" || sync_rc=$?
       ;;
     *)
       pacman_retry _pacman_exec "$context" "pacman $config_args -Fy $noconfirm" \
-        > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-        2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2) || sync_rc=$?
+        >"$_sync_stdout" 2>"$_sync_stderr" || sync_rc=$?
       ;;
   esac
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_sync_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_sync_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_sync_stdout" ]]; then
+    pacman_filter_stdout <"$_sync_stdout" | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_sync_stderr" ]]; then
+    pacman_filter_stderr <"$_sync_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_sync_stdout" "$_sync_stderr"
 
   if ((sync_rc != 0)); then
     warn "Failed to sync file databases (rc=$sync_rc)"
+    eval "$_old_e" # restore caller's errexit state
     return 1
   fi
+
+  eval "$_old_e" # restore caller's errexit state
 }
 
 # ---------------------------------------------------------------------------
@@ -283,21 +318,34 @@ pacman_upgrade_all() {
   config_args="$(_pacman_resolve_config "$config")"
 
   log "Running full system upgrade"
-  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   local _safe_extra
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   _safe_extra="$(_shell_escape_args $extra)"
   set -o pipefail
+  local _raw_log="${PACMAN_RAW_LOG:-}"
+  local _upgrade_stdout _upgrade_stderr _upgrade_rc=0
+  _upgrade_stdout="$(mktemp /tmp/pacman-upgrade-stdout.XXXXXX)"
+  _upgrade_stderr="$(mktemp /tmp/pacman-upgrade-stderr.XXXXXX)"
   pacman_retry _pacman_exec "$context" "pacman $config_args -Syu $noconfirm $ask $_safe_extra" \
-    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
-  local _rc=${PIPESTATUS[0]}
-  set +o pipefail
-  if ((_rc != 0)); then
-    warn "Pacman failed (exit $_rc); raw output (last 100 lines):"
-    tail -100 "$_raw_log" >&2
+    >"$_upgrade_stdout" 2>"$_upgrade_stderr" || _upgrade_rc=$?
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_upgrade_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_upgrade_stderr" >>"$_raw_log" 2>/dev/null || true
   fi
-  return "$_rc"
+  # Apply noise filters and emit structured records
+  if [[ -s "$_upgrade_stdout" ]]; then
+    pacman_filter_stdout <"$_upgrade_stdout" | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_upgrade_stderr" ]]; then
+    pacman_filter_stderr <"$_upgrade_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_upgrade_stdout" "$_upgrade_stderr"
+  set +o pipefail
+  if ((_upgrade_rc != 0)); then
+    warn "Pacman failed (exit $_upgrade_rc)"
+  fi
+  return "$_upgrade_rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -404,13 +452,29 @@ pacman_install() {
   fi
 
   log "Installing packages: ${pkgs[*]}"
-  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   local _safe_pkgs
   _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
+  local _raw_log="${PACMAN_RAW_LOG:-}"
+  local _install_stdout _install_stderr _install_rc=0
+  _install_stdout="$(mktemp /tmp/pacman-install-stdout.XXXXXX)"
+  _install_stderr="$(mktemp /tmp/pacman-install-stderr.XXXXXX)"
   pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
-    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
+    >"$_install_stdout" 2>"$_install_stderr" || _install_rc=$?
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_install_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_install_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_install_stdout" ]]; then
+    pacman_filter_stdout <"$_install_stdout" | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_install_stderr" ]]; then
+    pacman_filter_stderr <"$_install_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_install_stdout" "$_install_stderr"
+  return "$_install_rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -469,13 +533,29 @@ pacman_install_local() {
   fi
 
   log "Installing local packages: ${pkgs[*]}"
-  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   local _safe_pkgs
   _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
+  local _raw_log="${PACMAN_RAW_LOG:-}"
+  local _local_stdout _local_stderr _local_rc=0
+  _local_stdout="$(mktemp /tmp/pacman-install-local-stdout.XXXXXX)"
+  _local_stderr="$(mktemp /tmp/pacman-install-local-stderr.XXXXXX)"
   pacman_retry _pacman_exec "$context" "pacman $config_args -U $noconfirm $needed $_safe_pkgs" \
-    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
+    >"$_local_stdout" 2>"$_local_stderr" || _local_rc=$?
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_local_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_local_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_local_stdout" ]]; then
+    pacman_filter_stdout <"$_local_stdout" | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_local_stderr" ]]; then
+    pacman_filter_stderr <"$_local_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_local_stdout" "$_local_stderr"
+  return "$_local_rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -558,13 +638,29 @@ pacman_download() {
   fi
 
   log "Downloading packages: ${pkgs[*]}"
-  local _raw_log="${PACMAN_RAW_LOG:-/dev/null}"
   # shellcheck disable=SC2086 # word-splitting is intentional for _pacman_exec
   local _safe_pkgs
   _safe_pkgs="$(_shell_escape_args "${pkgs[@]}")"
+  local _raw_log="${PACMAN_RAW_LOG:-}"
+  local _dl_stdout _dl_stderr _dl_rc=0
+  _dl_stdout="$(mktemp /tmp/pacman-download-stdout.XXXXXX)"
+  _dl_stderr="$(mktemp /tmp/pacman-download-stderr.XXXXXX)"
   pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -Sw $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
-    > >(tee -a "$_raw_log" | pacman_filter_stdout) \
-    2> >(tee -a "$_raw_log" | pacman_filter_stderr >&2)
+    >"$_dl_stdout" 2>"$_dl_stderr" || _dl_rc=$?
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_dl_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_dl_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_dl_stdout" ]]; then
+    pacman_filter_stdout <"$_dl_stdout" | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_dl_stderr" ]]; then
+    pacman_filter_stderr <"$_dl_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_dl_stdout" "$_dl_stderr"
+  return "$_dl_rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -647,11 +743,15 @@ _pacman_load_provider_resolutions() {
 }
 
 # ---------------------------------------------------------------------------
-# Internal: Filter out noisy pacman warnings from stderr.
+# Internal: Filter out noisy pacman download/upgrade progress from stderr.
 #
-# Suppresses the "could not get file information for" warnings that pacman
-# emits ~111k times during upgrades when repo packages reference files that
-# don't exist in the local filesystem (e.g. man pages from split packages).
+# Suppresses:
+#   - "downloading..." progress lines (unless they contain error indicators)
+#   - "warning: could not get file information" noise from partial mirrors
+#   - systemd-sysusers UID/GID override warnings (SteamOS-specific)
+#   - Optional dependency listings (informational, not actionable)
+#
+# Prints a summary of suppressed sysusers lines at the end.
 #
 # Usage: 2> >(pacman_filter_stderr)
 # ---------------------------------------------------------------------------
@@ -670,7 +770,7 @@ pacman_filter_stderr() {
       if (steamos_sysusers_suppressed > 0)
         printf "systemd-sysusers: %d SteamOS UID/GID override(s) retained\n", steamos_sysusers_suppressed
     }
-  ' >&2
+  '
 }
 
 # ---------------------------------------------------------------------------
@@ -680,6 +780,8 @@ pacman_filter_stderr() {
 # emits for every package during sync/upgrade operations.
 #
 # Preserves lines containing error indicators so failures remain visible.
+#
+# Prints a summary of the transaction (package count, sizes) at the end.
 #
 # Usage: | pacman_filter_stdout
 # ---------------------------------------------------------------------------
@@ -1544,7 +1646,7 @@ _pacman_preflight_check() {
       log "Pre-flight:   pacman -Rdd --noconfirm $pkg"
       # shellcheck disable=SC2086 # _safe_uninstall_pkg is intentionally word-split in bash -c
       if _pacman_run_in_root "$chroot_dir" "pacman $config_args -Rdd --noconfirm $_safe_uninstall_pkg" \
-        >>"$WORKDIR/preflight-uninstall.log" 2>&1; then
+        >>"$WORKDIR/preflight-uninstall.log" 2>&1; then # lint-ignore: merged-streams — intentional: stdout+stderr captured to flat log file
         log "Pre-flight:   ✓ removed $pkg"
       else
         warn "Pre-flight: failed to apply required resolution: remove $pkg"
@@ -1633,16 +1735,16 @@ pacman_preflight_with_fallback() {
       if ((has_dep_breaks)); then
         # Dep-breakage blocked the upgrade
         if ((interactive)); then
-          echo "" >&2
-          echo "System upgrade blocked by dependency breakage:" >&2
+          log " "
+          log_error pacman dep-breakage "System upgrade blocked by dependency breakage:"
           while IFS='|' read -r breaker dependents; do
-            echo "  $breaker breaks: $dependents" >&2
+            log_error pacman dep-breakage "  $breaker breaks: $dependents"
           done <"$dep_file"
-          echo "" >&2
-          echo "Options:" >&2
+          log " "
+          log_error pacman dep-breakage "Options:"
           echo "  c) Cancel entirely" >&2
           echo "  a) Switch to additive mode (skip system upgrade, install HW packages only)" >&2
-          echo "" >&2
+          log " "
           local choice=""
           read -rp "Choice [c/a]: " choice </dev/tty || true
           if [[ "$choice" != "a" && "$choice" != "A" ]]; then
@@ -1657,9 +1759,9 @@ pacman_preflight_with_fallback() {
       else
         # File conflicts, not dep-breakages
         if ((interactive)); then
-          echo "" >&2
-          echo "System upgrade blocked by unresolvable file conflicts." >&2
-          echo "Check the build log for details." >&2
+          log " "
+          log_error pacman file-conflict "System upgrade blocked by unresolvable file conflicts."
+          log_error pacman file-conflict "Check the build log for details."
         fi
         warn "Pre-flight: unresolvable file conflicts — cannot proceed"
         return 1
@@ -1733,7 +1835,7 @@ pacman_preflight_with_fallback() {
     # shellcheck disable=SC2086 # _safe_pkg is intentionally word-split in bash -c
     _pacman_run_in_root "${MERGED:-}" \
       "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 $_safe_pkg" \
-      >/dev/null 2>"$dry_stderr" || rc=$?
+      2>"$dry_stderr" | log_capture_stream pipeline debug "preflight-individual-print" pkg "$pkg" || rc=$?
 
     if ((rc == 0)); then
       debug "Pre-flight: $pkg — individual dependency check passed"
@@ -1789,7 +1891,7 @@ pacman_preflight_with_fallback() {
   # shellcheck disable=SC2086 # _safe_passing is intentionally word-split in bash -c
   _pacman_run_in_root "${MERGED:-}" \
     "pacman $config_args -S --needed $freeze_args --print --print-format '%r|%n' --noconfirm --ask=4 $_safe_passing" \
-    >/dev/null 2>"$bulk_stderr" || bulk_rc=$?
+    2>"$bulk_stderr" | log_capture_stream pipeline debug "preflight-bulk-print" || bulk_rc=$?
 
   if ((bulk_rc == 0)); then
     _pff_packages=("${passing_packages[@]}")
@@ -1925,16 +2027,16 @@ pacman_upgrade_preflight() {
   local dep_file="$WORKDIR/preflight-dep-breakages.txt"
   if [[ -s "$dep_file" ]]; then
     if is_interactive; then
-      echo "" >&2
-      echo "$context_label blocked by dependency breakage:" >&2
+      log " "
+      log_error pacman dep-breakage "$context_label blocked by dependency breakage:"
       while IFS='|' read -r breaker dependents; do
-        echo "  $breaker breaks: $dependents" >&2
+        log_error pacman dep-breakage "  $breaker breaks: $dependents"
       done <"$dep_file"
-      echo "" >&2
-      echo "Options:" >&2
+      log " "
+      log_error pacman dep-breakage "Options:"
       echo "  c) Cancel entirely" >&2
       echo "  s) Skip $context_label and continue" >&2
-      echo "" >&2
+      log " "
       local choice=""
       read -rp "Choice [c/s]: " choice </dev/tty || true
       if [[ "$choice" != "s" && "$choice" != "S" ]]; then
@@ -1949,9 +2051,9 @@ pacman_upgrade_preflight() {
 
   # File conflicts — not skippable
   if is_interactive; then
-    echo "" >&2
-    echo "$context_label blocked by unresolvable file conflicts." >&2
-    echo "Check the build log for details." >&2
+    log " "
+    log_error pacman file-conflict "$context_label blocked by unresolvable file conflicts."
+    log_error pacman file-conflict "Check the build log for details."
   fi
   die "$context_label blocked by unresolvable pre-flight conflicts"
 }

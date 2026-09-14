@@ -37,7 +37,7 @@ echo "=== Execution context: $_NV_CONTEXT ==="
 
 # Local helper: resolve heredocs directory from this script's location.
 # The lib/common.sh version is not available inside the build chroot.
-nvidia_heredoc_dir() {
+_nvidia_heredoc_dir() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../../../../heredocs" && pwd
 }
 
@@ -273,7 +273,7 @@ echo "--- Built modules ---"
 find "/usr/lib/modules/$KVER" -type f -name 'nvidia*.ko*' -print 2>/dev/null || true
 
 # Verify the core nvidia.ko was produced
-if ! compgen -G "$INSTALL_DIR/nvidia.ko*" >/dev/null; then
+if ! compgen -G "$INSTALL_DIR/nvidia.ko*" >/dev/null; then # lint-ignore: silenced-stdout
   echo "ERROR: nvidia.ko not found after DKMS build" >&2
   exit 1
 fi
@@ -315,7 +315,7 @@ cp -a "$INSTALL_DIR"/nvidia*.ko* "$BUNDLE_DIR/" || {
 }
 
 for mod in nvidia nvidia-modeset nvidia-drm nvidia-uvm; do
-  compgen -G "$BUNDLE_DIR/$mod.ko*" >/dev/null || {
+  compgen -G "$BUNDLE_DIR/$mod.ko*" >/dev/null || { # lint-ignore: silenced-stdout
     echo "ERROR: bundle missing $mod in $BUNDLE_DIR" >&2
     exit 1
   }
@@ -330,7 +330,7 @@ _NVIDIA_CONF="/etc/modprobe.d/99-nvidia-patch.conf"
 if [[ ! -s "$_NVIDIA_CONF" ]]; then
   echo "Installing nvidia modprobe config"
   mkdir -p /etc/modprobe.d
-  cat "$(nvidia_heredoc_dir)/static/nvidia-modprobe-dkms.conf" >"$_NVIDIA_CONF"
+  cat "$(_nvidia_heredoc_dir)/static/nvidia-modprobe-dkms.conf" >"$_NVIDIA_CONF"
 fi
 
 if [[ -s "$_NVIDIA_CONF" ]]; then

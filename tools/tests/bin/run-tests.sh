@@ -33,7 +33,7 @@ _cleanup_stale_state() {
   # propagate for detection while maintaining idempotency.
   _safe_umount() {
     local path="$1"
-    if sudo umount "$path" 2>/dev/null; then
+    if sudo umount "$path" 2>/dev/null; then # lint-ignore: strict-mount
       return 0
     fi
     # If the path was never mounted, that's fine (idempotent).
@@ -88,15 +88,56 @@ _cleanup_stale_state() {
     local m
     for m in \
       "$merged/tmp/pkgcache" \
-      "$merged/dev/pts" \
-      "$merged/dev/shm" \
       "$merged/dev" \
       "$merged/sys" \
       "$merged/proc" \
       "$merged/tmp"; do
       if mountpoint -q "$m" 2>/dev/null; then
         echo "  Unmounting chroot child: $m"
-        _safe_umount "$m" || true
+        if [[ "$m" == "$merged/dev" ]]; then
+          # --- Safety preconditions for recursive /dev unmount ---
+          # 1. Must be a mountpoint
+          if ! mountpoint -q "$m" 2>/dev/null; then
+            continue
+          fi
+
+          # 2. Must be lexically within the build workspace
+          local _dev_resolved
+          _dev_resolved="$(realpath "$m" 2>/dev/null)" || _dev_resolved="$m"
+          case "$_dev_resolved" in
+            "$resolved"/*/dev) ;; # $resolved is the resolved workdir from earlier in the function
+            *)
+              echo "  Refusing recursive unmount outside workspace: $m" >&2
+              continue
+              ;;
+          esac
+
+          # 3. Target must not be exactly /dev (system device tree)
+          if [[ "$_dev_resolved" == "/dev" ]]; then
+            echo "  Refusing recursive unmount of /dev" >&2
+            continue
+          fi
+
+          # 4. Propagation must be slave or private, never shared
+          local _dev_prop
+          _dev_prop="$(findmnt -no PROPAGATION "$m" 2>/dev/null)" || _dev_prop=""
+          case "$_dev_prop" in
+            slave | rslave | private | rprivate) ;;
+            shared | *)
+              echo "  Refusing recursive unmount of shared propagation: $m (propagation=$_dev_prop)" >&2
+              continue
+              ;;
+          esac
+
+          # Perform the recursive unmount
+          sudo umount -R "$m" 2>/dev/null || { # lint-ignore: strict-mount
+            if mountpoint -q "$m" 2>/dev/null; then
+              echo "  WARNING: failed to recursively unmount $m — stale state may persist" >&2
+            fi
+          }
+        else
+          _safe_umount "$m" || true
+        fi
       fi
     done
   fi
@@ -148,7 +189,7 @@ _cleanup_stale_state() {
 
       # Wait briefly for the loop to fully detach
       for _ in $(seq 1 20); do
-        losetup "$loop_dev" >/dev/null 2>&1 || break
+        losetup "$loop_dev" >/dev/null 2>&1 || break # lint-ignore: strict-mount
         sleep 0.1
       done
     fi
@@ -257,22 +298,43 @@ for conf in "$CONF_DIR"/*.conf; do
   echo ""
   echo "═══════════════════════════════════════════════════════════"
   echo "  $branch"
+  echo "  log: $log_file"
   echo "═══════════════════════════════════════════════════════════"
 
   # ── Build ──────────────────────────────────────────────────────────────
-  echo "  Building... (log: $log_file)"
+  echo "  Building..."
+  build_rc=0
   # shellcheck disable=SC2024  # log_file is user-writable; sudo is for the build, not the redirect
   sudo "$STEAMOS_BUILD" \
     --action build \
     --image "$SOURCE_IMG" \
     --config "$conf" \
     --output-dir "$BUILD_OUTPUT_DIR" \
-    >"$log_file" 2>&1 &
-  build_pid=$!
-  build_rc=0
-  wait "$build_pid" || build_rc=$?
+    >"$log_file" 2>&1 || build_rc=$?
+
+  # Extract and display phase markers from the log (strip ANSI codes and prefix)
+  # The pipeline's pipeline_print_summary emits one line with all markers
+  # separated by spaces, and a "Results:" line.  Split markers onto individual
+  # lines for readable console output.
+  _summary_line=""
+  _results_line=""
+  if [[ -f "$log_file" ]]; then
+    _summary_line="$(grep -P '^\e\[1;35m\[.*?\]\e\[0m (✓|✗|·)' "$log_file" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[.*\] //')"
+    _results_line="$(grep -P '^\e\[1;35m\[.*?\]\e\[0m Results:' "$log_file" | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^\[.*\] //')"
+  fi
+
+  if [[ -n "$_summary_line" ]]; then
+    # Split space-separated markers into individual lines
+    echo "$_summary_line" | sed 's/  /\n/g' | while IFS= read -r _marker; do
+      [[ -n "$_marker" ]] && echo "  $_marker"
+    done
+  fi
+
   if [[ $build_rc -ne 0 ]]; then
-    echo "  ✗ BUILD FAILED — see $log_file"
+    [[ -z "$_summary_line" ]] && echo "  ✗ BUILD FAILED"
+    if [[ -n "$_results_line" ]]; then
+      echo "  $_results_line"
+    fi
     ((++failed))
     # Clean up stale state left by the failed build before the next test
     _cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
@@ -282,13 +344,16 @@ for conf in "$CONF_DIR"/*.conf; do
 
   # Verify the output image was actually produced (build may exit 0 on partial failure)
   if [[ ! -f "$out_img" ]]; then
-    echo "  ✗ BUILD FAILED — output image not produced (DKMS/driver build error?) — see $log_file"
+    echo "  ✗ BUILD FAILED — output image not produced (DKMS/driver build error?)"
     ((++failed))
     _cleanup_stale_state "$DEFAULT_WORKDIR_RAM"
     _cleanup_stale_state "$DEFAULT_WORKDIR_DISK"
     continue
   fi
-  echo "  ✓ Build complete"
+
+  if [[ -n "$_results_line" ]]; then
+    echo "  $_results_line"
+  fi
 
   # ── Validate ───────────────────────────────────────────────────────────
   echo "  Validating..."

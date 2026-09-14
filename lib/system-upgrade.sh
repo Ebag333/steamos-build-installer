@@ -22,7 +22,6 @@ fi
 system_upgrade_prepare() {
   [[ -n "${MNT:-}" ]] || die "system_upgrade_prepare: MNT is not set"
   [[ -d "$MNT" ]] || die "system_upgrade_prepare: MNT directory not found: $MNT"
-
   log "Preparing system upgrade on $MNT"
 
   # Mount chroot filesystems
@@ -63,16 +62,41 @@ system_upgrade_prepare() {
 
   # Initialize pacman keyring (required for database sync)
   log "Initializing pacman keyring"
-  rm -rf "$MNT/etc/pacman.d/gnupg"
-  chroot "$MNT" pacman-key --init || die "pacman-key --init failed"
+  safe_rmdir "$MNT/etc/pacman.d/gnupg" 2>/dev/null || true
+  local _old_e
+  _old_e=$(set +o | grep 'errexit')
+  set +e
+  chroot "$MNT" pacman-key --init >/dev/null # lint-ignore: silenced-stdout
+  local _rc=$?
+  eval "$_old_e"
+  if ((_rc != 0)); then
+    warn "pacman-key --init failed (rc=$_rc)"
+    die "pacman-key --init failed"
+  fi
 
   # Populate keyrings based on FIX_KEYRING setting
   if [[ "${FIX_KEYRING:-0}" -eq 1 ]]; then
     log "Populating Arch + Holo keyrings"
-    chroot "$MNT" pacman-key --populate archlinux holo || die "pacman-key --populate failed"
+    _old_e=$(set +o | grep 'errexit')
+    set +e
+    chroot "$MNT" pacman-key --populate archlinux holo >/dev/null # lint-ignore: silenced-stdout
+    local _rc=$?
+    eval "$_old_e"
+    if ((_rc != 0)); then
+      warn "pacman-key --populate failed (rc=$_rc)"
+      die "pacman-key --populate failed"
+    fi
   else
     log "Populating default keyrings"
-    chroot "$MNT" pacman-key --populate || die "pacman-key --populate failed"
+    _old_e=$(set +o | grep 'errexit')
+    set +e
+    chroot "$MNT" pacman-key --populate >/dev/null # lint-ignore: silenced-stdout
+    local _rc=$?
+    eval "$_old_e"
+    if ((_rc != 0)); then
+      warn "pacman-key --populate failed (rc=$_rc)"
+      die "pacman-key --populate failed"
+    fi
   fi
 
   # When Pacman repo is main, point all repos at the -main variants
@@ -129,22 +153,59 @@ system_upgrade() {
 
   # Run pacman -Syu directly on $MNT using the image's own config
   local upgrade_log="$WORKDIR/system-upgrade.log"
-  local _raw_log="${PACMAN_RAW_LOG:-/tmp/steamos-pacman-raw.log}"
-  local _pacman_rc
+  # Ensure pacman raw log goes to a persistent location if not already overridden.
+  # The build pipeline overrides PACMAN_RAW_LOG before calling us; for repatch/live
+  # callers, we fall back to a persistent location under /home.
+  if [[ -z "${PACMAN_RAW_LOG:-}" || "$PACMAN_RAW_LOG" == /tmp/* ]]; then
+    local _persist_dir="/home/.steamos-build/logs"
+    if [[ -n "${BUILD_ID:-}" ]]; then
+      _persist_dir="/home/.steamos-build/logs/${BUILD_ID}"
+    fi
+    mkdir -p "$_persist_dir" 2>/dev/null || true
+    PACMAN_RAW_LOG="$_persist_dir/system-upgrade.pacman.log"
+  fi
+  local _raw_log="${PACMAN_RAW_LOG}"
+  local _pacman_rc=0
 
+  local _old_e
+  _old_e=$(set +o | grep 'errexit')
   set -o pipefail
+  set +e # Disable errexit to prevent ERR trap from firing in process substitutions
+  local _upgrade_stdout _upgrade_stderr
+  _upgrade_stdout="$(mktemp /tmp/steamos-upgrade-stdout.XXXXXX)"
+  _upgrade_stderr="$(mktemp /tmp/steamos-upgrade-stderr.XXXXXX)"
   chroot "$MNT" /bin/bash -c "pacman -Syu --noconfirm --ask=4" \
-    > >(tee -a "$_raw_log" | pacman_filter_stdout | tee "$upgrade_log") \
-    2> >(tee -a "$_raw_log" | pacman_filter_stderr | tee -a "$upgrade_log" >&2)
-  _pacman_rc=${PIPESTATUS[0]}
+    >"$_upgrade_stdout" 2>"$_upgrade_stderr" \
+    || _pacman_rc=$?
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_upgrade_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_upgrade_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Write filtered output to upgrade-specific log
+  if [[ -s "$_upgrade_stdout" ]]; then
+    pacman_filter_stdout <"$_upgrade_stdout" >>"$upgrade_log"
+  fi
+  if [[ -s "$_upgrade_stderr" ]]; then
+    pacman_filter_stderr <"$_upgrade_stderr" >>"$upgrade_log"
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_upgrade_stdout" ]]; then
+    pacman_filter_stdout <"$_upgrade_stdout" | log_capture_stream upgrade info pacman-stdout
+  fi
+  if [[ -s "$_upgrade_stderr" ]]; then
+    pacman_filter_stderr <"$_upgrade_stderr" | log_capture_stream upgrade warn pacman-stderr
+  fi
+  rm -f "$_upgrade_stdout" "$_upgrade_stderr"
   set +o pipefail
+  eval "$_old_e" # restore caller's errexit state
 
   if ((_pacman_rc != 0)); then
     warn "System upgrade failed (pacman rc=$_pacman_rc) — see log: $upgrade_log"
-    if [[ -s "$_raw_log" ]]; then
-      warn "Pacman raw output (last 100 lines):"
-      tail -100 "$_raw_log" >&2
-    fi
+    warn "Remaining mounts in $MNT:"
+    while IFS= read -r _mount_line; do
+      warn "  $_mount_line"
+    done < <(findmnt --target "$MNT" --submounts 2>/dev/null) || true
     return "$_pacman_rc"
   fi
 

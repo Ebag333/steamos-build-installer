@@ -9,7 +9,7 @@
 # Sourced by backend.sh — do not run directly.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "lib/pipelines/pipeline_flash.sh is a library — source it from the wrapper, not run directly." >&2
+  log_error flash library-guard "lib/pipelines/pipeline_flash.sh is a library — source it from the wrapper, not run directly."
   exit 1
 fi
 
@@ -18,10 +18,11 @@ fi
 # ---------------------------------------------------------------------------
 
 register_flash_pipeline() {
+  _PIPELINE_NAME="flash"
   define_pipeline "validate" "write" "finalize"
   register_phase "validate" "_phase_flash_validate" "Validate inputs and safety checks"
-  register_phase "write"     "_phase_flash_write"   "Write image to target device"
-  register_phase "finalize"  "_phase_flash_finalize" "GPT fixup, partition discovery, mount home"
+  register_phase "write" "_phase_flash_write" "Write image to target device"
+  register_phase "finalize" "_phase_flash_finalize" "GPT fixup, partition discovery, mount home"
 }
 
 # ---------------------------------------------------------------------------
@@ -34,29 +35,29 @@ _phase_flash_validate() {
   local img="$IMG" target="$TARGET_DEV"
 
   [[ -f "$img" ]] || {
-    echo "Image not found: $img" >&2
+    log_error flash validation-error "Image not found: $img"
     return 1
   }
   [[ -b "$target" ]] || {
-    echo "Not a block device: $target" >&2
+    log_error flash validation-error "Not a block device: $target"
     return 1
   }
   [[ $EUID -eq 0 ]] || {
-    echo "Flash requires root (sudo)." >&2
+    log_error flash validation-error "Flash requires root (sudo)."
     return 1
   }
 
   # Collect sizes (preflight already ran, but we need these for the write).
   IMG_BYTES="$(stat -c '%s' "$img")" || {
-    echo "Cannot determine image size: $img" >&2
+    log_error flash validation-error "Cannot determine image size: $img"
     return 1
   }
   TARGET_BYTES="$(blockdev --getsize64 "$target")" || {
-    echo "Cannot determine target size: $target" >&2
+    log_error flash validation-error "Cannot determine target size: $target"
     return 1
   }
   if ((IMG_BYTES > TARGET_BYTES)); then
-    echo "Image ($((IMG_BYTES / 1000000000)) GB) is larger than target device ($((TARGET_BYTES / 1000000000)) GB)." >&2
+    log_error flash validation-error "Image ($((IMG_BYTES / 1000000000)) GB) is larger than target device ($((TARGET_BYTES / 1000000000)) GB)."
     return 1
   fi
 
@@ -98,7 +99,7 @@ _phase_flash_write() {
       if strict_unmount "$mp" "target before dd"; then
         echo "  ✓ $mp"
       else
-        echo "  ✗ $mp — could not unmount target filesystem" >&2
+        log_error flash unmount-error "  ✗ $mp — could not unmount target filesystem"
         return 1
       fi
     done <<<"$mounts"
@@ -110,7 +111,7 @@ _phase_flash_write() {
   for child in "$target"*; do
     [[ -b "$child" ]] || continue
     if findmnt -rn -S "$child" >/dev/null 2>&1; then
-      echo "Target still has mounted filesystem: $child" >&2
+      log_error flash unmount-error "Target still has mounted filesystem: $child"
       return 1
     fi
   done
@@ -125,7 +126,7 @@ _phase_flash_write() {
   local img_hash
   img_hash="$(sha256sum "$img" | awk '{print $1}')" \
     || {
-      echo "  ✗ Failed to compute image checksum" >&2
+      log_error flash checksum-error "  ✗ Failed to compute image checksum"
       return 1
     }
   echo "  Image SHA256:  $img_hash"
@@ -156,9 +157,9 @@ _phase_flash_write() {
 
     local dd_rc=0
     wait "$dd_pid" || dd_rc=$?
-    rm -rf "$_fifo_dir"
+    safe_rmdir "$_fifo_dir" 2>/dev/null || true
     if [[ "$dd_rc" -ne 0 ]]; then
-      echo "Flash write failed (dd exited with code $dd_rc)" >&2
+      log_error flash write-error "Flash write failed (dd exited with code $dd_rc)"
       return 1
     fi
   else
@@ -178,7 +179,7 @@ _phase_flash_write() {
         fi
       done) 2>&1 || dd_exit=$?
     if [[ "$dd_exit" -ne 0 ]]; then
-      echo "Flash write failed (dd exited with code $dd_exit)" >&2
+      log_error flash write-error "Flash write failed (dd exited with code $dd_exit)"
       return 1
     fi
   fi
@@ -191,7 +192,7 @@ _phase_flash_write() {
   blockdev --flushbufs "$target" 2>/dev/null || true
 
   # Verify the raw write BEFORE any post-write modifications.
-  _flash_verify_raw "$img" "$target" "$IMG_BYTES" "$img_hash" || return 1
+  flash_verify_raw "$img" "$target" "$IMG_BYTES" "$img_hash" || return 1
 
   return 0
 }
@@ -214,7 +215,7 @@ _phase_flash_finalize() {
     if command -v sgdisk >/dev/null 2>&1; then
       echo "Target is larger than the image; relocating backup GPT to end of disk..."
       if ! sgdisk --move-second-header "$target"; then
-        echo "Failed to relocate backup GPT on $target." >&2
+        log_error flash gpt-fixup-error "Failed to relocate backup GPT on $target."
         return 1
       fi
 
@@ -227,15 +228,15 @@ _phase_flash_finalize() {
       # occasionally fail even though the GPT on disk is valid, so treat
       # it as advisory rather than fatal.
       blockdev --rereadpt "$target" 2>/dev/null || true
-      udevadm settle --timeout=10 2>/dev/null || true
+      run_dangerous_cmd udevadm settle --timeout=10 2>/dev/null || true
 
       gpt_fixup="relocated"
       echo "Backup GPT relocated successfully."
     else
-      echo "WARNING: $target is larger than the image, but sgdisk is unavailable." >&2
-      echo "         Flash succeeded, but the backup GPT remains at the image-size boundary." >&2
-      echo "         Install GPT fdisk/sgdisk and run:" >&2
-      echo "           sgdisk --move-second-header $target" >&2
+      log_warn flash gpt-unavailable "WARNING: $target is larger than the image, but sgdisk is unavailable."
+      log_warn flash gpt-unavailable "         Flash succeeded, but the backup GPT remains at the image-size boundary."
+      log_warn flash gpt-unavailable "         Install GPT fdisk/sgdisk and run:"
+      log_warn flash gpt-unavailable "           sgdisk --move-second-header $target"
       gpt_fixup="unavailable"
     fi
   fi
@@ -256,7 +257,7 @@ _phase_flash_finalize() {
   # Discover the new partitions and mount home for the user.
   echo ""
   echo "Discovering new partitions..."
-  udevadm settle --timeout=15 2>/dev/null || true
+  run_dangerous_cmd udevadm settle --timeout=15 2>/dev/null || true
 
   # Check if the kernel sees partitions on the target.  If not, try
   # partx -u to force a partition table re-read before giving up.
@@ -267,7 +268,7 @@ _phase_flash_finalize() {
   if ((part_count == 0)); then
     echo "  Kernel does not see partitions; trying partx -u..."
     partx -u "$target" 2>/dev/null || true
-    udevadm settle --timeout=10 2>/dev/null || true
+    run_dangerous_cmd udevadm settle --timeout=10 2>/dev/null || true
   fi
 
   local home_part=""

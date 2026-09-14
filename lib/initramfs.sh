@@ -116,7 +116,7 @@ _discover_auto_modules() {
   local dev
   for dev in /sys/bus/pci/devices/*/modalias; do
     [[ -f "$dev" ]] || continue
-    modules+="$(chroot "$root" modprobe -S "$kver" -R "$(cat "$dev")" 2>/dev/null || true)"$'\n'
+    modules+="$(run_dangerous_cmd chroot "$root" modprobe -S "$kver" -R "$(cat "$dev")" 2>/dev/null || true)"$'\n'
   done
 
   echo "$modules" \
@@ -307,9 +307,9 @@ EOF
 #        If empty, auto-discovers hardware modules and combines with defaults.
 #
 # This is the single entry point for all initramfs configuration.
-apply_initramfs() {
-  local root="${1:?apply_initramfs: missing root}"
-  local kver="${2:?apply_initramfs: missing kernel version}"
+_apply_initramfs() {
+  local root="${1:?_apply_initramfs: missing root}"
+  local kver="${2:?_apply_initramfs: missing kernel version}"
   local custom_modules="${3:-}"
 
   local modules
@@ -364,11 +364,14 @@ reconcile_initramfs() {
 
   # shellcheck disable=SC2317  # trap handler — invoked via `trap ... ERR` below
   _reconcile_initramfs_cleanup() {
+    local _had_e=0
+    [[ -o errexit ]] && _had_e=1
     set +e
     if ((effective_etc)); then unmount_effective_etc "$root" 2>/dev/null; fi
     if declare -F cleanup_unmount_registered >/dev/null 2>&1; then
       cleanup_unmount_registered 2>/dev/null || true
     fi
+    [[ "$_had_e" -eq 1 ]] && set -e
   }
   trap _reconcile_initramfs_cleanup ERR EXIT
 

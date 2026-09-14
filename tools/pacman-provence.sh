@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # shellcheck source=../lib/common.sh
-source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+# shellcheck disable=SC1091  # source path is dynamic; resolved at runtime
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh" # lint-ignore: single-source
 
 # pacman-provenance-audit.sh
 #

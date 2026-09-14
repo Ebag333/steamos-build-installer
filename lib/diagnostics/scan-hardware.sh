@@ -74,7 +74,7 @@ while IFS="" read -r line; do
     modalias="pci:v0000${vendor}d0000${device}sv*sd*bc*sc*i*"
 
     modules="$(
-      modprobe -R "$modalias" 2>/dev/null \
+      run_dangerous_cmd modprobe -R "$modalias" 2>/dev/null \
         | head -5 \
         || true
     )"

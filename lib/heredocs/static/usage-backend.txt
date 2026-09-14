@@ -1,8 +1,8 @@
 Usage:
-  backend.sh --action <build|flash|flashless|live|validate|preflight|list-images|list-devices|is-system-disk|reboot> [options]
+  backend.sh --action <build|flash|flashless|live|validate|preflight|list-images|list-devices|is-system-disk|reboot|cleanup> [options]
 
 Common:
-  --action ACTION           Required: build, flash, flashless, live, validate, preflight, list-images, list-devices, is-system-disk, reboot
+  --action ACTION           Required: build, flash, flashless, live, validate, preflight, list-images, list-devices, is-system-disk, reboot, cleanup
   --image FILE              Source image path (for build)
   --config FILE             Build configuration file (required for build, flash, live)
 

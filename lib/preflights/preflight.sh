@@ -21,7 +21,7 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "${_PF_LOADED:-false}" == "true" ]]; then
   # shellcheck disable=SC2317 # 'return' or 'exit' here is the intended early-exit
-  return 0 2>/dev/null || exit 0
+  return 0 || exit 0
 fi
 
 # ---------------------------------------------------------------------------

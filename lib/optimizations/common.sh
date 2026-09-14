@@ -275,7 +275,7 @@ enable_service() {
   root="$(get_root)"
 
   if is_live; then
-    if ! systemctl enable "$service" 2>&1; then
+    if ! run_dangerous_cmd systemctl enable "$service" 2>&1; then
       warn "Failed to enable $service"
       return 1
     fi
@@ -371,7 +371,7 @@ install_boot_framework() {
 
   # Live mode: reload systemd
   if is_live; then
-    systemctl daemon-reload 2>/dev/null || true
+    run_dangerous_cmd systemctl daemon-reload 2>/dev/null || true
   fi
 
   return 0
@@ -398,7 +398,7 @@ log() { # lint-ignore: no-shadow
   elif declare -F _original_log >/dev/null 2>&1; then
     _original_log "$@"
   else
-    printf '[optimizations] %s\n' "$*"
+    log_info system info "$*"
   fi
 }
 
@@ -408,6 +408,6 @@ warn() { # lint-ignore: no-shadow
   elif declare -F _original_warn >/dev/null 2>&1; then
     _original_warn "$@"
   else
-    printf '[optimizations] WARNING: %s\n' "$*" >&2
+    log_warn system warning "$*"
   fi
 }

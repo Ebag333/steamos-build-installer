@@ -191,16 +191,21 @@ journalctl -b
 
 ### During the build (host machine)
 
-The GUI shows the log path when the build completes. Logs are in a temporary directory:
+The GUI shows the log path when the build completes. Logs are stored under
+the persistent log directory alongside structured build logs:
 
 | Path | Contents |
 |---|---|
-| `/tmp/steamos-build.XXXXXX/backend.log` | Full build backend output (stdout + stderr) |
+| `/home/.steamos-build/logs/<BUILD_ID>/backend.log` | Full build backend output (stdout + stderr) |
+| `/home/.steamos-build/logs/<BUILD_ID>/run.jsonl` | Structured build log (JSON Lines) |
+| `/home/.steamos-build/logs/<BUILD_ID>/frontend.jsonl` | Frontend structured log (CLI mode only) |
 
-The `XXXXXX` suffix is random; the GUI prints the exact path to stderr. To find it:
+`<BUILD_ID>` is a timestamped identifier like `build-20260913-143052-12345`. To find the latest:
 
 ```bash
-ls -lt /tmp/steamos-build.*/backend.log | head -1
+ls -lt /home/.steamos-build/logs/build-*/backend.log | head -1
+# or use the build-latest symlink:
+cat /home/.steamos-build/logs/build-latest/backend.log
 ```
 
 ## Diagnostics

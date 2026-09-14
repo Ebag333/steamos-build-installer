@@ -1,6 +1,5 @@
 #!/bin/bash
 # lint-ignore: single-source
-# lint-ignore: strict-mount
 # collect-boot-logs — gather initramfs + early boot diagnostics onto the USB.
 # Runs as a oneshot systemd service after local-fs.target.
 
@@ -22,14 +21,12 @@ _find_usb() {
   for dev in $(lsblk -rno NAME,PARTLABEL 2>/dev/null | awk '$2=="home"{print "/dev/"$1}'); do
     [[ -b "$dev" ]] || continue
     USB_MOUNT="$(mktemp -d /tmp/usb-home.XXXXXX)"
-    # lint-ignore: strict-mount
-    if mount -o rw "$dev" "$USB_MOUNT" 2>/dev/null; then
+    if mount -o rw "$dev" "$USB_MOUNT" 2>/dev/null; then # lint-ignore: strict-mount
       if [[ -f "$USB_MOUNT/.steamos-build/usb-marker" ]]; then
         LOG_DIR="$USB_MOUNT/deck/logs/boot"
         return 0
       fi
-      # lint-ignore: strict-mount
-      umount "$USB_MOUNT" 2>/dev/null
+      umount "$USB_MOUNT" 2>/dev/null # lint-ignore: strict-mount
       rmdir "$USB_MOUNT" 2>/dev/null
       USB_MOUNT=""
     fi
@@ -46,8 +43,7 @@ fi
 _collect_boot_logs_cleanup() {
   [[ -n "${OUT:-}" && -d "$OUT" ]] && rm -rf "$OUT"
   if [[ -n "${USB_MOUNT:-}" ]]; then
-    # lint-ignore: strict-mount
-    umount "$USB_MOUNT" 2>/dev/null || true
+    umount "$USB_MOUNT" 2>/dev/null || true # lint-ignore: strict-mount
     rmdir "$USB_MOUNT" 2>/dev/null || true
   fi
 }
@@ -83,8 +79,7 @@ cat /proc/modules >"$OUT/modules.txt" 2>/dev/null || true
 # --- block devices & mounts ---
 lsblk -f >"$OUT/lsblk.txt" 2>/dev/null || true
 findmnt --tree >"$OUT/findmnt.txt" 2>/dev/null || true
-# lint-ignore: strict-mount
-mount >"$OUT/mount.txt" 2>/dev/null || true
+mount >"$OUT/mount.txt" 2>/dev/null || true # lint-ignore: strict-mount
 
 # --- kernel & boot config ---
 uname -a >"$OUT/uname.txt" 2>/dev/null || true
@@ -117,22 +112,22 @@ systemctl list-unit-files >"$OUT/systemd-unit-files.txt" 2>/dev/null || true
 pacman -Q | grep -i nvidia >"$OUT/pacman-nvidia.txt" 2>/dev/null || true
 
 # --- network diagnostics ---
-ip -br link >"$OUT/ip-link.txt" 2>&1 || true
-ip -br addr >"$OUT/ip-addr.txt" 2>&1 || true
-ip route >"$OUT/ip-route.txt" 2>&1 || true
-rfkill list >"$OUT/rfkill.txt" 2>&1 || true
-nmcli device status >"$OUT/nmcli-devices.txt" 2>&1 || true
-nmcli general status >"$OUT/nmcli-status.txt" 2>&1 || true
+ip -br link >"$OUT/ip-link.txt" 2>&1 || true               # lint-ignore: merged-streams
+ip -br addr >"$OUT/ip-addr.txt" 2>&1 || true               # lint-ignore: merged-streams
+ip route >"$OUT/ip-route.txt" 2>&1 || true                 # lint-ignore: merged-streams
+rfkill list >"$OUT/rfkill.txt" 2>&1 || true                # lint-ignore: merged-streams
+nmcli device status >"$OUT/nmcli-devices.txt" 2>&1 || true # lint-ignore: merged-streams
+nmcli general status >"$OUT/nmcli-status.txt" 2>&1 || true # lint-ignore: merged-streams
 systemctl status NetworkManager iwd systemd-networkd \
-  --no-pager >"$OUT/network-services.txt" 2>&1 || true
+  --no-pager >"$OUT/network-services.txt" 2>&1 || true # lint-ignore: merged-streams
 journalctl -b \
   -u NetworkManager \
   -u iwd \
   -u systemd-networkd \
-  --no-pager >"$OUT/network-journal.txt" 2>&1 || true
+  --no-pager >"$OUT/network-journal.txt" 2>&1 || true # lint-ignore: merged-streams
 dmesg | grep -Ei \
   'wifi|wlan|wireless|ether|network|firmware|iwl|igc|igb|r816|rtl|ath|mt76|brcm|failed|error' \
-  >"$OUT/network-dmesg.txt" 2>&1 || true
+  >"$OUT/network-dmesg.txt" 2>&1 || true # lint-ignore: merged-streams
 
 # --- compress and clean up ---
 TARBALL="$LOG_DIR/boot-logs-${TS}.tar.gz"
@@ -144,8 +139,7 @@ find "$LOG_DIR" -name 'boot-logs-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null | sort
 
 # Unmount if we mounted the USB ourselves.
 if [[ -n "$USB_MOUNT" ]]; then
-  # lint-ignore: strict-mount
-  umount "$USB_MOUNT" 2>/dev/null || true
+  umount "$USB_MOUNT" 2>/dev/null || true # lint-ignore: strict-mount
   rmdir "$USB_MOUNT" 2>/dev/null || true
 fi
 

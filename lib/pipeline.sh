@@ -20,6 +20,11 @@ declare -gA _PIPELINE_PHASES=()
 declare -gA _PIPELINE_PHASE_DESC=()
 declare -ga _PIPELINE_ORDER=()
 declare -g _PIPELINE_START_TIME=0
+declare -ga _PIPELINE_RESULTS=()
+declare -g _PIPELINE_PASSED=0
+declare -g _PIPELINE_FAILED=0
+declare -g _PIPELINE_NAME=""
+declare -g _PIPELINE_LOG_FILE=""
 
 # ---------------------------------------------------------------------------
 # Pipeline Definition
@@ -56,6 +61,12 @@ define_pipeline() {
   unset _PIPELINE_PHASE_DESC
   declare -gA _PIPELINE_PHASES=()
   declare -gA _PIPELINE_PHASE_DESC=()
+
+  # Reset results tracking
+  unset _PIPELINE_RESULTS
+  declare -ga _PIPELINE_RESULTS=()
+  _PIPELINE_PASSED=0
+  _PIPELINE_FAILED=0
 }
 
 # Register a phase implementation.
@@ -93,6 +104,7 @@ register_phase() {
 # Execute the defined pipeline.
 # Args: $@ = (optional) phases to run (empty = run all)
 # Returns 0 on success, 1 on failure
+# shellcheck disable=SC2120  # callers intentionally pass no args to run all phases
 run_pipeline() {
   local -a phases_to_run=("$@")
   local total_phases=${#phases_to_run[@]}
@@ -123,7 +135,37 @@ run_pipeline() {
   done
 
   _PIPELINE_START_TIME=$(date +%s) || _PIPELINE_START_TIME=0
+
+  # Print pipeline header
+  local _pipe_name="${_PIPELINE_NAME:-unknown}"
+  local _config_name
+  if [[ -n "${CONFIG_FILE:-}" ]]; then
+    _config_name="$(basename "$CONFIG_FILE" .conf)"
+  else
+    _config_name="(none)"
+  fi
+  local _log_path="${_PIPELINE_LOG_FILE:-/dev/stderr}"
+
+  log_notice pipeline separator ""
+  log_notice pipeline header "pipeline: $_pipe_name"
+  log_notice pipeline header "config: $_config_name"
+  log_notice pipeline header "log: $_log_path"
+  log_notice pipeline separator ""
+
   log "Starting pipeline ($total_phases phases)"
+
+  # Print phase list header
+  local _phase_list=""
+  for _p in "${phases_to_run[@]}"; do
+    [[ -n "$_phase_list" ]] && _phase_list+="  "
+    _phase_list+="· ${_PIPELINE_PHASE_DESC[$_p]:-$_p}"
+  done
+  log "$_phase_list"
+
+  # Track results for summary (global so ERR trap can access them)
+  _PIPELINE_RESULTS=()
+  _PIPELINE_PASSED=0
+  _PIPELINE_FAILED=0
 
   local phase_num=0
   local func desc phase_start phase_end phase_duration
@@ -135,30 +177,106 @@ run_pipeline() {
 
     log "[$phase_num/$total_phases] $desc"
 
+    # Update CURRENT_STEP so the ERR trap failure snapshot shows the correct phase
+    # shellcheck disable=SC2034  # cross-file: read by _failure_snapshot() in common.sh
+    CURRENT_STEP="${_PIPELINE_PHASE_DESC[$phase]:-$phase}"
+
     # Execute phase
     phase_start=$(date +%s)
 
     local phase_rc=0
-    "$func" || phase_rc=$?
+    if [[ "${VERBOSE:-0}" -ne 1 && -t 1 ]]; then
+      # Non-verbose CLI mode: capture phase output, show only markers
+      local _phase_log
+      # Use persistent log dir if BUILD_ID is available, else /tmp
+      local _phase_tmp_dir="/tmp"
+      if [[ -n "${BUILD_ID:-}" ]]; then
+        _phase_tmp_dir="/home/.steamos-build/logs/${BUILD_ID}"
+        mkdir -p "$_phase_tmp_dir" 2>/dev/null || _phase_tmp_dir="/tmp"
+      fi
+      _phase_log="$(mktemp "${_phase_tmp_dir}/steamos-build-phase.XXXXXX")"
+      # lint-ignore: merged-streams  # Captured for failure diagnostics only; both streams displayed together on error
+      "$func" >"$_phase_log" 2>&1 || phase_rc=$?
+      if [[ $phase_rc -ne 0 && -s "$_phase_log" ]]; then
+        warn "Phase output:"
+        cat "$_phase_log"
+      fi
+      rm -f "$_phase_log"
+    else
+      # Verbose mode or GUI mode: show everything
+      "$func" || phase_rc=$?
+    fi
+
+    # Detect set +e leaks from phase functions
+    if ! [[ -o errexit ]]; then
+      warn "Pipeline: errexit was disabled after phase '$phase' — possible set +e leak"
+      set -e # Restore it for subsequent phases
+    fi
 
     phase_end=$(date +%s) || phase_end=$phase_start
     phase_duration=$((phase_end - phase_start))
 
     if [[ $phase_rc -ne 0 ]]; then
-      warn "[$phase_num/$total_phases] $desc failed after ${phase_duration}s"
+      warn "[$phase_num/$total_phases] $desc failed after ${phase_duration}s (rc=$phase_rc)"
+      warn "✗ $desc"
+      _PIPELINE_RESULTS+=("fail:$desc")
+      _PIPELINE_FAILED=$((_PIPELINE_FAILED + 1))
+
+      # Print summary before returning
+      pipeline_print_summary "${phases_to_run[@]}"
+
       _pipeline_report_failure "$phase" "$phase_num" "$total_phases" "${phases_to_run[@]}"
       return 1
     fi
 
-    log "[$phase_num/$total_phases] $desc completed in ${phase_duration}s"
+    log "[$phase_num/$total_phases] $desc completed in ${phase_duration}s (rc=$phase_rc)"
+    log "✓ $desc"
+    _PIPELINE_RESULTS+=("pass:$desc")
+    _PIPELINE_PASSED=$((_PIPELINE_PASSED + 1))
   done
 
   local pipeline_end
   pipeline_end=$(date +%s)
   local total_duration=$((pipeline_end - _PIPELINE_START_TIME))
 
+  # Print final summary
+  pipeline_print_summary "${phases_to_run[@]}"
+
   log "Pipeline completed in ${total_duration}s"
   return 0
+}
+
+# Print the final summary line with all phases, results, and counts.
+# Args: $@ = phases that were part of this pipeline run
+pipeline_print_summary() {
+  local _summary=""
+  local _skipped=0
+  local _p _result _desc _found
+
+  for _p in "${_PIPELINE_ORDER[@]}"; do
+    _found=0
+    for _result in "${_PIPELINE_RESULTS[@]}"; do
+      _desc="${_result#*:}"
+      if [[ "$_desc" == "${_PIPELINE_PHASE_DESC[$_p]:-$_p}" ]]; then
+        _found=1
+        [[ -n "$_summary" ]] && _summary+="  "
+        if [[ "$_result" == pass:* ]]; then
+          _summary+="✓ $_desc"
+        else
+          _summary+="✗ $_desc"
+        fi
+        break
+      fi
+    done
+    if [[ $_found -eq 0 ]]; then
+      [[ -n "$_summary" ]] && _summary+="  "
+      _summary+="· ${_PIPELINE_PHASE_DESC[$_p]:-$_p} (not reached)"
+      _skipped=$((_skipped + 1))
+    fi
+  done
+
+  log "$_summary"
+  log "Results: ${_PIPELINE_PASSED} passed, ${_PIPELINE_FAILED} failed, ${_skipped} skipped"
 }
 
 # Report pipeline failure with context.

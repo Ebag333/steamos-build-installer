@@ -220,7 +220,7 @@ _run_validation_matrix() {
   log "========================================"
   log "Target: $merged"
   log "Workdir: $workdir"
-  log ""
+  log " "
 
   local pass=0 fail=0
 
@@ -231,7 +231,7 @@ _run_validation_matrix() {
   if _validate_artifact_boundary "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
   if _validate_provenance_logging "$merged" "$workdir"; then ((++pass)); else ((++fail)); fi
 
-  log ""
+  log " "
   log "========================================"
   log "Results: $pass passed, $fail failed"
   log "========================================"

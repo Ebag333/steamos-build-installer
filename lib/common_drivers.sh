@@ -220,7 +220,7 @@ register_payload_pkgs() {
     )" || true
 
     if [[ -n "$old_ver" ]]; then
-      rm -rf -- "$db/$pkg-$old_ver"
+      safe_rmdir "$db/$pkg-$old_ver" 2>/dev/null || true
     fi
 
     rsync -a -- "$src" "$db/"
@@ -261,7 +261,7 @@ remove_replaced_packages() {
     )" || true
 
     if [[ -n "$ver" ]]; then
-      rm -rf -- "$dbpath/local/$pkg-$ver"
+      safe_rmdir "$dbpath/local/$pkg-$ver" 2>/dev/null || true
     fi
   done
 }
@@ -390,96 +390,6 @@ verify_propagated_package() {
   fi
 }
 
-# rsync the payload into the real image rootfs and register its packages.
-_install_payload() {
-  log "Copying driver payload into the image rootfs"
-  # shellcheck disable=SC2034
-  # shellcheck disable=SC2153 # FILELIST is set in lib/common.sh
-  rsync -a --force --files-from="$FILELIST.rel" "$MERGED/" "$MNT/"
-
-  # Copy kernel modules (including HID) from overlay to image
-  if [[ -d "$UPPER/usr/lib/modules/$KVER/updates" ]]; then
-    log "Copying kernel modules from overlay to image"
-    mkdir -p "$MNT/usr/lib/modules/$KVER"
-    rsync -a "$UPPER/usr/lib/modules/$KVER/updates" "$MNT/usr/lib/modules/$KVER/"
-  fi
-
-  # Copy pacman keyring — not owned by any package, so excluded from filelist.
-  if [[ -d "$MERGED/etc/pacman.d/gnupg" ]]; then
-    log "Copying pacman keyring into image rootfs"
-    mkdir -p "$MNT/etc/pacman.d"
-    rsync -a "$MERGED/etc/pacman.d/gnupg/" "$MNT/etc/pacman.d/gnupg/"
-  fi
-
-  # Verify HID modules landed in the image (only if logitech-hid was selected).
-  if declare -F verify_built_modules >/dev/null 2>&1; then
-    verify_built_modules "$MNT" "$KVER" die
-  fi
-
-  if [[ ${#NEW_PKGS[@]} -gt 0 ]]; then
-    log "Registering payload packages in the image's pacman db"
-    register_payload_pkgs "$MNT" "$UPPER" "${NEW_PKGS[@]}"
-  fi
-
-  # Remove files and DB entries for packages that were replaced/removed in the
-  # overlay transaction (e.g. linux-firmware-neptune-jupiter replaced by
-  # linux-firmware).  Without this, orphaned files from the old package linger.
-  if [[ ${#REMOVED_PKGS[@]} -gt 0 ]]; then
-    log "Removing replaced packages from image: ${REMOVED_PKGS[*]}"
-    remove_replaced_packages "$MNT" "${REMOVED_PKGS[@]}"
-  fi
-
-  log "Running depmod + ldconfig in the image"
-  run_depmod_ldconfig "$MNT" "$KVER"
-
-  # Only install nvidia modprobe config if nvidia packages are present
-  if [[ -d "$MNT/usr/share/nvidia" ]] || [[ -f "$MNT/usr/bin/nvidia-smi" ]]; then
-    log "Writing modprobe config (blacklist nouveau, enable nvidia KMS)"
-    mkdir -p "$MERGED/etc/modprobe.d"
-    cp "$SCRIPT_DIR/lib/configs/99-nvidia-patch.conf" "$MERGED/etc/modprobe.d/99-nvidia-patch.conf"
-    mkdir -p "$MNT/etc/modprobe.d"
-    cp "$SCRIPT_DIR/lib/configs/99-nvidia-patch.conf" "$MNT/etc/modprobe.d/99-nvidia-patch.conf"
-  else
-    log "Skipping nvidia modprobe config (nvidia not installed)"
-  fi
-
-  log "Restoring module autoloading in initramfs"
-  cleanup_mount_chroot "$MNT"
-
-  # Only reconfigure initramfs if the user explicitly opted in.
-  #   INITRAMFS_MODULES unset   → stock: leave initramfs alone
-  #   INITRAMFS_MODULES="a b c" → custom: regenerate with user-selected modules
-  if [[ -n "${INITRAMFS_MODULES+x}" && -n "${INITRAMFS_MODULES:-}" ]]; then
-    log "  Custom initramfs modules: $INITRAMFS_MODULES"
-    mount_effective_etc "$MNT"
-    apply_initramfs "$MNT" "$KVER" "$INITRAMFS_MODULES"
-    unmount_effective_etc "$MNT"
-  else
-    log "  Stock initramfs — not reconfiguring (use --initramfs to customize)"
-  fi
-
-  cleanup_unmount_registered
-
-  if nvidia_is_selected; then
-    enable_nvidia_power_services "$MNT"
-  else
-    log "Skipping nvidia power services (nvidia not selected)"
-  fi
-
-  # Bundle scan-hardware.sh for manual use.
-  log "Installing hardware scan tool"
-  mkdir -p "$MERGED/usr/local/bin/diagnostics"
-  cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MERGED/usr/local/bin/diagnostics/scan-hardware"
-  chmod +x "$MERGED/usr/local/bin/diagnostics/scan-hardware"
-  mkdir -p "$MNT/usr/local/bin/diagnostics"
-  cp "$SCRIPT_DIR/lib/scan-hardware.sh" "$MNT/usr/local/bin/diagnostics/scan-hardware"
-  chmod +x "$MNT/usr/local/bin/diagnostics/scan-hardware"
-
-  # Run user-provided custom script if present (fail open).
-  # Uses "/" (live system) — the custom script lives on /home, not inside the image.
-  run_custom_script "/"
-}
-
 # Configure the OS update channel (variant + branch) and optionally suppress
 # the OOBE first-boot flow.  Delegates to system-config.sh for all writes.
 #
@@ -517,7 +427,7 @@ copy_built_modules_to_image() {
   if [[ -d "$MERGED/usr/lib/modules/$KVER/updates" ]]; then
     has_modules=1
   fi
-  if [[ -d "$workdir/packages" ]] && compgen -G "$workdir/packages/*.pkg.tar.*" >/dev/null; then
+  if [[ -d "$workdir/packages" ]] && compgen -G "$workdir/packages/*.pkg.tar.*" >/dev/null; then # lint-ignore: silenced-stdout
     has_modules=1
   fi
 

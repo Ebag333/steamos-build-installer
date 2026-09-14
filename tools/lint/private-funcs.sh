@@ -161,6 +161,7 @@ _run_scan() {
         && { grep -rw -rn --include='*.sh' -- "$func_name" . 2>/dev/null || true; } \
         | sed 's|^\./||' \
           | grep -v "^${file}:" \
+          | grep -v '^tools/lint/' \
           | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
           | grep -v "^[^:]*:[0-9]*:${func_name}()" \
           | grep -c -v "^[^:]*:[0-9]*:function ${func_name}"
@@ -184,6 +185,7 @@ _run_scan() {
           && { grep -rw -rn --include='*.sh' -- "$func_name" . 2>/dev/null || true; } \
           | sed 's|^\./||' \
             | grep -v "^${file}:" \
+            | grep -v '^tools/lint/' \
             | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
             | grep -v "^[^:]*:[0-9]*:${func_name}()" \
             | grep -c -v "^[^:]*:[0-9]*:function ${func_name}"
@@ -196,6 +198,7 @@ _run_scan() {
             && { grep -rw -rn --include='*.sh' -- "$func_name" . 2>/dev/null || true; } \
             | sed 's|^\./||' \
               | grep -v "^${file}:" \
+              | grep -v '^tools/lint/' \
               | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
               | grep -v "^[^:]*:[0-9]*:${func_name}()" \
               | grep -v "^[^:]*:[0-9]*:function ${func_name}" \

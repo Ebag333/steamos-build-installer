@@ -6,6 +6,12 @@
 # existing steamos-update interception/logging surface and forwards Valve's
 # return code; it must NOT trigger a second repatch.
 # lint-ignore: strict-mode  # captures child exit codes; logging failures must not block updates
+# Resolve script directory
+: "${_NVIDIA_DIR:=}"
+if [[ -d "/home/.steamos-build/build_cache/lib" ]]; then
+  _NVIDIA_DIR="/home/.steamos-build/build_cache"
+fi
+
 REAL=/usr/bin/steamos-update.orig
 
 if [[ $EUID -eq 0 ]]; then
@@ -26,18 +32,35 @@ if [[ $EUID -eq 0 ]]; then
   fi
 fi
 
-_ulog() {
-  printf '[steamos-build-update] %s\n' "$*" | tee -a "$LOG" >&2
-  logger -t steamos-build-update -- "$*" 2>/dev/null || true
+# Source structured logging library.
+# _NVIDIA_DIR is resolved above; logging.sh lives alongside this script.
+# shellcheck source=lib/logging.sh
+source "${_NVIDIA_DIR:+$_NVIDIA_DIR/}lib/logging.sh" 2>/dev/null || {
+  # Fallback shim if logging.sh is unavailable (e.g. minimal chroot).
+  log_info() {                                                    # lint-ignore: no-shadow
+    printf '[steamos-build-update] %s\n' "$3" | tee -a "$LOG" >&2 # lint-ignore: tee-redirect
+    logger -t steamos-build-update -- "$3" 2>/dev/null || true
+  }
+  # shellcheck disable=SC2317  # function definitions inside || block are not unreachable
+  log_warn() {                                                          # lint-ignore: no-shadow
+    printf '[steamos-build-update] WARN: %s\n' "$3" | tee -a "$LOG" >&2 # lint-ignore: tee-redirect
+    logger -t steamos-build-update -- "$3" 2>/dev/null || true
+  }
+  log_error() {                                                          # lint-ignore: no-shadow
+    printf '[steamos-build-update] ERROR: %s\n' "$3" | tee -a "$LOG" >&2 # lint-ignore: tee-redirect
+    logger -t steamos-build-update -- "$3" 2>/dev/null || true
+  }
 }
 
+log_init --log-file "$LOG" --console-level info --no-color 2>/dev/null || true
+
 [[ -f "$REAL" && -x "$REAL" ]] || {
-  _ulog "ERROR: Valve updater is missing or not executable: $REAL"
+  log_error update valve_updater_missing "Valve updater is missing or not executable: $REAL"
   exit 127
 }
 
-_ulog "Starting Valve updater: $REAL $*"
+log_info update starting "Starting Valve updater" client "$REAL" args "$*"
 "$REAL" "$@"
 rc=$?
-_ulog "Valve updater returned rc=$rc (atomupd layer owns staged-slot repatch)"
+log_info update returned "Valve updater returned (atomupd layer owns staged-slot repatch)" rc "$rc"
 exit "$rc"

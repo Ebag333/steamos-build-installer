@@ -7,6 +7,7 @@ Usage:
   steamos-build.sh --action live --config FILE
   steamos-build.sh --action validate [--config FILE] [--image FILE] [--output FILE]
   steamos-build.sh --action reboot
+  steamos-build.sh --action cleanup [--run-id ID] [--purge]
   steamos-build.sh --setup
 
 Setup:

@@ -184,8 +184,12 @@ _preflight_resources_acquire_lock() {
     chmod 0755 "$lock_dir" 2>/dev/null || true
   fi
 
-  # Check ledger lock before acquiring deployment lock
-  if declare -F pipeline_init_check_lock >/dev/null 2>&1; then
+  # Check ledger lock before acquiring deployment lock.
+  # SKIP when _LEDGER_RUN_DIR is set: inside a pipeline run, the ledger lock
+  # is already held by cleanup_ledger_begin on a dedicated fd.  Calling
+  # pipeline_init_check_lock here would reopen fd 9 (its hardcoded lock fd),
+  # destroying the existing ledger lock state.
+  if [[ -z "${_LEDGER_RUN_DIR:-}" ]] && declare -F pipeline_init_check_lock >/dev/null 2>&1; then
     if ! pipeline_init_check_lock; then
       die "PF-54a: another build is running (ledger locked) — cannot proceed"
     fi

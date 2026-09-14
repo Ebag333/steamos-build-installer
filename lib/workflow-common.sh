@@ -34,19 +34,16 @@ configure_desktop_session() {
 # Used by: build, repatch, live workflows.
 
 # Run custom script if present.
-# Uses CUSTOM_FINALIZE_SCRIPT from config if set, otherwise falls back to
-# the hardcoded path at /home/.steamos-build/recovery/custom.sh.
+# Uses CUSTOM_FINALIZE_SCRIPT from config if set; skips if empty.
 # Args: $1 = root path (optional, defaults to /)
-# Returns 0 on success or script not found, 1 on script failure
+# Returns 0 on success or script not configured, 1 on script failure
 run_custom_script() {
   local root="${1:-/}"
-  local custom=""
+  local custom="${CUSTOM_FINALIZE_SCRIPT:-}"
 
-  # User-selected script from config takes priority
-  if [[ -n "${CUSTOM_FINALIZE_SCRIPT:-}" ]]; then
-    custom="$CUSTOM_FINALIZE_SCRIPT"
-  else
-    custom="$root/home/.steamos-build/recovery/custom.sh"
+  if [[ -z "$custom" ]]; then
+    log "No custom finalize script configured — skipping"
+    return 0
   fi
 
   if [[ -f "$custom" ]]; then
@@ -308,41 +305,47 @@ _init_pacman_keyring() {
   fi
 
   # Remove existing keyring for a clean reset
-  rm -rf "$root/etc/pacman.d/gnupg" 2>/dev/null || true
+  safe_rmdir "$root/etc/pacman.d/gnupg" 2>/dev/null || true
 
   # Initialize keyring
   case "$keyring" in
     archlinux)
-      chroot "$root" pacman-key --init 2>/dev/null \
+      # lint-ignore: silenced-stdout — intentionally suppress verbose keyring init output; stderr preserved for diagnostics
+      chroot "$root" pacman-key --init >/dev/null \
         || {
           warn "pacman-key --init failed"
           return 1
         }
-      chroot "$root" pacman-key --populate archlinux 2>/dev/null \
+      # lint-ignore: silenced-stdout — intentionally suppress verbose keyring populate output; stderr preserved for diagnostics
+      chroot "$root" pacman-key --populate archlinux >/dev/null \
         || {
           warn "pacman-key --populate archlinux failed"
           return 1
         }
       ;;
     holo)
-      chroot "$root" pacman-key --init 2>/dev/null \
+      # lint-ignore: silenced-stdout — intentionally suppress verbose keyring init output; stderr preserved for diagnostics
+      chroot "$root" pacman-key --init >/dev/null \
         || {
           warn "pacman-key --init failed"
           return 1
         }
-      chroot "$root" pacman-key --populate holo 2>/dev/null \
+      # lint-ignore: silenced-stdout — intentionally suppress verbose keyring populate output; stderr preserved for diagnostics
+      chroot "$root" pacman-key --populate holo >/dev/null \
         || {
           warn "pacman-key --populate holo failed"
           return 1
         }
       ;;
     both)
-      chroot "$root" pacman-key --init 2>/dev/null \
+      # lint-ignore: silenced-stdout — intentionally suppress verbose keyring init output; stderr preserved for diagnostics
+      chroot "$root" pacman-key --init >/dev/null \
         || {
           warn "pacman-key --init failed"
           return 1
         }
-      chroot "$root" pacman-key --populate archlinux holo 2>/dev/null \
+      # lint-ignore: silenced-stdout — intentionally suppress verbose keyring populate output; stderr preserved for diagnostics
+      chroot "$root" pacman-key --populate archlinux holo >/dev/null \
         || {
           warn "pacman-key --populate failed"
           return 1

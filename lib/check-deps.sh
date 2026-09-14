@@ -12,6 +12,32 @@
 
 set -euo pipefail
 
+# Source structured logging library.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/logging.sh
+source "$SCRIPT_DIR/logging.sh" 2>/dev/null || {
+  # Fallback shim if logging.sh is unavailable.
+  log_info() { # lint-ignore: no-shadow
+    printf '[check-deps] INFO: %s\n' "${3:-}" >&2
+  }
+  log_notice() { # lint-ignore: no-shadow
+    printf '[check-deps] NOTICE: %s\n' "${3:-}" >&2
+  }
+  log_warn() { # lint-ignore: no-shadow
+    printf '[check-deps] WARN: %s\n' "${3:-}" >&2
+  }
+  log_error() { # lint-ignore: no-shadow
+    printf '[check-deps] ERROR: %s\n' "${3:-}" >&2
+  }
+  log_die() { # lint-ignore: no-shadow
+    printf '[check-deps] ERROR: %s\n' "${3:-}" >&2
+    exit 1
+  }
+}
+
+# Initialize logging (console-only, no log file for this standalone script).
+log_init --console-level info --no-color 2>/dev/null || true
+
 # Inline pacman install (standalone script, doesn't need full library)
 _pacman_install() {
   if [[ $EUID -eq 0 ]]; then
@@ -19,16 +45,10 @@ _pacman_install() {
   elif command -v sudo >/dev/null 2>&1; then
     sudo pacman --noconfirm --needed -S "$@"
   else
-    echo -e "${RED}Cannot install — no root/sudo access.${NC}"
+    log_error deps no-perms "Cannot install — no root/sudo access."
     exit 1
   fi
 }
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
 
 MODE="interactive" # interactive | install | check-only
 case "${1:-}" in
@@ -36,8 +56,8 @@ case "${1:-}" in
   --check-only) MODE="check-only" ;;
   "") ;; # no argument, keep default
   *)
-    echo "Unknown option: $1" >&2
-    echo "Usage: $0 [--install | --check-only]" >&2
+    log_error args arg-error "Unknown option: $1"
+    log_error args arg-error "Usage: $0 [--install | --check-only]"
     exit 1
     ;;
 esac
@@ -83,22 +103,19 @@ declare -A OPTIONAL=(
 )
 
 # ---- check phase ----
-echo ""
-echo -e "${CYAN}=== steamos-build-installer dependency check ===${NC}"
+log_notice deps start "steamos-build-installer dependency check"
 
 # ---- WSL detection ----
 if grep -qi microsoft /proc/version 2>/dev/null; then
-  echo -e "${YELLOW}WARNING: WSL detected.${NC}"
-  echo -e "${YELLOW}WSL lacks full kernel support needed for building:${NC}"
-  echo "  - No real loop device support (losetup)"
-  echo "  - No btrfs kernel module"
-  echo "  - Limited systemd/udev support"
-  echo ""
-  echo -e "${YELLOW}The build will fail in WSL. Use one of these instead:${NC}"
-  echo "  - Real Arch Linux (bare metal or VM)"
-  echo "  - SteamOS recovery USB"
-  echo "  - Docker with --privileged (partial support)"
-  echo ""
+  log_warn deps wsl-detected "WSL detected."
+  log_warn deps wsl-limits "WSL lacks full kernel support needed for building:"
+  log_warn deps wsl-detail "  - No real loop device support (losetup)"
+  log_warn deps wsl-detail "  - No btrfs kernel module"
+  log_warn deps wsl-detail "  - Limited systemd/udev support"
+  log_warn deps wsl-alternatives "The build will fail in WSL. Use one of these instead:"
+  log_warn deps wsl-alternatives "  - Real Arch Linux (bare metal or VM)"
+  log_warn deps wsl-alternatives "  - SteamOS recovery USB"
+  log_warn deps wsl-alternatives "  - Docker with --privileged (partial support)"
   if [[ "$MODE" != "check-only" ]]; then
     read -rp "Continue anyway? [y/N]: " wsl_continue || {
       echo "Aborted."
@@ -116,7 +133,7 @@ while IFS= read -r cmd; do
   if command -v "$cmd" >/dev/null 2>&1; then
     ((++REQUIRED_PASSED))
   else
-    echo -e "  ${RED}✗${NC} $cmd ($pkg)"
+    log_error deps missing "$cmd ($pkg)"
     MISSING_REQUIRED+=("$pkg")
   fi
 done < <(printf '%s\n' "${!REQUIRED[@]}" | sort)
@@ -130,30 +147,26 @@ if [[ ${#OPTIONAL[@]} -gt 0 ]]; then
     if command -v "$cmd" >/dev/null 2>&1; then
       ((++OPTIONAL_PASSED))
     else
-      echo -e "  ${YELLOW}○${NC} $cmd ($desc)"
+      log_warn deps missing-optional "$cmd ($desc)"
       MISSING_OPTIONAL+=("$pkg")
     fi
   done < <(printf '%s\n' "${!OPTIONAL[@]}" | sort)
 fi
 
-echo ""
-
 # ---- summary ----
 if [[ ${#MISSING_REQUIRED[@]} -eq 0 ]]; then
-  echo -e "${GREEN}Dependency check: ${REQUIRED_PASSED}/${REQUIRED_TOTAL} required tools present${NC}"
+  log_info deps summary "Dependency check: ${REQUIRED_PASSED}/${REQUIRED_TOTAL} required tools present"
 else
-  echo -e "${RED}Dependency check failed: ${REQUIRED_PASSED}/${REQUIRED_TOTAL} required tools present${NC}"
+  log_error deps summary "Dependency check failed: ${REQUIRED_PASSED}/${REQUIRED_TOTAL} required tools present"
 fi
 
 if [[ ${#OPTIONAL[@]} -gt 0 ]]; then
   if [[ ${#MISSING_OPTIONAL[@]} -eq 0 ]]; then
-    echo -e "${GREEN}Optional check: ${OPTIONAL_PASSED}/${OPTIONAL_TOTAL} optional tools present${NC}"
+    log_info deps summary "Optional check: ${OPTIONAL_PASSED}/${OPTIONAL_TOTAL} optional tools present"
   else
-    echo -e "${YELLOW}Optional check: ${OPTIONAL_PASSED}/${OPTIONAL_TOTAL} optional tools present${NC}"
+    log_warn deps summary "Optional check: ${OPTIONAL_PASSED}/${OPTIONAL_TOTAL} optional tools present"
   fi
 fi
-
-echo ""
 
 # Deduplicate package lists — filter empty lines so empty arrays stay empty.
 mapfile -t REQUIRED_PKGS < <(printf '%s\n' "${MISSING_REQUIRED[@]}" | sort -u | awk 'NF')
@@ -161,60 +174,60 @@ mapfile -t OPTIONAL_PKGS < <(printf '%s\n' "${MISSING_OPTIONAL[@]}" | sort -u | 
 
 # ---- exit early if nothing missing ----
 if [[ ${#REQUIRED_PKGS[@]} -eq 0 && ${#OPTIONAL_PKGS[@]} -eq 0 ]]; then
-  echo -e "${GREEN}All dependencies satisfied. Ready to build.${NC}"
+  log_info deps all-present "All dependencies satisfied. Ready to build."
   exit 0
 fi
 
 # ---- show what's missing ----
 if [[ ${#REQUIRED_PKGS[@]} -gt 0 ]]; then
-  echo -e "${RED}Missing required: ${REQUIRED_PKGS[*]}${NC}"
+  log_error deps missing-required "Missing required: ${REQUIRED_PKGS[*]}"
 fi
 if [[ ${#OPTIONAL_PKGS[@]} -gt 0 ]]; then
-  echo -e "${YELLOW}Missing optional: ${OPTIONAL_PKGS[*]}${NC}"
+  log_warn deps missing-optional "Missing optional: ${OPTIONAL_PKGS[*]}"
 fi
-echo ""
 
 # ---- required-only: no required deps means success ----
 # Optional deps should never block the build or cause a nonzero exit.
 # But in --install mode, we still want to install them.
 if [[ ${#REQUIRED_PKGS[@]} -eq 0 && "$MODE" != "install" ]]; then
-  echo -e "${GREEN}All required dependencies satisfied.${NC}"
+  log_info deps required-ok "All required dependencies satisfied."
   if [[ ${#OPTIONAL_PKGS[@]} -gt 0 ]]; then
-    echo -e "${YELLOW}Optional packages not installed: ${OPTIONAL_PKGS[*]}${NC}"
-    echo -e "${YELLOW}Install manually if needed: sudo pacman -S ${OPTIONAL_PKGS[*]}${NC}"
+    log_warn deps optional-skipped "Optional packages not installed: ${OPTIONAL_PKGS[*]}"
+    log_warn deps optional-install-hint "Install manually if needed: sudo pacman -S ${OPTIONAL_PKGS[*]}"
   fi
   exit 0
 fi
 
 # ---- permission check ----
 if [[ "$HAS_PERMS" == "root" ]]; then
-  echo -e "${GREEN}Running as root — can install packages.${NC}"
+  log_info deps perms-ok "Running as root — can install packages."
 elif [[ "$HAS_PERMS" == "sudo" ]]; then
-  echo -e "${GREEN}User has sudo — can install packages.${NC}"
+  log_info deps perms-ok "User has sudo — can install packages."
 else
-  echo -e "${YELLOW}Not root and no sudo access.${NC}"
-  echo -e "${YELLOW}Cannot auto-install. Run as root or install manually:${NC}"
-  echo "  sudo pacman -S ${REQUIRED_PKGS[*]}"
+  log_warn deps no-perms "Not root and no sudo access."
+  log_warn deps no-perms "Cannot auto-install. Run as root or install manually:"
+  log_warn deps no-perms "  sudo pacman -S ${REQUIRED_PKGS[*]}"
   exit 1
 fi
-echo ""
 
 # ---- check-only mode: exit with error if required missing ----
 if [[ "$MODE" == "check-only" ]]; then
+  log_error deps check-failed "Dependency check failed. Install missing packages and re-run."
   exit 1
 fi
 
 # ---- install mode: skip prompt ----
 if [[ "$MODE" == "install" ]]; then
   TO_INSTALL=("${REQUIRED_PKGS[@]}" "${OPTIONAL_PKGS[@]}")
-  echo "Installing: ${TO_INSTALL[*]}"
+  log_info deps installing "Installing: ${TO_INSTALL[*]}"
   _pacman_install "${TO_INSTALL[@]}"
-  echo -e "${GREEN}Done.${NC}"
+  # shellcheck disable=SC1010  # "done" is a log category, not a keyword
+  log_info deps done "Done."
   exit 0
 fi
 
 # ---- interactive mode: ask user ----
-echo -e "${CYAN}What would you like to install?${NC}"
+echo "What would you like to install?"
 echo ""
 echo "  1) Yes (all)       — install required + optional"
 echo "  2) Yes (required)  — install required only"
@@ -233,14 +246,13 @@ case "$choice" in
     TO_INSTALL=("${REQUIRED_PKGS[@]}")
     ;;
   *)
-    echo "Skipping install. Install manually with:"
-    echo "  sudo pacman -S ${REQUIRED_PKGS[*]}"
+    log_warn deps skipped "Skipping install. Install manually with:"
+    log_warn deps skipped "  sudo pacman -S ${REQUIRED_PKGS[*]}"
     exit 1
     ;;
 esac
 
-echo ""
-echo "Installing: ${TO_INSTALL[*]}"
+log_info deps installing "Installing: ${TO_INSTALL[*]}"
 _pacman_install "${TO_INSTALL[@]}"
-echo ""
-echo -e "${GREEN}Done. Run ./check-deps.sh again to verify.${NC}"
+# shellcheck disable=SC1010  # "done" is a log category, not a keyword
+log_info deps done "Done. Run ./check-deps.sh again to verify."

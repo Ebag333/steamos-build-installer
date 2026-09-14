@@ -10,7 +10,7 @@ set -euo pipefail
 
 # Local helper: resolve heredocs directory from this script's location.
 # The lib/common.sh version is not available inside the build chroot.
-logitech_heredoc_dir() {
+_logitech_heredoc_dir() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../../../../heredocs" && pwd
 }
 
@@ -97,7 +97,7 @@ if grep -qE 'sizeof\(consumer_report\), 5, 1' "${matched_files[@]}"; then
 fi
 
 # ── 3. Create Makefile ───────────────────────────────────────────────────
-cat "$(logitech_heredoc_dir)/static/logitech-hid-makefile" >"$BUILD_DIR/Makefile"
+cat "$(_logitech_heredoc_dir)/static/logitech-hid-makefile" >"$BUILD_DIR/Makefile"
 
 # ── 4. Verify stock drivers are modules (not built-in) ───────────────────
 KCONFIG="/usr/lib/modules/$KVER/build/.config"

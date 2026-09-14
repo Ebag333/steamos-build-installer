@@ -89,6 +89,8 @@ if [[ "$FIX_MODE" != true ]]; then
   _run_check "clobber-init" "$LINT_DIR/clobber-init.sh" "${root_args[@]}"
   _run_check "strict-mount" "$LINT_DIR/strict-mount.sh" "${root_args[@]}"
   _run_check "undefined-funcs" "$LINT_DIR/undefined-funcs.sh" "${root_args[@]}"
+  _run_check "logging" "$LINT_DIR/logging.sh" "${root_args[@]}"
+  _run_check "fallback-logging-args" "$LINT_DIR/fallback-logging-args.sh" "${root_args[@]}"
 fi
 
 if [[ $failed -gt 0 ]]; then

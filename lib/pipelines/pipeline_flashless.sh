@@ -15,12 +15,13 @@ fi
 # ---------------------------------------------------------------------------
 
 register_flashless_pipeline() {
+  _PIPELINE_NAME="flashless"
   define_pipeline "detect" "extract" "deploy" "configure" "activate"
-  register_phase "detect"    "_phase_flashless_detect"    "Detect slots and run preflight checks"
-  register_phase "extract"   "_phase_flashless_extract"   "Extract source image and check sizes"
-  register_phase "deploy"    "_phase_flashless_deploy"    "Format target, write rootfs, verify partsets"
+  register_phase "detect" "_phase_flashless_detect" "Detect slots and run preflight checks"
+  register_phase "extract" "_phase_flashless_extract" "Extract source image and check sizes"
+  register_phase "deploy" "_phase_flashless_deploy" "Format target, write rootfs, verify partsets"
   register_phase "configure" "_phase_flashless_configure" "Restore etc, rebuild boot, restore read-only"
-  register_phase "activate"  "_phase_flashless_activate"  "Verify final state and activate slot"
+  register_phase "activate" "_phase_flashless_activate" "Verify final state and activate slot"
 }
 
 # ---------------------------------------------------------------------------
@@ -32,9 +33,19 @@ register_flashless_cleanup() {
 }
 
 _flashless_cleanup() {
-  rm -f "${FL_UDEV_RULE:-}" 2>/dev/null
-  udevadm control --reload-rules 2>/dev/null || true
+  log_debug pipeline cleanup "_flashless_cleanup: start"
+  if [[ -n "${FL_UDEV_RULE:-}" ]]; then
+    log "_flashless_cleanup: removing udev rule $FL_UDEV_RULE"
+    rm -f "$FL_UDEV_RULE" 2>/dev/null
+  else
+    log_debug pipeline cleanup "_flashless_cleanup: FL_UDEV_RULE is unset; nothing to remove"
+  fi
+  log "_flashless_cleanup: reloading host udev rules (udevadm control --reload-rules)"
+  if ! run_dangerous_cmd udevadm control --reload-rules 2>/dev/null; then
+    warn "_flashless_cleanup: udevadm control --reload-rules failed"
+  fi
   cleanup_environment 2>/dev/null || true
+  log_debug pipeline cleanup "_flashless_cleanup: done"
 }
 
 # ---------------------------------------------------------------------------
@@ -44,7 +55,7 @@ _flashless_cleanup() {
 # Phase: detect — detect slots and run preflight checks
 _phase_flashless_detect() {
   stage_header "preparing & validating"
-  _flashless_detect_slots
+  flashless_detect_slots
 
   preflight_validate \
     --scenario "flashless" \
@@ -60,48 +71,56 @@ _phase_flashless_detect() {
 # Phase: extract — extract source image and check sizes
 _phase_flashless_extract() {
   stage_header "extracting source image"
-  _flashless_extract_image "$IMG"
-  _flashless_check_sizes
+  flashless_extract_image "$IMG"
+  flashless_check_sizes
   return 0
 }
 
 # Phase: deploy — format target, write rootfs, detach source, verify partsets
 _phase_flashless_deploy() {
   stage_header "deploying image to target"
-  _flashless_format_target
-  _flashless_write_rootfs
+  flashless_format_target
+  flashless_write_rootfs
 
   # Detach source image — its partitions may be competing with
   # /dev/disk/by-partsets.  Must succeed; if detach fails, abort.
   strict_detach_loop "$FL_IMG_LOOP"
   FL_IMG_LOOP=""
 
-  udevadm trigger --action=change \
+  log "flashless: triggering udev for partition devices (udevadm trigger --action=change ${FL_TARGET_ROOTFS:-} ${FL_TARGET_EFI:-} ${FL_TARGET_VAR:-})"
+  run_dangerous_cmd udevadm trigger --action=change \
     "$FL_TARGET_ROOTFS" \
     "$FL_TARGET_EFI" \
     "$FL_TARGET_VAR" \
-    || { warn "Could not retrigger udev for target partitions"; return 1; }
+    || {
+      warn "Could not retrigger udev for target partitions"
+      return 1
+    }
 
-  udevadm settle --timeout=10 \
-    || { warn "udev did not settle after source loop detach"; return 1; }
+  log "flashless: waiting for udev events to settle (udevadm settle --timeout=10)"
+  run_dangerous_cmd udevadm settle --timeout=10 \
+    || {
+      warn "udev did not settle after source loop detach"
+      return 1
+    }
 
-  _flashless_verify_partsets
+  flashless_verify_partsets
   return 0
 }
 
 # Phase: configure — restore /etc, rebuild boot, restore read-only
 _phase_flashless_configure() {
   stage_header "configuring target system"
-  _flashless_restore_etc
-  _flashless_rebuild_boot
-  _flashless_restore_rootfs_ro
+  flashless_restore_etc
+  flashless_rebuild_boot
+  flashless_restore_rootfs_ro
   return 0
 }
 
 # Phase: activate — verify final state and activate slot
 _phase_flashless_activate() {
   stage_header "verification & activation"
-  _flashless_verify_final
-  _flashless_activate_slot
+  flashless_verify_final
+  flashless_activate_slot
   return 0
 }

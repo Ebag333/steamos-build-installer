@@ -416,7 +416,7 @@ flash_preflight() {
 # and comparing the SHA256 against the source image.
 # MUST be called BEFORE any post-write modifications (e.g. GPT relocation).
 # Args: $1 = image path, $2 = target device, $3 = image bytes, $4 = precomputed image SHA256
-_flash_verify_raw() {
+flash_verify_raw() {
   local img="$1" target="$2" img_bytes="$3" img_hash="$4"
 
   echo ""

@@ -150,10 +150,24 @@ while IFS= read -r -d '' file; do
     # Match: local VAR[=...] or declare [-flags] VAR[=...]
     if [[ "$line" =~ ^[[:space:]]*(local|declare)[[:space:]]+(-[a-zA-Z]+[[:space:]]+)?([a-zA-Z_][a-zA-Z0-9_]*) ]]; then
       var_name="${BASH_REMATCH[3]}"
+      _kw="${BASH_REMATCH[1]}"      # "local" or "declare"
+      _flags="${BASH_REMATCH[2]:-}" # flags string, or empty
+
+      # Namerefs: bare assignment writes through the ref — cannot be statically tracked
+      if [[ "$_flags" =~ n ]]; then
+        prev_line="$line"
+        continue
+      fi
 
       # Detect global-scope declaration (declare -g, -gA, -ga, etc.)
       is_global=0
-      if [[ "${BASH_REMATCH[1]}" == "declare" ]] && [[ "${BASH_REMATCH[2]:-}" =~ g ]]; then
+      if [[ "$_kw" == "declare" ]] && [[ "$_flags" =~ g ]]; then
+        is_global=1
+      fi
+
+      # bare 'declare' without -g or -n: conservatively treat as global
+      # to avoid false positives for variables read in sourcing files
+      if [[ "$_kw" == "declare" && ! "$_flags" =~ [gn] ]]; then
         is_global=1
       fi
 
