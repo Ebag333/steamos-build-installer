@@ -1,0 +1,2 @@
+# steamos-build flashless-loop quarantine.
+SUBSYSTEM=="block", KERNEL=="loop[0-9]*p*", ENV{UDISKS_IGNORE}="1", ENV{SYSTEMD_READY}="0"

@@ -1,0 +1,122 @@
+#!/bin/bash
+#
+# steamos-build-installer — lib/build/verify.sh
+# Package verification utilities.
+#
+# Sourced by engine.sh — do not run directly.
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "lib/build/verify.sh is a library — source it from the wrapper, not run directly." >&2
+  exit 1
+fi
+
+# Guard against double-sourcing
+[[ -v _BUILD_VERIFY_LOADED ]] && return 0
+_BUILD_VERIFY_LOADED=1
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+# Verify package metadata is valid.
+# Args: $1 = package path
+# Returns 0 if valid, 1 if invalid.
+verify_package_metadata() {
+  local pkg="${1:?}"
+
+  [[ -f "$pkg" ]] || {
+    warn "Package not found: $pkg"
+    return 1
+  }
+
+  # Check it's a valid pacman package
+  local pkg_name
+  pkg_name="$(pacman -Qip "$pkg" 2>/dev/null | sed -n 's/^Name[[:space:]]*: //p')"
+  if [[ -z "$pkg_name" ]]; then
+    warn "Invalid package: $pkg"
+    return 1
+  fi
+
+  log "  Package metadata: $pkg_name"
+  return 0
+}
+
+# Verify package ABI compatibility with a profile.
+# Args: $1 = package path, $2 = profile dir
+# Returns 0 if compatible, 1 if incompatible.
+verify_package_abi_compat() {
+  local pkg="${1:?}"
+  local profile_dir="${2:?}"
+
+  # Load profile
+  local packages_lock="$profile_dir/packages.lock"
+  if [[ ! -f "$packages_lock" ]]; then
+    log "  No packages.lock — skipping ABI check"
+    return 0
+  fi
+
+  # Get package dependencies
+  local pkg_deps
+  pkg_deps="$(pacman -Qip "$pkg" 2>/dev/null | sed -n 's/^Depends On[[:space:]]*: //p')"
+  if [[ -z "$pkg_deps" ]]; then
+    log "  No dependencies — skipping ABI check"
+    return 0
+  fi
+
+  # Check each dependency against the lock file
+  local dep
+  for dep in $pkg_deps; do
+    local dep_name dep_op dep_ver
+    if [[ "$dep" =~ ^([^><=]+)(>=|<=|>|<|=)(.+)$ ]]; then
+      dep_name="${BASH_REMATCH[1]}"
+      dep_op="${BASH_REMATCH[2]}"
+      dep_ver="${BASH_REMATCH[3]}"
+    else
+      # Bare dependency with no version constraint — skip
+      continue
+    fi
+
+    # Check if this is an ABI-critical package
+    local locked_ver=""
+    locked_ver="$(awk -F= -v name="$dep_name" '$1 == name { print substr($0, length(name)+2); exit }' "$packages_lock" 2>/dev/null)"
+
+    if [[ -z "$locked_ver" ]]; then
+      continue
+    fi
+
+    # Use vercmp for proper version comparison
+    local cmp
+    cmp="$(vercmp "$locked_ver" "$dep_ver" 2>/dev/null)"
+    if [[ -z "$cmp" ]]; then
+      warn "vercmp failed for $dep_name: locked=$locked_ver dep=$dep_ver"
+      return 1
+    fi
+
+    local mismatch=0
+    case "$dep_op" in
+      '>=')
+        ((cmp < 0)) && mismatch=1
+        ;;
+      '<=')
+        ((cmp > 0)) && mismatch=1
+        ;;
+      '>')
+        ((cmp <= 0)) && mismatch=1
+        ;;
+      '<')
+        ((cmp >= 0)) && mismatch=1
+        ;;
+      '=')
+        ((cmp != 0)) && mismatch=1
+        ;;
+    esac
+
+    if ((mismatch)); then
+      warn "ABI mismatch: $dep_name requires $dep_op$dep_ver but profile has $locked_ver"
+      return 1
+    fi
+  done
+
+  log "  ABI compatibility: OK"
+  return 0
+}

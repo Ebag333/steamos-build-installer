@@ -1,0 +1,4 @@
+# steamos-nvidia-installer: rescan PCI bus when a Thunderbolt device appears.
+# Devices already authorized (by firmware or bolt) get a rescan so their
+# downstream PCI endpoints show up immediately.
+ACTION=="add", SUBSYSTEM=="thunderbolt", ATTR{authorized}=="1", RUN+="/usr/local/bin/thunderbolt-rescan.sh"

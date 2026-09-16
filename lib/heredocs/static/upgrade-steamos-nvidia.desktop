@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Upgrade SteamOS (NVIDIA) — keeps games & data
+GenericName=Upgrade SteamOS (NVIDIA) — keeps games & data
+Comment=Reinstall the OS partitions from this USB while preserving the home partition
+Exec=/home/deck/tools/install_to_hd.sh system
+Icon=system-software-update
+Path=/home/deck
+Terminal=true
+Type=Application
+StartupNotify=true

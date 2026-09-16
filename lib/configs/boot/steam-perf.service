@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply Steam performance policy
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/steam-perf/apply-boot
+
+[Install]
+WantedBy=multi-user.target

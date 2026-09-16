@@ -1,0 +1,220 @@
+#!/bin/bash
+#
+# steamos-build-installer — lib/build/backends/arch-devtools.sh
+# Build backend using Arch devtools (mkarchroot/makechrootpkg).
+#
+# Sourced by engine.sh — do not run directly.
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "lib/build/backends/arch-devtools.sh is a library — source it from the wrapper, not run directly." >&2
+  exit 1
+fi
+
+# Guard against double-sourcing
+[[ -v _BUILD_DEVTOOLS_LOADED ]] && return 0
+_BUILD_DEVTOOLS_LOADED=1
+
+# ---------------------------------------------------------------------------
+# Backend interface
+# ---------------------------------------------------------------------------
+
+# Create a clean build root using mkarchroot.
+# Args: $1 = name, $2 = profile dir, $3 = nameref variable for result
+# Sets: nameref variable to path to build root directory
+# lint-ignore: private-funcs
+_build_devtools_create_root() {
+  local name="${1:?}"
+  # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
+  local profile="${2:?}"
+  local -n _result_ref="${3:?}"
+  _result_ref=""
+
+  local build_dir
+  build_dir="$(mktemp -d "${WORKDIR:-/tmp}/build-roots/$name-XXXXXXXX")"
+
+  local pacman_conf="${PROFILE_PACMAN:?profile must set PROFILE_PACMAN}"
+  local arch="${PROFILE_ARCH:-x86_64}"
+
+  log "  Creating build root: $build_dir"
+  log "    pacman.conf: $pacman_conf"
+  log "    arch: $arch"
+
+  # Verify mkarchroot is available
+  if ! command -v mkarchroot >/dev/null 2>&1; then
+    warn "mkarchroot not found — install arch-install-scripts"
+    return 1
+  fi
+
+  # Verify pacman.conf exists
+  if [[ ! -f "$pacman_conf" ]]; then
+    warn "pacman.conf not found: $pacman_conf"
+    return 1
+  fi
+
+  # Create the root with base packages
+  local mkarchroot_output=""
+  local -a mkarchroot_args=(
+    -C "$pacman_conf"
+  )
+  if [[ -n "${PROFILE_MAKEPKG:-}" ]]; then
+    mkarchroot_args+=(-M "$PROFILE_MAKEPKG")
+  fi
+  mkarchroot_args+=(
+    "$build_dir/root"
+    base base-devel
+  )
+  mkarchroot_output="$(mkarchroot "${mkarchroot_args[@]}" 2>&1)" || {
+    warn "mkarchroot failed:"
+    echo "$mkarchroot_output" | while IFS="" read -r line; do
+      warn "  $line"
+    done
+    return 1
+  }
+
+  log "  Build root created successfully"
+  _result_ref="$build_dir"
+}
+
+# Destroy a build root.
+# Args: $1 = build root directory
+# lint-ignore: private-funcs
+_build_devtools_destroy_root() {
+  local build_dir="${1:?}"
+
+  if [[ -d "$build_dir" ]]; then
+    log "  Destroying build root: $build_dir"
+    safe_rmdir "$build_dir"
+  fi
+}
+
+# Sync build root with profile (update repos, install build deps).
+# Args: $1 = build root directory
+# lint-ignore: private-funcs
+_build_devtools_sync_root() {
+  local build_dir="${1:?}"
+  local root="$build_dir/root"
+  local pacman_conf="${PROFILE_PACMAN:?}"
+
+  log "  Syncing build root"
+
+  # Update the root — Phase 4 already performed pacman -Syu; only refresh databases here.
+  # Defensive: ensure pacman raw log goes to persistent location
+  if [[ -z "${PACMAN_RAW_LOG:-}" || "$PACMAN_RAW_LOG" == /tmp/* ]]; then
+    local _persist_dir="/home/.steamos-build/logs"
+    if [[ -n "${BUILD_ID:-}" ]]; then
+      _persist_dir="/home/.steamos-build/logs/${BUILD_ID}"
+    fi
+    mkdir -p "$_persist_dir" 2>/dev/null || true
+    PACMAN_RAW_LOG="$_persist_dir/devtools-sync.pacman.log"
+  fi
+  local _raw_log="${PACMAN_RAW_LOG}"
+  local _sync_stdout _sync_stderr _sync_rc=0
+  _sync_stdout="$(mktemp /tmp/devtools-sync-stdout.XXXXXX)"
+  _sync_stderr="$(mktemp /tmp/devtools-sync-stderr.XXXXXX)"
+  arch-nspawn -C "$pacman_conf" "$root" pacman -Sy --noconfirm --ask=4 \
+    >"$_sync_stdout" 2>"$_sync_stderr" || _sync_rc=$?
+  # Write raw output for failure diagnostics
+  if [[ -n "$_raw_log" ]]; then
+    cat "$_sync_stdout" >>"$_raw_log" 2>/dev/null || true
+    cat "$_sync_stderr" >>"$_raw_log" 2>/dev/null || true
+  fi
+  # Apply noise filters and emit structured records
+  if [[ -s "$_sync_stdout" ]]; then
+    tail -5 "$_sync_stdout" | pacman_filter_stdout | log_capture_stream pacman info pacman_stdout
+  fi
+  if [[ -s "$_sync_stderr" ]]; then
+    pacman_filter_stderr <"$_sync_stderr" | log_capture_stream pacman warn pacman_stderr
+  fi
+  rm -f "$_sync_stdout" "$_sync_stderr"
+  if [[ "$_sync_rc" -ne 0 ]]; then
+    warn "Failed to sync build root"
+    return 1
+  fi
+
+  return 0
+}
+
+# Inject recipe sources into build root.
+# Args: $1 = build root directory, $2 = recipe directory
+# lint-ignore: private-funcs
+_build_devtools_inject_sources() {
+  local build_dir="${1:?}"
+  local recipe_dir="${2:?}"
+  local root="$build_dir/root"
+
+  log "  Injecting recipe sources"
+
+  # Copy PKGBUILD and patches into the build directory
+  local build_src="$build_dir/build"
+  mkdir -p "$build_src"
+  cp "$recipe_dir/PKGBUILD" "$build_src/"
+
+  # Copy patches if they exist
+  if [[ -d "$recipe_dir/patches" ]]; then
+    cp -r "$recipe_dir/patches" "$build_src/"
+  fi
+
+  # Copy any additional source files
+  if [[ -d "$recipe_dir/sources" ]]; then
+    cp -r "$recipe_dir/sources" "$build_src/"
+  fi
+
+  return 0
+}
+
+# Run the build using makechrootpkg.
+# Args: $1 = build root directory, $2 = recipe directory, $3 = output directory
+# lint-ignore: private-funcs
+_build_devtools_run() {
+  local build_dir="${1:?}"
+  local recipe_dir="${2:?}"
+  local output_dir="${3:?}"
+  local root="$build_dir/root"
+  local build_src="$build_dir/build"
+  local pacman_conf="${PROFILE_PACMAN:?}"
+
+  log "  Running build"
+
+  # Ensure output directory exists
+  mkdir -p "$output_dir"
+
+  # Build with makechrootpkg
+  # -r: chroot directory
+  # -C: pacman.conf
+  # -M: makepkg.conf
+  # -l: copy directory (for build artifacts)
+  # -o: install built packages into the chroot before building
+  local build_log="$output_dir/build.log"
+
+  local _build_fd
+  : >"$build_log" || return 1
+  if ! exec {_build_fd}>>"$build_log"; then
+    warn "Failed to open build log: $build_log"
+    return 1
+  fi
+  (
+    cd "$build_src" || exit 1
+    local -a makechrootpkg_args=(
+      -r "$root"
+      -C "$pacman_conf"
+    )
+    if [[ -n "${PROFILE_MAKEPKG:-}" ]]; then
+      makechrootpkg_args+=(-M "$PROFILE_MAKEPKG")
+    fi
+    makechrootpkg_args+=(
+      -l "$output_dir"
+    )
+    makechrootpkg "${makechrootpkg_args[@]}" \
+      2>&1
+  ) | log_capture_stream --fd "$_build_fd" build info makechrootpkg-output || {
+    exec {_build_fd}>&-
+    warn "Build failed — see log: $build_log"
+    return 1
+  }
+  exec {_build_fd}>&-
+
+  # Move any .pkg.tar.* from build_src to output_dir
+  find "$build_src" -maxdepth 1 -name '*.pkg.tar.*' -type f -exec mv {} "$output_dir/" \; 2>/dev/null || true
+
+  return 0
+}

@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ $EUID -eq 0 ]]; then
+  echo "Run this as the desktop user, not root."
+  exit 1
+fi
+
+echo "Setting up Chrome Remote Desktop for $USER"
+
+# Add user to the chrome-remote-desktop group
+sudo gpasswd -a "${USER}" chrome-remote-desktop
+
+# Create working directory
+mkdir -p "${HOME}/.config/chrome-remote-desktop"
+touch "${HOME}/.config/chrome-remote-desktop/Size"
+
+# Create session file if missing
+if [[ ! -f "${HOME}/.chrome-remote-desktop-session" ]]; then
+  cat >"${HOME}/.chrome-remote-desktop-session" <<'SESSION'
+# Uncomment one of the following lines for CRD to work.
+#
+export $(dbus-launch)
+SESSION
+  # Append available xsessions
+  if [[ -d /usr/share/xsessions/ ]]; then
+    grep -R "^Exec=" /usr/share/xsessions/ 2>/dev/null |
+      sed 's|/usr/.*=|#exec |' >>"${HOME}/.chrome-remote-desktop-session" || true
+  fi
+fi
+
+echo
+echo "Chrome Remote Desktop host is installed."
+echo
+echo "Next steps:"
+echo
+echo "  1. Open https://remotedesktop.google.com/headless"
+echo "  2. Select 'Debian Linux' and authorize this machine."
+echo "  3. Copy/paste the generated command into this terminal."
+echo
+echo "After authorization, start the host with:"
+echo
+echo "  crd --start"
+echo
+echo "To enable at boot:"
+echo
+echo "  systemctl enable chrome-remote-desktop@\${USER}"
+echo
+
+if command -v xdg-open >/dev/null 2>&1; then
+  xdg-open 'https://remotedesktop.google.com/headless' >/dev/null 2>&1 &
+fi
