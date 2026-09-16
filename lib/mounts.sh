@@ -18,16 +18,25 @@ fi
 loops_for_file() {
   local target="${1:?loops_for_file: missing backing file}"
 
-  losetup -J 2>/dev/null \
-    | python3 -c '
+  local _json _losetup_rc=0
+  _json="$(losetup -J 2>/dev/null)" || _losetup_rc=$?
+  if [[ $_losetup_rc -ne 0 ]]; then
+    warn "loops_for_file: losetup -J failed (rc=$_losetup_rc)"
+    return 2  # QUERY FAILED — caller must not assume "no loops"
+  fi
+
+  [[ -n "$_json" ]] || return 0  # No loop devices exist at all
+
+  python3 -c '
 import json, sys
 
 target = sys.argv[1]
 
 try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
+    data = json.loads(sys.argv[2])
+except json.JSONDecodeError as e:
+    print(f"loops_for_file: JSON decode error: {e}", file=sys.stderr)
+    sys.exit(2)
 
 for dev in data.get("loopdevices", []):
     backing = dev.get("back-file") or ""
@@ -36,7 +45,12 @@ for dev in data.get("loopdevices", []):
         name = dev.get("name")
         if name:
             print(name)
-' "$target"
+' "$target" "$_json"
+  local _py_rc=$?
+  if [[ $_py_rc -eq 2 ]]; then
+    warn "loops_for_file: failed to parse loop inventory for $target"
+  fi
+  return $_py_rc
 }
 
 # Print mounts whose source is a loop device or one of its partitions.
@@ -296,7 +310,14 @@ strict_unmount() {
     cleanup_log "UNMOUNT FAILED $label: $target"
 
     findmnt -R "$target" >&2 2>/dev/null || true
-    fuser -vm "$target" >&2 2>/dev/null || true
+    local _ws_holders
+    _ws_holders="$(_cleanup_workspace_holders "$target" 2>/dev/null)" || true
+    if [[ -n "$_ws_holders" ]]; then
+      warn "  Workspace-specific processes using $target:"
+      emit_prefixed_lines warn "    " "$_ws_holders"
+    else
+      debug "  No workspace-specific processes found for $target (host processes may use underlying filesystem)"
+    fi
 
     return 1
   fi
@@ -312,11 +333,108 @@ strict_unmount() {
   return 0
 }
 
+# unmount_children_deepest_first PARENT_PATH [LABEL]
+#   Discover all mounts under PARENT_PATH from the live kernel mount table,
+#   sort them deepest-first (longest path first), and unmount each one
+#   with identity and workspace safety checks.
+#   Does NOT unmount PARENT itself — only its descendants.
+#   Returns 0 if all children unmounted (or none existed), 1 if any remain.
+unmount_children_deepest_first() {
+  local parent="${1:?unmount_children_deepest_first: missing parent path}"
+  local label="${2:-mount}"
+
+  # Discover all submounts from the live kernel mount table
+  local _children
+  local _findmnt_err=""
+  _children="$(findmnt -rno TARGET --submounts -M "$parent" --kernel 2>/dev/null)" \
+    || _findmnt_err="$(findmnt -rno TARGET --submounts -M "$parent" --kernel 2>&1)"
+  local _findmnt_rc=$?
+  if ((_findmnt_rc > 1)); then
+    warn "unmount_children_deepest_first: findmnt failed (rc=$_findmnt_rc): $_findmnt_err"
+    return 1
+  fi
+
+  [[ -n "$_children" ]] || return 0
+
+  # Filter out the parent itself, sort deepest-first (longest path first)
+  local _sorted
+  _sorted="$(echo "$_children" \
+    | while IFS= read -r _t; do
+        [[ "$_t" == "$parent" ]] && continue
+        [[ -n "$_t" ]] && printf '%d\t%s\n' "${#_t}" "$_t"
+      done \
+    | sort -rn \
+    | cut -f2-)" || _sorted=""
+
+  [[ -n "$_sorted" ]] || return 0
+
+  local rc=0
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
+
+    # Skip if not a mountpoint (may have been unmounted by a sibling)
+    mountpoint -q "$child" 2>/dev/null || continue
+
+    # Workspace containment check
+    if [[ -n "${CLEANUP_WORKSPACE_ROOT:-}" ]]; then
+      local _resolved
+      _resolved="$(realpath -m -- "$child" 2>/dev/null)" || _resolved="$child"
+      if [[ "$_resolved" != "${CLEANUP_WORKSPACE_ROOT}" && "$_resolved" != "${CLEANUP_WORKSPACE_ROOT%/}"/* ]]; then
+        debug "unmount_children_deepest_first: skipping $child (outside workspace)"
+        rc=1
+        continue
+      fi
+    fi
+
+    # Protected path check
+    if protected_path "$child" 2>/dev/null; then
+      debug "unmount_children_deepest_first: skipping $child (protected path)"
+      rc=1
+      continue
+    fi
+
+    # Propagation guard
+    if ! _check_bind_propagation "$child" 2>/dev/null; then
+      warn "unmount_children_deepest_first: skipping $child (shared propagation)"
+      rc=1
+      continue
+    fi
+
+    # Unmount
+    if strict_unmount "$child" "$label child"; then
+      cleanup_log "UNMOUNT (dynamic child): $child (under $parent)"
+      debug "unmount_children_deepest_first: unmounted $child"
+    else
+      warn "unmount_children_deepest_first: failed to unmount $child"
+      cleanup_log "UNMOUNT FAILED (dynamic child): $child (under $parent)"
+      rc=1
+    fi
+  done <<<"$_sorted"
+
+  return $rc
+}
+
 # Detach a loop device and verify it really disappeared.
 strict_detach_loop() {
   local loop="${1:?strict_detach_loop: missing loop device}"
 
-  losetup "$loop" >/dev/null 2>&1 || return 0
+  # Check if loop is already detached.
+  # losetup returns 0 only when the loop has a backing file (associated).
+  # losetup returns 1 when the device exists but is not associated (detached).
+  # Other exit codes indicate actual errors (permission denied, etc.).
+  local _losetup_rc=0
+  losetup "$loop" >/dev/null 2>&1 || _losetup_rc=$?
+  if ((_losetup_rc == 0)); then
+    # Loop is still attached — proceed to detach
+    :
+  elif ((_losetup_rc == 1)); then
+    # Loop exists but not associated — already detached
+    return 0
+  else
+    # Query error
+    warn "strict_detach_loop: losetup query failed for $loop (rc=$_losetup_rc)"
+    return 1
+  fi
 
   sync
   blockdev --flushbufs "$loop" 2>/dev/null || true
@@ -335,21 +453,45 @@ strict_detach_loop() {
 
   local i
   for ((i = 0; i < 20; i++)); do
-    if ! losetup "$loop" >/dev/null 2>&1; then
+    local _verify_rc=0
+    losetup "$loop" >/dev/null 2>&1 || _verify_rc=$?
+    if ((_verify_rc == 1)); then
+      # Loop exists but not associated — detached
       cleanup_log "DETACH OK loop: $loop"
       return 0
+    elif ((_verify_rc != 0)); then
+      # Query error — treat as failure
+      warn "strict_detach_loop: losetup verification query failed for $loop (rc=$_verify_rc)"
+      return 1
     fi
     sleep 0.1
   done
 
-  # Loop is still attached after losetup -d.  If AUTOCLEAR is set, the
-  # kernel will auto-detach when the last reference (e.g. jbd2 journal
-  # thread) releases — this is not a failure.
+  # Loop is still attached after losetup -d.  AUTOCLEAR=1 means the kernel
+  # intends to auto-detach, but the loop is NOT considered detached until
+  # it actually disappears from losetup.  Continue waiting.
   local autoclear
   autoclear="$(losetup -l -O AUTOCLEAR "$loop" 2>/dev/null | tail -1 | tr -d ' ')"
   if [[ "$autoclear" == "1" ]]; then
-    log "$loop still attached but AUTOCLEAR=1 — kernel will auto-detach"
-    return 0
+    log "$loop AUTOCLEAR=1 — waiting for kernel to release (up to 30s)"
+    local j
+    for ((j = 0; j < 300; j++)); do
+      local _ac_verify_rc=0
+      losetup "$loop" >/dev/null 2>&1 || _ac_verify_rc=$?
+      if ((_ac_verify_rc == 1)); then
+        # Loop exists but not associated — detached
+        cleanup_log "DETACH OK loop: $loop (after AUTOCLEAR wait)"
+        return 0
+      elif ((_ac_verify_rc != 0)); then
+        # Query error — treat as failure
+        warn "strict_detach_loop: losetup AUTOCLEAR verification query failed for $loop (rc=$_ac_verify_rc)"
+        return 1
+      fi
+      sleep 0.1
+    done
+    warn "$loop still attached after 30s AUTOCLEAR wait"
+    losetup -l -O NAME,AUTOCLEAR,RO,BACK-FILE "$loop" >&2 2>/dev/null || true
+    return 1
   fi
 
   warn "$loop is still attached after losetup -d"
@@ -435,6 +577,7 @@ declare -a CLEANUP_LOOPS=()
 declare -a CLEANUP_LOOP_BACKINGS=()
 declare -a CLEANUP_LOOP_LABELS=()
 declare -a CLEANUP_TEMPDIRS=()
+declare -a CLEANUP_PERMITTED_ROOTS=()
 
 # Configurable workspace boundary
 CLEANUP_WORKSPACE_ROOT=""
@@ -565,10 +708,25 @@ cleanup_track_loop() {
     return 1
   fi
 
+  # Ledger: register the loop device
+  local _pf_ledger_loop_id="loop:$(realpath "$backing" 2>/dev/null || printf '%s' "$backing")"
+  if [[ -n "${_LEDGER_RUN_DIR:-}" ]]; then
+    _cleanup_ledger_prepare "$_pf_ledger_loop_id" "loop" "$backing" "" "${label:-$loopdev}" || {
+      warn "cleanup_track_loop: ledger prepare failed — continuing without ledger"
+    }
+  fi
+
   # Record the loop with verified identity
   CLEANUP_LOOPS+=("$loopdev")
   CLEANUP_LOOP_BACKINGS+=("$backing_id")
   CLEANUP_LOOP_LABELS+=("${label:-$loopdev}")
+
+  # Ledger: mark active
+  if [[ -n "${_LEDGER_RUN_DIR:-}" ]]; then
+    local _loop_identity
+    _loop_identity="$(stat -c '%d:%i' "$backing" 2>/dev/null)" || _loop_identity=""
+    _cleanup_ledger_activate "$_pf_ledger_loop_id" "$_loop_identity" || true
+  fi
 }
 
 # cleanup_track_tempdir DIRECTORY [LABEL]
@@ -635,6 +793,16 @@ cleanup_set_workspace() {
   CLEANUP_WORKSPACE_ROOT="$resolved"
 }
 
+# cleanup_permit_path PATH
+#   Add an exact path to the list of permitted roots for workspace validation.
+#   This allows specific paths outside $WORKDIR to be registered with cleanup.
+cleanup_permit_path() {
+  local path="${1:?cleanup_permit_path: missing path}"
+  local resolved
+  resolved="$(realpath -m -- "$path" 2>/dev/null)" || resolved="$path"
+  CLEANUP_PERMITTED_ROOTS+=("$resolved")
+}
+
 # _cleanup_validate_workspace PATH [PRE_NORMALIZED]
 #   Verify PATH is inside the approved workspace boundary.
 #   If PRE_NORMALIZED is non-empty, PATH is already a normalized canonical form.
@@ -686,8 +854,8 @@ _cleanup_validate_workspace() {
     return 1
   fi
 
-  if [[ "$path" == *".."* ]]; then
-    warn "_cleanup_validate_workspace: path contains '..': $path"
+  if [[ "$resolved" == *".."* ]]; then
+    warn "_cleanup_validate_workspace: path contains '..': $resolved"
     return 1
   fi
 
@@ -695,6 +863,15 @@ _cleanup_validate_workspace() {
   if [[ "$resolved" == "$CLEANUP_WORKSPACE_ROOT" ]] || [[ "$resolved" == "${ws}"* ]]; then
     return 0
   fi
+
+  # Check permitted roots (e.g., output image path outside workspace)
+  local _permitted
+  for _permitted in "${CLEANUP_PERMITTED_ROOTS[@]:-}"; do
+    [[ -n "$_permitted" ]] || continue
+    if [[ "$resolved" == "$_permitted" ]]; then
+      return 0
+    fi
+  done
 
   warn "_cleanup_validate_workspace: $path is outside workspace $CLEANUP_WORKSPACE_ROOT"
   return 1
@@ -856,6 +1033,68 @@ _cleanup_prune_outside_workspace_mounts() {
   return 0
 }
 
+# _cleanup_workspace_holders MOUNT_PATH
+#   Identify processes that have a filesystem relationship with the workspace,
+#   not merely using the same underlying filesystem (e.g., devtmpfs).
+#   Prints PIDs whose root, cwd, executable, or open files are beneath
+#   CLEANUP_WORKSPACE_ROOT.
+#   Returns 0 if any workspace-specific holders found, 1 if none.
+_cleanup_workspace_holders() {
+  local mount_path="${1:?_cleanup_workspace_holders: missing mount path}"
+  local workspace="${CLEANUP_WORKSPACE_ROOT:-}"
+
+  [[ -n "$workspace" ]] || return 1
+
+  # Get PIDs from fuser (suppress fuser's own stderr output)
+  local _pids
+  _pids="$(fuser "$mount_path" 2>/dev/null || true)"
+  _pids="$(echo "$_pids" | tr -s ' ' '\n' | grep -v '^$')"  # One PID per line
+  [[ -n "$_pids" ]] || return 1
+
+  local found=0
+  local pid
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+
+    # Check if this PID's root, cwd, or exe is beneath the workspace
+    local _root _cwd _exe
+    _root="$(readlink "/proc/$pid/root" 2>/dev/null)" || _root=""
+    _cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || _cwd=""
+    _exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || _exe=""
+
+    local _is_workspace=0
+    for _path in "$_root" "$_cwd" "$_exe"; do
+      [[ -n "$_path" ]] || continue
+      if [[ "$_path" == "$workspace" || "$_path" == "$workspace"/* ]]; then
+        _is_workspace=1
+        break
+      fi
+    done
+
+    # Also check open files (fd symlinks) for workspace paths
+    if [[ $_is_workspace -eq 0 && -d "/proc/$pid/fd" ]]; then
+      local _fd_link
+      for _fd_link in /proc/$pid/fd/*; do
+        _fd_link="$(readlink "$_fd_link" 2>/dev/null)" || continue
+        if [[ "$_fd_link" == "$workspace" || "$_fd_link" == "$workspace"/* ]]; then
+          _is_workspace=1
+          break
+        fi
+      done
+    fi
+
+    if [[ $_is_workspace -eq 1 ]]; then
+      # Get process info for logging
+      local _cmdline
+      _cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" || _cmdline=""
+      printf '%s\n' "$pid${_cmdline:+ ($_cmdline)}"
+      found=1
+    fi
+  done <<< "$_pids"
+
+  return $(( 1 - found ))
+}
+
 # _cleanup_assert_no_mounts_under DIRECTORY
 #   Check that no mounts exist at or below DIRECTORY.
 #   Returns 0 if clean, 1 if mounts found.
@@ -905,6 +1144,244 @@ _cleanup_assert_no_mounts_under() {
   return 0
 }
 
+# cleanup_kill_gpg_agent GNUPGHOME [CHROOT_ROOT]
+#   Targeted shutdown of a gpg-agent instance owned by this workspace.
+#   Accepts the GNUPGHOME directory path (host perspective).
+#   Optionally accepts the chroot root path so gpgconf/gpg-connect-agent
+#   can be run inside the chroot where the agent actually lives.
+#   Returns 0 if agent is dead or was never running, 1 if it could not be stopped.
+cleanup_kill_gpg_agent() {
+  local gnupghome="${1:?cleanup_kill_gpg_agent: missing GNUPGHOME}"
+  local chroot_root="${2:-}"  # optional chroot root for running gpgconf inside chroot
+
+  [[ -d "$gnupghome" ]] || return 0
+
+  # Request graceful shutdown
+  local kill_rc=0
+  if [[ -n "$chroot_root" && -d "$chroot_root" ]]; then
+    chroot "$chroot_root" gpgconf --homedir /etc/pacman.d/gnupg --kill gpg-agent 2>/dev/null || kill_rc=$?
+  else
+    gpgconf --homedir "$gnupghome" --kill gpg-agent 2>/dev/null || kill_rc=$?
+  fi
+  log "gpg-agent shutdown: gpgconf --kill rc=$kill_rc for $gnupghome"
+
+  if [[ $kill_rc -ne 0 ]]; then
+    # gpgconf failed — agent may already be dead
+    if ! _gpg_agent_alive "$gnupghome" "$chroot_root"; then
+      return 0
+    fi
+  fi
+
+  # Wait for graceful exit (up to 5 seconds)
+  local waited=0
+  while (( waited < 50 )); do
+    if ! _gpg_agent_alive "$gnupghome" "$chroot_root"; then
+      log "gpg-agent shutdown: agent exited after ${waited}00ms"
+      return 0
+    fi
+    sleep 0.1
+    ((waited++)) || true
+  done
+
+  # Agent still alive — find its PID and verify ownership before SIGKILL
+  local pid
+  pid="$(_gpg_agent_pid "$gnupghome" "$chroot_root")"
+  if [[ -z "$pid" ]]; then
+    # Can't find PID — agent may have exited between check and now
+    return 0
+  fi
+
+  # Capture process start time for identity verification
+  local _pid_start
+  _pid_start="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)" || _pid_start=""
+
+  # Verify this PID belongs to our workspace (not a host gpg-agent)
+  local pid_root
+  pid_root="$(readlink "/proc/$pid/root" 2>/dev/null)" || pid_root=""
+  if [[ -n "${CLEANUP_WORKSPACE_ROOT:-}" && -n "$pid_root" ]]; then
+    case "$pid_root" in
+      "$CLEANUP_WORKSPACE_ROOT") ;; # OK — exact match
+      "$CLEANUP_WORKSPACE_ROOT"/*) ;; # OK — inside workspace
+      *)
+        warn "gpg-agent shutdown: PID $pid root=$pid_root is outside workspace — not killing"
+        return 1
+        ;;
+    esac
+  fi
+
+  # Revalidate PID identity before force kill
+  local _recheck_start
+  _recheck_start="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)" || _recheck_start=""
+  if [[ -n "$_pid_start" && "$_recheck_start" != "$_pid_start" ]]; then
+    log "gpg-agent shutdown: PID $pid recycled — not killing"
+    return 0
+  fi
+
+  # Escalate to SIGKILL
+  warn "gpg-agent shutdown: SIGKILL PID $pid after 5s timeout"
+  kill -9 "$pid" 2>/dev/null || true
+
+  # Verify dead
+  sleep 0.2
+  if kill -0 "$pid" 2>/dev/null; then
+    warn "gpg-agent shutdown: PID $pid survived SIGKILL"
+    return 1
+  fi
+
+  # Final verification: rescan for any remaining workspace-owned gpg-agent PIDs
+  if [[ -n "${CLEANUP_WORKSPACE_ROOT:-}" ]]; then
+    local _remaining_agents
+    _remaining_agents="$(pgrep -x gpg-agent 2>/dev/null || true)"
+    local _pid
+    for _pid in $_remaining_agents; do
+      local _pid_root
+      _pid_root="$(readlink "/proc/$_pid/root" 2>/dev/null)" || _pid_root=""
+      if [[ "$_pid_root" == "$CLEANUP_WORKSPACE_ROOT" || "$_pid_root" == "$CLEANUP_WORKSPACE_ROOT"/* ]]; then
+        warn "gpg-agent shutdown: workspace-owned agent PID $_pid still running after SIGKILL"
+        return 1
+      fi
+    done
+  fi
+
+  log "gpg-agent shutdown: verified no workspace-owned agents remaining"
+  return 0
+}
+
+# _gpg_agent_alive GNUPGHOME [CHROOT_ROOT]
+#   Check if a gpg-agent is running for the given GNUPGHOME.
+#   Returns 0 if alive, 1 if not.
+_gpg_agent_alive() {
+  local gnupghome="$1"
+  local chroot_root="${2:-}"
+  local pid
+  pid="$(_gpg_agent_pid "$gnupghome" "$chroot_root")"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# _gpg_agent_pid GNUPGHOME [CHROOT_ROOT]
+#   Read the gpg-agent PID for the given GNUPGHOME.
+#   If chroot_root is provided, queries gpg-connect-agent inside the chroot.
+#   Prints the PID or empty string.
+_gpg_agent_pid() {
+  local gnupghome="$1"
+  local chroot_root="${2:-}"
+  local socket="$gnupghome/S.gpg-agent"
+  [[ -S "$socket" ]] || return 0
+
+  # Use gpg-connect-agent to query the running agent's PID
+  local pid
+  if [[ -n "$chroot_root" && -d "$chroot_root" ]]; then
+    pid="$(chroot "$chroot_root" gpg-connect-agent --homedir /etc/pacman.d/gnupg \
+      --raw 'GETINFO pid' /bye 2>/dev/null \
+      | grep '^D ' | sed 's/^D //')" || pid=""
+  else
+    pid="$(GPG_AGENT_INFO="" gpg-connect-agent --homedir "$gnupghome" \
+      --raw 'GETINFO pid' /bye 2>/dev/null \
+      | grep '^D ' | sed 's/^D //')" || pid=""
+  fi
+  # Validate it's a number
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$pid"
+  fi
+}
+
+# _cleanup_diagnose_workspace_processes [PID...]
+#   Diagnostic: print detailed information about workspace-owned processes.
+#   If no PIDs are given, scans for all processes whose root is inside
+#   CLEANUP_WORKSPACE_ROOT.
+#   Output is purely diagnostic — no signals are sent.
+#   Returns 0 always.
+_cleanup_diagnose_workspace_processes() {
+  local -a pids=("$@")
+
+  # If no PIDs given, discover workspace-owned processes
+  if [[ ${#pids[@]} -eq 0 && -n "${CLEANUP_WORKSPACE_ROOT:-}" ]]; then
+    local _candidate
+    for _candidate in gpg-agent pacman; do
+      local _found
+      _found="$(pgrep -x "$_candidate" 2>/dev/null || true)"
+      local _pid
+      for _pid in $_found; do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        local _root
+        _root="$(readlink "/proc/$_pid/root" 2>/dev/null)" || _root=""
+        case "$_root" in
+          "$CLEANUP_WORKSPACE_ROOT"|"$CLEANUP_WORKSPACE_ROOT"/*)
+            pids+=("$_pid")
+            ;;
+        esac
+      done
+    done
+  fi
+
+  if [[ ${#pids[@]} -eq 0 ]]; then
+    log "No workspace-owned processes found"
+    return 0
+  fi
+
+  local _our_mnt_ns
+  _our_mnt_ns="$(readlink /proc/self/ns/mnt 2>/dev/null)" || _our_mnt_ns=""
+
+  local pid
+  for pid in "${pids[@]}"; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+
+    if [[ ! -d "/proc/$pid" ]]; then
+      warn "PID $pid: no longer exists"
+      continue
+    fi
+
+    warn "PID $pid"
+
+    # Process identity
+    local _start
+    _start="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)" || _start=""
+    warn "  start:     ${_start:-unknown}"
+
+    local _ns
+    _ns="$(readlink "/proc/$pid/ns/mnt" 2>/dev/null)" || _ns=""
+    warn "  namespace: ${_ns:-unknown}"
+    if [[ -n "$_our_mnt_ns" && -n "$_ns" && "$_ns" != "$_our_mnt_ns" ]]; then
+      warn "  (DIFFERENT from current namespace $_our_mnt_ns)"
+    fi
+
+    local _root _cwd _exe _cmd
+    _root="$(readlink "/proc/$pid/root" 2>/dev/null)" || _root=""
+    _cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || _cwd=""
+    _exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || _exe=""
+    _cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" || _cmd=""
+
+    warn "  root:      ${_root:-unknown}"
+    warn "  cwd:       ${_cwd:-unknown}"
+    warn "  exe:       ${_exe:-unknown}"
+    warn "  command:   ${_cmd:-unknown}"
+
+    # File descriptors into workspace
+    if [[ -d "/proc/$pid/fd" && -n "${CLEANUP_WORKSPACE_ROOT:-}" ]]; then
+      local _ws_fds=""
+      local _fd _target
+      for _fd in /proc/"$pid"/fd/*; do
+        _target="$(readlink "$_fd" 2>/dev/null)" || continue
+        case "$_target" in
+          "$CLEANUP_WORKSPACE_ROOT"|"$CLEANUP_WORKSPACE_ROOT"/*)
+            _ws_fds+="$_fd -> $_target"$'\n'
+            ;;
+        esac
+      done
+      if [[ -n "$_ws_fds" ]]; then
+        warn "  workspace descriptors:"
+        while IFS= read -r _line; do
+          [[ -n "$_line" ]] && warn "    $_line"
+        done <<<"$_ws_fds"
+      else
+        warn "  workspace descriptors: none"
+      fi
+    fi
+  done
+
+  return 0
+}
+
 # cleanup_unmount_registered
 #   Unmount all tracked mounts in reverse registration order.
 #   Returns 0 if all unmounted, 1 if any remain.
@@ -931,45 +1408,14 @@ cleanup_unmount_registered() {
     # "outside workspace." By checking existence first, we correctly distinguish
     # "already unmounted" from "outside workspace."
     if ! mountpoint -q "$m" 2>/dev/null; then
-      # Path may not exist anymore (parent unmounted) or mount was already released.
-      # Check kernel mountinfo to distinguish "already unmounted" from "target unavailable".
-      local _mountinfo_ok=0
-      local _mount_still_tracked=0
-      if [[ -n "$expected_id" ]]; then
-        local _mountinfo_line
-        # Look for the exact mount ID in kernel mountinfo and verify the target matches
-        if _mountinfo_line="$(findmnt -rno ID,TARGET --kernel 2>/dev/null | grep -w "$expected_id")"; then
-          _mountinfo_ok=1
-          # Extract the target from the mountinfo line and compare with the stored normalized path
-          local _info_target
-          _info_target="$(echo "$_mountinfo_line" | awk '{print $2}')"
-          # Use the normalized path for comparison (the canonical form we registered)
-          local _compare_target="${CLEANUP_MOUNT_NORMALIZED[$i]:-$m}"
-          if [[ "$_info_target" == "$_compare_target" ]]; then
-            _mount_still_tracked=1
-          fi
-        fi
-      fi
-
-      if ((_mount_still_tracked)); then
-        # Mount ID still at registered target but path inaccessible
-        warn "cleanup_unmount_registered: $m target unavailable (mount ID $expected_id still in kernel but path inaccessible)"
-        cleanup_log "SKIP (target unavailable): $m (label=${label:-unknown})"
-        rc=1
-        continue
-      fi
-
-      if ((_mountinfo_ok)); then
-        # Mount ID found but at a different target — identity/target changed
-        warn "cleanup_unmount_registered: $m identity/target changed (mount ID $expected_id moved to $_info_target) — preserving"
-        cleanup_log "SKIP (identity changed): $m (ID=$expected_id, current target=$_info_target, label=${label:-unknown})"
-        rc=1
-        continue
-      fi
-
-      # Mount ID not found in kernel mount table — already unmounted
+      # Target is not a mountpoint — the mount is already gone.
+      # Do NOT search globally for the old mount ID; kernel IDs are reused.
       debug "cleanup_unmount_registered: $m already unmounted"
       cleanup_log "SKIP (already unmounted): $m (label=${label:-unknown})"
+      # Mark ledger released if applicable
+      if [[ -n "${_LEDGER_RUN_DIR:-}" ]]; then
+        _cleanup_ledger_mark_released "mount:$m" 2>/dev/null || true
+      fi
       continue
     fi
 
@@ -1805,11 +2251,18 @@ cleanup_mount() {
   # Attempt mount
   log "  Mounting $label: $target ${_mount_args[*]:-}"
   cleanup_log "MOUNT $label: $target ${_mount_args[*]:-}"
-  if ! mount "$@" "$target" 2>/dev/null; then
+  local _mount_stderr=""
+  _mount_stderr="$(mount "$@" "$target" 2>&1)" || {
     warn "cleanup_mount: mount failed for $target"
+    if [[ -n "${_mount_stderr}" ]]; then
+      warn "$_mount_stderr"
+      if [[ -n "${KERNEL_LOG:-}" ]]; then
+        printf '[%s] mount %s: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$target" "$_mount_stderr" >>"$KERNEL_LOG" 2>/dev/null || true
+      fi
+    fi
     cleanup_log "MOUNT FAILED $label: $target ${_mount_args[*]:-}"
     return 1
-  fi
+  }
 
   # Register for cleanup
   if ! cleanup_track_mount "$target" "$label"; then
@@ -1843,6 +2296,9 @@ cleanup_mount() {
   fi
 
   cleanup_log "MOUNT OK $label: $target ${_mount_args[*]:-}"
+  if [[ -n "${KERNEL_LOG:-}" ]]; then
+    printf '[%s] mount OK %s: %s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$label" "$target" "${_mount_args[*]:-}" >>"$KERNEL_LOG" 2>/dev/null || true
+  fi
   debug "cleanup_mount: mounted and registered $target"
   return 0
 }
@@ -1952,7 +2408,7 @@ cleanup_attach_loop() {
 
   # Check for existing loop on this backing file
   local _pf_existing=""
-  _pf_existing="$(loops_for_file "$_pf_backing" 2>/dev/null)"
+  _pf_existing="$(loops_for_file "$_pf_backing")"
   local _pf_loops_rc=$?
 
   if [[ -n "$_pf_existing" ]]; then
@@ -2566,6 +3022,7 @@ cleanup_force_teardown() {
   # Phase 2: Lazy-unmount all tracked mounts
   local i
   local _n=0
+  local _unmount_failures=0
   [[ ${CLEANUP_MOUNTS[0]+_} ]] && _n=${#CLEANUP_MOUNTS[@]}
   for ((i = _n - 1; i >= 0; i--)); do
     local m="${CLEANUP_MOUNTS[$i]}"
@@ -2583,11 +3040,44 @@ cleanup_force_teardown() {
     if mountpoint -q "$m" 2>/dev/null; then
       warn "cleanup_force_teardown: lazy-unmounting $m (propagation=${_PROPAGATION_TYPE:-n/a})"
       cleanup_log "FORCE_TEARDOWN UNMOUNT $m (propagation=${_PROPAGATION_TYPE:-n/a})"
-      umount -Rl "$m" 2>/dev/null || true
+      local _umount_rc=0
+      if ! umount -Rl "$m" 2>/dev/null; then
+        _umount_rc=1
+        warn "cleanup_force_teardown: lazy-unmount FAILED for $m"
+        cleanup_log "FORCE_TEARDOWN UNMOUNT FAILED $m"
+        ((_unmount_failures++)) || true
+      fi
     fi
   done
+  if ((_unmount_failures > 0)); then
+    warn "cleanup_force_teardown: $_unmount_failures unmount(s) failed"
+  fi
 
   # Phase 3: Detach all tracked loops
+  # Only detach loops if no dependent mounts remain.
+  # findmnt -M requires workspace to be a mountpoint itself, which regular
+  # directories are not. Instead, query all kernel mounts and filter for
+  # those at or below workspace using a case pattern.
+  local _remaining_mounts
+  local _findmnt_rc=0
+  local _findmnt_raw
+  _findmnt_raw="$(findmnt -rno TARGET --kernel 2>/dev/null)" || _findmnt_rc=$?
+  if ((_findmnt_rc != 0)); then
+    warn "cleanup_force_teardown: findmnt query failed (rc=$_findmnt_rc) — cannot verify mount absence"
+    cleanup_log "FORCE_TEARDOWN ABORT loop detach (findmnt failed rc=$_findmnt_rc)"
+    return 1
+  fi
+  _remaining_mounts="$(echo "$_findmnt_raw" | while IFS= read -r _mnt; do
+      case "$_mnt" in
+        "$workspace"|"$workspace"/*) printf '%s\n' "$_mnt" ;;
+      esac
+    done)"
+
+  if [[ -n "$_remaining_mounts" ]]; then
+    warn "cleanup_force_teardown: dependent mounts still present — not detaching loops"
+    return 1
+  fi
+
   local _n2=0
   [[ ${CLEANUP_LOOPS[0]+_} ]] && _n2=${#CLEANUP_LOOPS[@]}
   for ((i = _n2 - 1; i >= 0; i--)); do
@@ -2595,7 +3085,10 @@ cleanup_force_teardown() {
     if losetup "$l" &>/dev/null; then
       warn "cleanup_force_teardown: detaching loop $l"
       sync 2>/dev/null || true
-      losetup -d "$l" 2>/dev/null || true
+      if ! strict_detach_loop "$l" 2>/dev/null; then
+        warn "cleanup_force_teardown: failed to detach loop $l"
+        cleanup_log "FORCE_TEARDOWN LOOP DETACH FAILED $l"
+      fi
     fi
   done
 
@@ -3431,15 +3924,19 @@ cleanup_recover() {
 
   local released=0 preserved=0
 
-  # Process each resource record
-  log "cleanup_recover: starting resource loop"
-  while IFS=$'\t' read -r res_id res_type _res_state locator_b64 identity_b64 _label_b64 _last_err _timestamp; do
-    [[ -n "$res_id" ]] || continue
+  # Process resource records in two passes: mounts first, then loops.
+  # This ensures mounts are unmounted before their backing loops are detached.
+
+  # Helper: process a single resource record (mount or loop).
+  # Returns 0 on success, sets released/preserved counters.
+  _cleanup_recover_one() {
+    local res_id="$1" res_type="$2" _res_state="$3" locator_b64="$4" identity_b64="$5"
+    [[ -n "$res_id" ]] || return 0
 
     # Skip resources already in a terminal state — nothing to recover
     if [[ "$_res_state" == "$_LEDGER_RES_RELEASED" ]]; then
       debug "cleanup_recover: $res_id already RELEASED — skipping"
-      continue
+      return 0
     fi
 
     local locator
@@ -3465,7 +3962,7 @@ cleanup_recover() {
       warn "cleanup_recover: protected mount path — preserving: $locator"
       _ledger_update_resource_error "$res_id" "$_LEDGER_RES_ACTIVE" "protected mount path" || true
       preserved=$((preserved + 1))
-      continue
+      return 0
     fi
 
     case "$res_type" in
@@ -3501,7 +3998,7 @@ cleanup_recover() {
                   warn "  current:  source=$_c_src fstype=$_c_fstype"
                   _ledger_update_resource_error "$res_id" "$_LEDGER_RES_ACTIVE" "identity mismatch: source=$_e_src→$_c_src fstype=$_e_fstype→$_c_fstype" || true
                   preserved=$((preserved + 1))
-                  continue
+                  return 0
                 fi
                 # Mount ID change with matching source+fstype → WARNING but proceed
                 if [[ "$_c_id" != "$_e_id" ]]; then
@@ -3517,7 +4014,7 @@ cleanup_recover() {
                 warn "cleanup_recover: cannot verify mount identity at $locator — preserving"
                 _ledger_update_resource_error "$res_id" "$_LEDGER_RES_ACTIVE" "identity_unverifiable" || true
                 preserved=$((preserved + 1))
-                continue
+                return 0
               fi
             else
               # Legacy identity (numeric-only mount ID) — use ID-only comparison
@@ -3527,7 +4024,7 @@ cleanup_recover() {
                 warn "cleanup_recover: mount identity changed at $locator ($expected_id → $_current_id_only)"
                 _ledger_update_resource_error "$res_id" "$_LEDGER_RES_ACTIVE" "identity changed: expected=$expected_id current=$_current_id_only" || true
                 preserved=$((preserved + 1))
-                continue
+                return 0
               fi
             fi
           fi
@@ -3563,7 +4060,7 @@ cleanup_recover() {
               warn "cleanup_recover: $locator backing changed — preserving"
               _ledger_update_resource_error "$res_id" "$_LEDGER_RES_ACTIVE" "backing changed: expected=$expected_id current=$current_backing" || true
               preserved=$((preserved + 1))
-              continue
+              return 0
             fi
           fi
           # Eligible for cleanup
@@ -3583,6 +4080,20 @@ cleanup_recover() {
         fi
         ;;
     esac
+  }
+
+  # Pass 1: unmount all mount-type resources first
+  log "cleanup_recover: pass 1 — processing mount resources"
+  while IFS=$'\t' read -r res_id res_type _res_state locator_b64 identity_b64 _label_b64 _last_err _timestamp; do
+    [[ "$res_type" == "mount" ]] || continue
+    _cleanup_recover_one "$res_id" "$res_type" "$_res_state" "$locator_b64" "$identity_b64"
+  done <"$resources_file"
+
+  # Pass 2: detach all loop-type resources after mounts are gone
+  log "cleanup_recover: pass 2 — processing loop resources"
+  while IFS=$'\t' read -r res_id res_type _res_state locator_b64 identity_b64 _label_b64 _last_err _timestamp; do
+    [[ "$res_type" == "loop" ]] || continue
+    _cleanup_recover_one "$res_id" "$res_type" "$_res_state" "$locator_b64" "$identity_b64"
   done <"$resources_file"
 
   # Restore previous _LEDGER_RUN_DIR

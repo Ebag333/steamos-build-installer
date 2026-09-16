@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# install-intel-gpu.sh — Install Intel GPU packages inside the chroot.
+# install-intel-gpu.sh — Verify Intel GPU packages inside the chroot.
+# Package installation is handled by BUILD_DEPS in recipe.conf.
 # Runs as INSTALL_CMD via the build-recipe framework.
 #
 set -euo pipefail
 
-# ── 1. Define packages ──────────────────────────────────────────────────
 PACKAGES=(
   intel-gmmlib
   intel-media-driver
@@ -13,37 +13,9 @@ PACKAGES=(
   lib32-vulkan-intel
 )
 
-echo "=== Intel GPU package install ==="
+echo "=== Intel GPU package verification ==="
 
-# ── 2. Separate already-installed from missing ───────────────────────────
-INSTALL_LIST=()
-ALREADY=()
-
-for pkg in "${PACKAGES[@]}"; do
-  if pacman -Q "$pkg" &>/dev/null; then
-    ALREADY+=("$pkg")
-  else
-    INSTALL_LIST+=("$pkg")
-  fi
-done
-
-if [[ ${#ALREADY[@]} -gt 0 ]]; then
-  echo "  Already installed: ${ALREADY[*]}"
-fi
-
-# ── 3. Install missing packages ─────────────────────────────────────────
-if [[ ${#INSTALL_LIST[@]} -gt 0 ]]; then
-  echo "  Installing: ${INSTALL_LIST[*]}"
-  # DB sync is handled by the pipeline before this script runs.
-  if ! pacman -S --noconfirm --needed "${INSTALL_LIST[@]}"; then
-    echo "ERROR: Failed to install Intel GPU packages" >&2
-    exit 1
-  fi
-else
-  echo "  All Intel GPU packages already present"
-fi
-
-# ── 4. Verify installation ──────────────────────────────────────────────
+# ── Verify installation ─────────────────────────────────────────────────
 echo "  Verifying installation"
 ALL_OK=1
 for pkg in "${PACKAGES[@]}"; do
@@ -61,4 +33,4 @@ if [[ "$ALL_OK" -eq 0 ]]; then
   exit 1
 fi
 
-echo "=== Intel GPU packages installed successfully ==="
+echo "=== Intel GPU packages verified successfully ==="

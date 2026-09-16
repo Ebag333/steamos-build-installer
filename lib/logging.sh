@@ -97,32 +97,27 @@ declare -ga _LOG_REDACT_PATTERNS=(
 #   form feed, backspace, and generic control chars (\u00XX).
 _log_json_escape() {
   local s="$1"
-  local out=""
-  local i c code
-
+  # Escape backslashes first (before other escapes add more backslashes)
+  s="${s//\\/\\\\}"
+  # Escape double quotes
+  s="${s//\"/\\\"}"
+  # Escape named control characters
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\f'/\\f}"
+  s="${s//$'\b'/\\b}"
+  # Escape remaining control characters (U+0000..U+001F)
+  local i c code out=""
   for ((i = 0; i < ${#s}; i++)); do
     c="${s:i:1}"
-    # shellcheck disable=SC1003  # \\ inside single quotes is not an escape
-    case "$c" in
-      '\\') out+='\\' ;;
-      '"') out+='\"' ;;
-      $'\n') out+='\n' ;;
-      $'\t') out+='\t' ;;
-      $'\r') out+='\r' ;;
-      $'\f') out+='\f' ;;
-      $'\b') out+='\b' ;;
-      *)
-        # Check for control characters (U+0000..U+001F)
-        printf -v code '%d' "'$c" 2>/dev/null || code=0
-        if ((code >= 0 && code < 32)); then
-          out+="$(printf '\\u%04x' "$code")"
-        else
-          out+="$c"
-        fi
-        ;;
-    esac
+    printf -v code '%d' "'$c" 2>/dev/null || code=0
+    if ((code >= 0 && code < 32)); then
+      out+="$(printf '\\u%04x' "$code")"
+    else
+      out+="$c"
+    fi
   done
-
   printf '%s' "$out"
 }
 

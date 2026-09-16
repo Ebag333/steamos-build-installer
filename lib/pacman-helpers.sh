@@ -361,7 +361,7 @@ pacman_retry() {
       _ok=1
       break
     fi
-    warn "${FUNCNAME[1]}: attempt $_attempt/3 failed"
+    warn "${FUNCNAME[1]}: attempt $_attempt/3 failed (cmd: $*)"
     ((_attempt < 3)) && sleep "$((_attempt * 2))"
   done
   ((_ok)) || return 1
@@ -385,7 +385,7 @@ pacman_retry() {
 # Returns: 0 on success, 1 on failure
 # ---------------------------------------------------------------------------
 pacman_install() {
-  local config="" context="auto" noconfirm="--noconfirm" needed="--needed" cachedir="" yes_prefix="" freeze_installed=0
+  local config="" context="auto" noconfirm="--noconfirm" needed="--needed" cachedir="" yes_prefix="" freeze_installed=0 root=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -400,6 +400,11 @@ pacman_install() {
       --host)
         context="host"
         shift
+        ;;
+      --root)
+        context="root"
+        root="$2"
+        shift 2
         ;;
       --noconfirm)
         noconfirm="--noconfirm"
@@ -459,8 +464,16 @@ pacman_install() {
   local _install_stdout _install_stderr _install_rc=0
   _install_stdout="$(mktemp /tmp/pacman-install-stdout.XXXXXX)"
   _install_stderr="$(mktemp /tmp/pacman-install-stderr.XXXXXX)"
-  pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
-    >"$_install_stdout" 2>"$_install_stderr" || _install_rc=$?
+  case "$context" in
+    root)
+      pacman_retry _pacman_run_in_root "$root" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
+        >"$_install_stdout" 2>"$_install_stderr" || _install_rc=$?
+      ;;
+    *)
+      pacman_retry _pacman_exec "$context" "${yes_prefix}pacman $config_args -S $noconfirm $needed $cachedir $freeze_args $_safe_pkgs" \
+        >"$_install_stdout" 2>"$_install_stderr" || _install_rc=$?
+      ;;
+  esac
   # Write raw output for failure diagnostics
   if [[ -n "$_raw_log" ]]; then
     cat "$_install_stdout" >>"$_raw_log" 2>/dev/null || true
@@ -931,13 +944,32 @@ _pacman_check_single_pkg_file_conflicts() {
   if [[ -n "$chroot_dir" && -d "$chroot_dir" ]]; then
     local _safe_pkg
     _safe_pkg="$(printf '%q' "$pkg")"
+    local _fl_stderr_mr="$WORKDIR/preflight-fl-${pkg//\//-}-stderr-mr.txt"
+    local _cmd_rc=0
+    # shellcheck disable=SC2086 # _safe_pkg is intentionally word-split in bash -c
     pacman_retry _pacman_run_in_root "$chroot_dir" \
-      "pacman $config_args -Fl --machinereadable $_safe_pkg 2>/dev/null" \
-      >"$planned_raw_file" || true
+      "pacman $config_args -Fl --machinereadable $_safe_pkg" \
+      >"$planned_raw_file" 2>"$_fl_stderr_mr" || _cmd_rc=$?
+    if [[ $_cmd_rc -ne 0 ]]; then
+      warn "_pacman_check_single_pkg_file_conflicts: pacman -Fl --machinereadable failed for $pkg (rc=$_cmd_rc)"
+      if [[ -s "$_fl_stderr_mr" ]]; then
+        while IFS= read -r _line; do warn "  $_line"; done <"$_fl_stderr_mr"
+      fi
+      >"$planned_raw_file"  # Don't use partial output from a failed command
+    fi
   else
     # shellcheck disable=SC2086 # config_args is intentionally word-split
-    pacman_retry pacman $config_args -Fl --machinereadable "$pkg" 2>/dev/null \
-      >"$planned_raw_file" || true
+    local _fl_stderr_mr="$WORKDIR/preflight-fl-${pkg//\//-}-stderr-mr.txt"
+    local _cmd_rc=0
+    pacman_retry pacman $config_args -Fl --machinereadable "$pkg" \
+      >"$planned_raw_file" 2>"$_fl_stderr_mr" || _cmd_rc=$?
+    if [[ $_cmd_rc -ne 0 ]]; then
+      warn "_pacman_check_single_pkg_file_conflicts: pacman -Fl --machinereadable failed for $pkg (rc=$_cmd_rc)"
+      if [[ -s "$_fl_stderr_mr" ]]; then
+        while IFS= read -r _line; do warn "  $_line"; done <"$_fl_stderr_mr"
+      fi
+      >"$planned_raw_file"  # Don't use partial output from a failed command
+    fi
   fi
 
   # Normalize to "pkg\t/path" format (tab-delimited to handle paths with spaces)
@@ -948,22 +980,44 @@ _pacman_check_single_pkg_file_conflicts() {
     # Fallback to non-machinereadable
     local planned_fallback_file="$WORKDIR/preflight-fl-fallback-${pkg//\//-}.txt"
     if [[ -n "$chroot_dir" && -d "$chroot_dir" ]]; then
+      local _fl_stderr_hr="$WORKDIR/preflight-fl-${pkg//\//-}-stderr-hr.txt"
+      local _cmd_rc=0
       pacman_retry _pacman_run_in_root "$chroot_dir" \
-        "pacman $config_args -Fl $_safe_pkg 2>/dev/null" \
-        >"$planned_fallback_file" || true
+        "pacman $config_args -Fl $_safe_pkg" \
+        >"$planned_fallback_file" 2>"$_fl_stderr_hr" || _cmd_rc=$?
+      if [[ $_cmd_rc -ne 0 ]]; then
+        warn "_pacman_check_single_pkg_file_conflicts: pacman -Fl fallback failed for $pkg (rc=$_cmd_rc)"
+        if [[ -s "$_fl_stderr_hr" ]]; then
+          while IFS= read -r _line; do warn "  $_line"; done <"$_fl_stderr_hr"
+        fi
+        >"$planned_fallback_file"  # Don't use partial output from a failed command
+      fi
     else
       # shellcheck disable=SC2086 # config_args is intentionally word-split
-      pacman_retry pacman $config_args -Fl "$pkg" 2>/dev/null \
-        >"$planned_fallback_file" || true
+      local _fl_stderr_hr="$WORKDIR/preflight-fl-${pkg//\//-}-stderr-hr.txt"
+      local _cmd_rc=0
+      pacman_retry pacman $config_args -Fl "$pkg" \
+        >"$planned_fallback_file" 2>"$_fl_stderr_hr" || _cmd_rc=$?
+      if [[ $_cmd_rc -ne 0 ]]; then
+        warn "_pacman_check_single_pkg_file_conflicts: pacman -Fl fallback failed for $pkg (rc=$_cmd_rc)"
+        if [[ -s "$_fl_stderr_hr" ]]; then
+          while IFS= read -r _line; do warn "  $_line"; done <"$_fl_stderr_hr"
+        fi
+        >"$planned_fallback_file"  # Don't use partial output from a failed command
+      fi
     fi
     if [[ -s "$planned_fallback_file" ]]; then
       planned_files=$(awk '{sub(/ /, "\t"); print}' "$planned_fallback_file")
     else
+      debug "_pacman_check_single_pkg_file_conflicts: no file list for $pkg, cannot verify conflicts"
       return 2 # Could not get file list
     fi
   fi
 
-  [[ -n "$planned_files" ]] || return 2
+  if [[ -z "$planned_files" ]]; then
+    debug "_pacman_check_single_pkg_file_conflicts: empty file list for $pkg, cannot verify conflicts"
+    return 2
+  fi
 
   # Cross-reference against installed files snapshot.
   # For each file the new package would install, check whether it is already
@@ -1147,7 +1201,7 @@ _pacman_preflight_check() {
   # Split into clean package list vs error lines.
   local dry_packages="$WORKDIR/pacman-dry-run-packages.txt"
   local dry_errors="$WORKDIR/pacman-dry-run-errors.txt"
-  grep -v '^\(::\|error:\)' "$dry_output" >"$dry_packages" || true
+  grep -E '^[a-zA-Z0-9][a-zA-Z0-9@._+-]*\|[a-zA-Z0-9@._+-]+$' "$dry_output" >"$dry_packages" || true
   grep '^\(::\|error:\)' "$dry_output" >"$dry_errors" || true
 
   local planned_count
@@ -1251,17 +1305,34 @@ _pacman_preflight_check() {
     # Normalize to "pkg /path" to match -Ql output.
     local _safe_pkg_list=""
     local _pl_pkg
-    # Convert repo|pkg format to repo/pkg for pacman -Fl queries (shell-escaped)
+    # Extract bare package name (strip repo prefix) for -Fl query
     while IFS= read -r _pl_pkg; do
-      _safe_pkg_list+=" $(printf '%q' "${_pl_pkg//|//}")"
+      _safe_pkg_list+=" $(printf '%q' "${_pl_pkg#*|}")"
     done <"$dry_packages"
     local planned_raw="$WORKDIR/preflight-planned-raw.txt"
     local fl_rc=0
+    local fl_stderr_mr="$WORKDIR/preflight-fl-stderr-mr.txt"
+    local fl_stderr_hr="$WORKDIR/preflight-fl-stderr-hr.txt"
     local machine_readable=1
+    local _fl_pkg_count
+    _fl_pkg_count=$(wc -l < "$dry_packages")
+    debug "Pre-flight: querying file lists for ${_fl_pkg_count} planned packages"
+    # Sync file databases before querying file lists
+    log "Pre-flight: syncing file databases"
+    local _fy_rc=0
+    _pacman_run_in_root "$chroot_dir" \
+      "pacman $config_args -Fy --noconfirm" \
+      >/dev/null 2>&1 || _fy_rc=$?
+    if ((_fy_rc != 0)); then
+      warn "Pre-flight: pacman -Fy failed (rc=$_fy_rc) — cannot query file lists"
+      warn "Pre-flight: cannot verify file conflicts — aborting for safety"
+      exec 1>&7 7>&-
+      return 1
+    fi
     # shellcheck disable=SC2086 # _safe_pkg_list is intentionally word-split
     pacman_retry _pacman_run_in_root "$chroot_dir" \
-      "pacman $config_args -Fl --machinereadable $_safe_pkg_list 2>/dev/null" \
-      >"$planned_raw" 2>/dev/null || fl_rc=$?
+      "pacman $config_args -Fl --machinereadable $_safe_pkg_list" \
+      >"$planned_raw" 2>"$fl_stderr_mr" || fl_rc=$?
 
     if ((fl_rc != 0)) || [[ ! -s "$planned_raw" ]]; then
       machine_readable=0
@@ -1269,13 +1340,28 @@ _pacman_preflight_check() {
       # Fallback: regular -Fl output: "pkg path" → "pkg /path"
       # shellcheck disable=SC2086 # _safe_pkg_list is intentionally word-split
       pacman_retry _pacman_run_in_root "$chroot_dir" \
-        "pacman $config_args -Fl $_safe_pkg_list 2>/dev/null" \
-        >"$planned_raw" 2>/dev/null || fl_rc=$?
+        "pacman $config_args -Fl $_safe_pkg_list" \
+        >"$planned_raw" 2>"$fl_stderr_hr" || fl_rc=$?
     fi
 
     # If both -Fl attempts failed, fail closed
     if ((fl_rc != 0)); then
-      warn "Pre-flight: failed to query package file lists (rc=$fl_rc)"
+      warn "Pre-flight: failed to query package file lists (rc=$fl_rc, ${_fl_pkg_count} packages)"
+      # Always log the exact commands that were attempted
+      warn "Pre-flight: attempted command: pacman $config_args -Fl --machinereadable $_safe_pkg_list"
+      if [[ -s "$fl_stderr_mr" ]]; then
+        warn "Pre-flight: stderr (--machinereadable):"
+        while IFS= read -r _line; do
+          warn "  $_line"
+        done <"$fl_stderr_mr"
+      fi
+      warn "Pre-flight: attempted command: pacman $config_args -Fl $_safe_pkg_list"
+      if [[ -s "$fl_stderr_hr" ]]; then
+        warn "Pre-flight: stderr (plain -Fl):"
+        while IFS= read -r _line; do
+          warn "  $_line"
+        done <"$fl_stderr_hr"
+      fi
       warn "Pre-flight: cannot verify file conflicts — aborting for safety"
       exec 1>&7 7>&-
       return 1
@@ -1292,13 +1378,21 @@ _pacman_preflight_check() {
     # All currently installed files and their owners.
     # -Ql format: "pkg /path" — normalize to tab-delimited "pkg\t/path".
     local ql_rc=0
+    local ql_stderr="$WORKDIR/preflight-ql-stderr.txt"
     _pacman_run_in_root "$chroot_dir" \
-      "pacman $config_args -Ql 2>/dev/null" \
-      2>/dev/null | awk '{sub(/ /, "\t"); print}' >"$installed_files" || ql_rc=${PIPESTATUS[0]}
+      "pacman $config_args -Ql" \
+      2>"$ql_stderr" | awk '{sub(/ /, "\t"); print}' >"$installed_files" || ql_rc=${PIPESTATUS[0]}
 
     # If -Ql failed, fail closed
     if ((ql_rc != 0)); then
       warn "Pre-flight: failed to query installed file lists (rc=$ql_rc)"
+      warn "Pre-flight: command: pacman $config_args -Ql"
+      if [[ -s "$ql_stderr" ]]; then
+        warn "Pre-flight: pacman -Ql stderr:"
+        while IFS= read -r _line; do
+          warn "  $_line"
+        done <"$ql_stderr"
+      fi
       warn "Pre-flight: cannot verify file conflicts — aborting for safety"
       exec 1>&7 7>&-
       return 1
@@ -1853,7 +1947,10 @@ pacman_preflight_with_fallback() {
           ((++conflict_skipped)) || true
           continue
         elif ((_fc_rc == 2)); then
-          debug "Pre-flight: $pkg — could not verify file conflicts (proceeding)"
+          warn "Pre-flight: $pkg — could not verify file conflicts, skipping"
+          skipped_packages+=("$pkg")
+          ((++conflict_skipped)) || true
+          continue
         fi
       fi
 
@@ -2040,7 +2137,7 @@ pacman_upgrade_preflight() {
       local choice=""
       read -rp "Choice [c/s]: " choice </dev/tty || true
       if [[ "$choice" != "s" && "$choice" != "S" ]]; then
-        die "$context_label cancelled by user"
+        return 1
       fi
       warn "Pre-flight: user chose to skip $context_label"
     else
@@ -2055,7 +2152,7 @@ pacman_upgrade_preflight() {
     log_error pacman file-conflict "$context_label blocked by unresolvable file conflicts."
     log_error pacman file-conflict "Check the build log for details."
   fi
-  die "$context_label blocked by unresolvable pre-flight conflicts"
+  return 1
 }
 
 # ---------------------------------------------------------------------------

@@ -222,6 +222,11 @@ die() {
 
   # Emit pipeline summary before reporting failure (if a pipeline is active)
   if [[ ${_PIPELINE_ORDER+x} && ${#_PIPELINE_ORDER[@]} -gt 0 ]]; then
+    # Record current phase as failed if a pipeline is active
+    if [[ ${CURRENT_STEP:-} ]]; then
+      _PIPELINE_RESULTS+=("fail:$CURRENT_STEP")
+      _PIPELINE_FAILED=$((_PIPELINE_FAILED + 1))
+    fi
     pipeline_print_summary
   fi
 

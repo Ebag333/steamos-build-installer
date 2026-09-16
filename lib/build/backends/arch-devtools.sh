@@ -19,13 +19,15 @@ _BUILD_DEVTOOLS_LOADED=1
 # ---------------------------------------------------------------------------
 
 # Create a clean build root using mkarchroot.
-# Args: $1 = name, $2 = profile dir
-# Prints: path to build root directory
+# Args: $1 = name, $2 = profile dir, $3 = nameref variable for result
+# Sets: nameref variable to path to build root directory
 # lint-ignore: private-funcs
 _build_devtools_create_root() {
   local name="${1:?}"
   # shellcheck disable=SC2034 # part of backend interface; profile data accessed via PROFILE_* env vars
   local profile="${2:?}"
+  local -n _result_ref="${3:?}"
+  _result_ref=""
 
   local build_dir
   build_dir="$(mktemp -d "${WORKDIR:-/tmp}/build-roots/$name-XXXXXXXX")"
@@ -70,7 +72,7 @@ _build_devtools_create_root() {
   }
 
   log "  Build root created successfully"
-  echo "$build_dir"
+  _result_ref="$build_dir"
 }
 
 # Destroy a build root.

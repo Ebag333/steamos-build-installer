@@ -270,12 +270,6 @@ finalize() {
     die "Cleanup failed — workspace preserved at ${WORKDIR:-<unknown>} for manual recovery"
   fi
 
-  # Mark the build as complete — setup_copy_image and flash_image_is_complete
-  # check this before reusing a cached image.
-  # Created AFTER cleanup succeeds so a failed teardown never leaves a
-  # marker that makes the image look acceptably complete.
-  touch "${OUT}.build-complete" || die "Failed to create build-complete marker: ${OUT}.build-complete"
-
   # Clean up temporary build artifacts from WORKDIR.
   # Keep the final image, package cache, and build manifest.
   # Remove everything else (overlay workspace, mount points, temp state).
@@ -299,9 +293,12 @@ finalize() {
     # detach them first.  If detach fails, do NOT delete the backing file —
     # that would leave the loop in a "(deleted)" state with no way to cleanly
     # release later.  Warn the user that a reboot may be required.
-    local _overlay_loops
-    _overlay_loops="$(loops_for_file "$WORKDIR/overlay-work.img")"
-    if [[ -n "$_overlay_loops" ]]; then
+    local _overlay_loops _overlay_loops_rc=0
+    _overlay_loops="$(loops_for_file "$WORKDIR/overlay-work.img")" || _overlay_loops_rc=$?
+    if [[ $_overlay_loops_rc -ne 0 ]]; then
+      warn "Could not determine loop state for $WORKDIR/overlay-work.img (rc=$_overlay_loops_rc) — refusing to delete"
+      _cleanup_rc=1
+    elif [[ -n "$_overlay_loops" ]]; then
       warn "Overlay loop(s) still attached after cleanup: $_overlay_loops"
       warn "  This is typically caused by the kernel's jbd2 journal thread"
       warn "  holding an ext4 superblock reference after unmount."
@@ -310,19 +307,25 @@ finalize() {
         [[ -n "$_loop" ]] || continue
         local _backing
         _backing="$(losetup -l -O BACK-FILE "$_loop" 2>/dev/null | tail -1 | tr -d ' ')"
-        if losetup -d "$_loop" 2>/dev/null; then
+        if strict_detach_loop "$_loop" 2>/dev/null; then
           log "  Detached $_loop (${_backing:-unknown})"
         else
           warn "  Could not detach $_loop (${_backing:-unknown})"
+          _cleanup_rc=1
         fi
       done <<<"$_overlay_loops"
 
       # Re-check after detach attempts.
-      _overlay_loops="$(loops_for_file "$WORKDIR/overlay-work.img")"
-      if [[ -n "$_overlay_loops" ]]; then
+      local _recheck_rc=0
+      _overlay_loops="$(loops_for_file "$WORKDIR/overlay-work.img")" || _recheck_rc=$?
+      if [[ $_recheck_rc -ne 0 ]]; then
+        warn "Could not re-check loop state for $WORKDIR/overlay-work.img (rc=$_recheck_rc) — refusing to delete"
+        _cleanup_rc=1
+      elif [[ -n "$_overlay_loops" ]]; then
         warn "WARNING: Overlay loop(s) still attached after detach attempts: $_overlay_loops"
         warn "  Backing file will NOT be deleted to avoid orphaned loop state."
         warn "  A reboot is required to fully release these resources."
+        _cleanup_rc=1
       else
         log "  All overlay loops detached"
         rm -f "$WORKDIR"/overlay-work.img
@@ -372,6 +375,17 @@ finalize() {
       safe_rmdir "$_f" 2>/dev/null || true
     done
   fi
+
+  if ((_cleanup_rc != 0)); then
+    die "Cleanup failed (post-unmount) — workspace preserved at ${WORKDIR:-<unknown>} for manual recovery"
+  fi
+
+  # Mark the build as complete — setup_copy_image and flash_image_is_complete
+  # check this before reusing a cached image.
+  # Created AFTER all cleanup succeeds (including overlay backing-file
+  # verification and deletion) so a failed teardown never leaves a marker
+  # that makes the image look acceptably complete.
+  touch "${OUT}.build-complete" || die "Failed to create build-complete marker: ${OUT}.build-complete"
 
   log "DONE — $OUT"
 

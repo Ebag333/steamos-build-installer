@@ -176,7 +176,10 @@ _phase_build_setup() {
   # can distinguish workspace paths from protected host paths.
   mkdir -p "$WORKDIR" 2>/dev/null || true
   cleanup_set_workspace "$WORKDIR" 2>/dev/null || true
-  setup_clear_stale_state
+  cleanup_permit_path "$OUT"
+  if ! setup_clear_stale_state; then
+    die "Stale state recovery failed — cannot proceed"
+  fi
   setup_dirs
 
   # Write pacman log directly to persistent directory for crash resilience
@@ -192,6 +195,8 @@ _phase_build_setup() {
   : >"$PACMAN_RAW_LOG"
   PARTITION_DEBUG_LOG="$_persist_log_dir/partition-debug.log"
   : >"$PARTITION_DEBUG_LOG"
+  KERNEL_LOG="$_persist_log_dir/kernel.log"
+  : >"$KERNEL_LOG"
 
   return 0
 }
@@ -276,19 +281,32 @@ _phase_build_sysupgrade() {
       log "Base OS mode: upgrade"
       log "Running full system upgrade (pacman -Syu)"
 
+      local _upgrade_rc=0
       for _attempt in 1 2 3; do
-        if system_upgrade; then
+        _upgrade_rc=0
+        system_upgrade || _upgrade_rc=$?
+        if ((_upgrade_rc == 0)); then
           _ok=1
           break
         fi
-        warn "System upgrade attempt $_attempt failed"
-        sleep "$((_attempt * 2))"
+        warn "System upgrade attempt $_attempt failed (rc=$_upgrade_rc)"
+        local _cleanup_rc=0
+        system_upgrade_cleanup || _cleanup_rc=$?
+        if ((_cleanup_rc != 0)); then
+          warn "Cleanup failed after attempt $_attempt — aborting retries"
+          break
+        fi
+        if ((_attempt < 3)); then
+          sleep "$((_attempt * 2))"
+          system_upgrade_prepare
+        fi
       done
 
       if ((_ok)); then
         log "System upgrade completed successfully"
       else
-        die "System upgrade failed after retries; refusing to install current-repository hardware packages onto the old base"
+        system_upgrade_cleanup || warn "system_upgrade_cleanup failed during failure path"
+        exit "$_upgrade_rc"
       fi
       ;;
 
@@ -298,23 +316,33 @@ _phase_build_sysupgrade() {
       log "Refreshing package databases only (pacman -Sy)"
       log "Base OS packages will not be proactively upgraded"
 
+      local _sync_rc=0
       for _attempt in 1 2 3; do
-        set +e
-        pacman_sync_db --root "$MNT"
-        local _rc=$?
-        set -e
+        local _rc=0
+        pacman_sync_db --root "$MNT" || _rc=$?
         if ((_rc == 0)); then
           _ok=1
           break
         fi
+        _sync_rc=$_rc
         warn "Package database sync attempt $_attempt failed (rc=$_rc)"
-        sleep "$((_attempt * 2))"
+        local _cleanup_rc=0
+        system_upgrade_cleanup || _cleanup_rc=$?
+        if ((_cleanup_rc != 0)); then
+          warn "Cleanup failed after attempt $_attempt — aborting retries"
+          break
+        fi
+        if ((_attempt < 3)); then
+          sleep "$((_attempt * 2))"
+          system_upgrade_prepare
+        fi
       done
 
       if ((_ok)); then
         log "Package databases synchronized"
       else
-        die "Package database sync failed after retries"
+        system_upgrade_cleanup || warn "system_upgrade_cleanup failed during failure path"
+        exit "$_sync_rc"
       fi
       ;;
   esac
@@ -322,10 +350,15 @@ _phase_build_sysupgrade() {
   # Discover kernel version — needed for NVIDIA/header installation in both modes
   discover_neptune_kver "$MNT"
   discover_kernel_pkg "$MNT"
-  construct_hdr_url "$MNT"
+  resolve_hdr_url "$MNT"
   log "Build kernel: $KVER ($(basename "$HDR_URL"))"
 
-  system_upgrade_cleanup
+  local _cleanup_rc=0
+  system_upgrade_cleanup || _cleanup_rc=$?
+  if ((_cleanup_rc != 0)); then
+    warn "Package state cleanup failed — cannot proceed to overlay creation"
+    return 1
+  fi
 
   progress_emit sysupgrade
 

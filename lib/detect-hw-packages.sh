@@ -188,30 +188,11 @@ _detect_driver_packages() {
     [[ -n "${seen[$mod]:-}" ]] && continue
     seen[$mod]=1
 
-    # Check known module → package mapping first.
+    # Check known module → package mapping.
     local pkg="${_MODULE_FW_PKG[$mod]:-}"
     if [[ -n "$pkg" ]]; then
       driver_pkgs["$pkg"]=1
-      continue
     fi
-
-    # For unknown modules, check if they need firmware.
-    local firmware_list
-    firmware_list=$(modinfo -F firmware "$mod" 2>/dev/null | head -20)
-    [[ -z "$firmware_list" ]] && continue
-
-    # Try to find the package for the first firmware file.
-    # This is expensive, so only do it for modules we haven't mapped.
-    while IFS= read -r fw; do
-      [[ -z "$fw" ]] && continue
-      local fw_path="usr/lib/firmware/$fw"
-      local fw_pkg
-      fw_pkg=$(pacman -F "$fw_path" 2>/dev/null | awk '{print $1}' | head -1 | sed 's|.*/||' || true)
-      if [[ -n "$fw_pkg" && "$fw_pkg" != "No" ]]; then
-        driver_pkgs["$fw_pkg"]=1
-        break
-      fi
-    done <<<"$firmware_list"
   done < <(lsmod 2>/dev/null | awk 'NR>1 {print $1}')
 
   # Also check PCI devices for drivers not yet loaded.

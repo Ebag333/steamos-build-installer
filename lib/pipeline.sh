@@ -211,13 +211,24 @@ run_pipeline() {
       # Install a temporary EXIT trap so die()-induced exits still dump phase output.
       local _saved_phase_exit_trap
       _saved_phase_exit_trap="$(trap -p EXIT)"
+      # Extract the command portion for direct execution inside the trap.
+      # (Cannot use ' inside the single-quoted trap body, so extract here.)
+      local _saved_phase_exit_cmd=""
+      if [[ -n "${_saved_phase_exit_trap:-}" ]]; then
+        _saved_phase_exit_cmd="${_saved_phase_exit_trap#trap -- \'}"
+        _saved_phase_exit_cmd="${_saved_phase_exit_cmd#trap \'}"
+        _saved_phase_exit_cmd="${_saved_phase_exit_cmd%\' EXIT}"
+      fi
       trap '
         if [[ -n "${_phase_log:-}" && -s "${_phase_log:-}" ]]; then
           warn "Phase output (interrupted by exit):"
           cat "$_phase_log"
           rm -f "$_phase_log"
         fi
-        eval "${_saved_phase_exit_trap:-trap - EXIT}"
+        # Execute the saved trap command directly (not just re-register it)
+        if [[ -n "${_saved_phase_exit_cmd:-}" ]]; then
+          eval "${_saved_phase_exit_cmd}"
+        fi
       ' EXIT
 
       # lint-ignore: merged-streams

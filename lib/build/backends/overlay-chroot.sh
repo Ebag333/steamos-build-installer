@@ -134,7 +134,10 @@ _build_overlay_destroy_root() {
   # 1. Kill known chroot daemons before touching mount topology.
   # ------------------------------------------------------------
   if [[ -d "$merged/etc/pacman.d/gnupg" ]]; then
-    gpgconf --homedir "$merged/etc/pacman.d/gnupg" --kill gpg-agent >/dev/null 2>&1 || true
+    if ! cleanup_kill_gpg_agent "$merged/etc/pacman.d/gnupg" "$merged"; then
+      warn "_build_overlay_destroy_root: gpg-agent shutdown failed"
+      return 1
+    fi
   fi
 
   # ------------------------------------------------------------
@@ -191,12 +194,50 @@ _build_overlay_destroy_root() {
     fi
   fi
 
+  if ((rc != 0)); then
+    warn "_build_overlay_destroy_root: failed to unmount $ovl_mnt"
+    warn "_build_overlay_destroy_root: not proceeding to loop detachment while mounts remain"
+    return "$rc"
+  fi
+
+  # ------------------------------------------------------------
+  # 4b. Verify no mounts remain below the build directory.
+  # ------------------------------------------------------------
+  local _remaining_mounts _findmnt_rc=0
+  # Use --submounts with --noheadings to list mounts at or below $merged,
+  # then filter to only exact descendants. Without the filter, findmnt may
+  # also report the parent filesystem that contains $merged as a mountpoint,
+  # causing false positives after successful teardown.
+  local _findmnt_raw
+  _findmnt_raw="$(findmnt -rno TARGET --submounts --target "$merged" 2>/dev/null)" || _findmnt_rc=$?
+  if [[ $_findmnt_rc -ne 0 ]]; then
+    warn "_build_overlay_destroy_root: findmnt verification failed (rc=$_findmnt_rc) — refusing to proceed"
+    return 1
+  fi
+  _remaining_mounts="$(echo "$_findmnt_raw" | while IFS= read -r _mnt; do
+      case "$_mnt" in
+        "$merged"|"$merged"/*) printf '%s\n' "$_mnt" ;;
+      esac
+    done)"
+  if [[ -n "$_remaining_mounts" ]]; then
+    warn "_build_overlay_destroy_root: mounts still present under $merged:"
+    while IFS= read -r _line; do
+      warn "  $_line"
+    done <<<"$_remaining_mounts"
+    return 1
+  fi
+
   # ------------------------------------------------------------
   # 5. Find loop devices by backing file and wait for ext4 release.
   # ------------------------------------------------------------
   local loops=""
   # Always search by path — loops_for_file handles the (deleted) suffix
-  loops="$(loops_for_file "$ovl_img")"
+  local _ovl_loops_rc=0
+  loops="$(loops_for_file "$ovl_img")" || _ovl_loops_rc=$?
+  if [[ $_ovl_loops_rc -ne 0 ]]; then
+    warn "_build_overlay_destroy_root: could not determine loop state for $ovl_img (rc=$_ovl_loops_rc)"
+    return 1
+  fi
 
   # Also check by the (deleted) path the kernel may still hold
   if [[ -z "$loops" ]]; then

@@ -142,6 +142,9 @@ _pf_rfs_contained_path() {
   local rootfs="${1:?_pf_rfs_contained_path: missing rootfs}"
   local subpath="${2:?_pf_rfs_contained_path: missing subpath}"
 
+  # Canonicalize rootfs so the prefix comparison works even when rootfs contains ..
+  rootfs="$(realpath -e "$rootfs" 2>/dev/null)" || die "_pf_rfs_contained_path: cannot resolve rootfs: $rootfs"
+
   local target="${rootfs}${subpath}"
   local resolved
   resolved="$(realpath -e "$target" 2>/dev/null)" || resolved=""
@@ -165,6 +168,9 @@ _pf_rfs_contained_path() {
 _pf_rfs_write_contained_path() {
   local rootfs="${1:?_pf_rfs_write_contained_path: missing rootfs}"
   local subpath="${2:?_pf_rfs_write_contained_path: missing subpath}"
+
+  # Canonicalize rootfs so the prefix comparison works even when rootfs contains ..
+  rootfs="$(realpath -e "$rootfs" 2>/dev/null)" || die "_pf_rfs_write_contained_path: cannot resolve rootfs: $rootfs"
 
   local target="${rootfs}${subpath}"
   local parent

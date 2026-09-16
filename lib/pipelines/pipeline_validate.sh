@@ -186,19 +186,56 @@ _validate_all() {
 _validate_update_branch() {
   local root="$1"
   local expected="${UPDATE_BRANCH:-stable}"
-  local actual
-  actual="$(read_system_config "update-branch" "$root")"
 
-  if verify_system_config "update-branch" "$root" "$expected"; then
-    _validate_pass "update-branch" "" "$expected" "$actual"
-  elif [[ "$_VALIDATE_HAS_CONFIG" -eq 1 ]]; then
-    _validate_fail "update-branch" "expected $expected, got ${actual:-<unknown>}" "$expected" "$actual"
+  # ── Lower layer (raw rootfs) ──────────────────────────────────────────
+  local _lower_actual
+  _lower_actual="$(read_system_config "update-branch" "$root")"
+
+  # ── Upper layer (var partition /etc overlay) ──────────────────────────
+  local _upper_file="$root/var/lib/overlays/etc/upper/etc/os-release"
+  local _upper_exists=0
+  local _upper_actual=""
+  if [[ -f "$_upper_file" ]]; then
+    _upper_exists=1
+    _upper_actual="$(sed -n 's/^STEAMOS_DEFAULT_UPDATE_BRANCH=//p' "$_upper_file" | head -1)"
+  fi
+
+  # ── Merged value (what the booted system sees) ───────────────────────
+  #    OverlayFS masks the entire lower file when the upper file exists,
+  #    even if the upper file does not contain the expected key.
+  local _merged_actual
+  if [[ "$_upper_exists" -eq 1 ]]; then
+    _merged_actual="${_upper_actual:-<missing>}"
   else
-    _validate_info "update-branch" "expected $expected, got ${actual:-<unknown>}" "$expected" "$actual"
+    _merged_actual="$_lower_actual"
+  fi
+
+  # ── Report ────────────────────────────────────────────────────────────
+  local _detail="lower=$_lower_actual"
+  if [[ "$_upper_exists" -eq 1 ]]; then
+    if [[ -n "$_upper_actual" ]]; then
+      _detail+=", upper=$_upper_actual, merged=$_merged_actual"
+    else
+      _detail+=", upper=<exists but key absent>, merged=<missing>"
+    fi
+  else
+    _detail+=", merged=$_merged_actual (no upper)"
+  fi
+
+  if [[ "$_merged_actual" == "$expected" ]]; then
+    _validate_pass "update-branch" "$_detail" "$expected" "$_merged_actual"
+  elif [[ "$_VALIDATE_HAS_CONFIG" -eq 1 ]]; then
+    if [[ "$_lower_actual" == "$expected" && "$_merged_actual" != "$expected" ]]; then
+      _validate_fail "update-branch" "$_detail — builder wrote $expected to rootfs but upper masks it" "$expected" "$_merged_actual"
+    else
+      _validate_fail "update-branch" "$_detail — expected $expected" "$expected" "$_merged_actual"
+    fi
+  else
+    _validate_info "update-branch" "$_detail — expected $expected" "$expected" "$_merged_actual"
   fi
 
   # Also check manifest.json (primary update-manifest location)
-  local _manifest_paths=("$root/usr/lib/steamos/manifest.json" "$root/usr/lib64/steamos/manifest.json")
+  local _manifest_paths=("$root/usr/lib/steamos-atomupd/manifest.json" "$root/usr/lib64/steamos-atomupd/manifest.json")
   for _manifest in "${_manifest_paths[@]}"; do
     if [[ -f "$_manifest" ]]; then
       local _manifest_branch
@@ -253,7 +290,7 @@ _validate_target_variant() {
   fi
 
   # Also check manifest.json (primary update-manifest location)
-  local _manifest_paths=("$root/usr/lib/steamos/manifest.json" "$root/usr/lib64/steamos/manifest.json")
+  local _manifest_paths=("$root/usr/lib/steamos-atomupd/manifest.json" "$root/usr/lib64/steamos-atomupd/manifest.json")
   for _manifest in "${_manifest_paths[@]}"; do
     if [[ -f "$_manifest" ]]; then
       local _manifest_variant

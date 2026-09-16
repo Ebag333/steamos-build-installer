@@ -303,13 +303,8 @@ _phase_rebuild_discover() {
 
   # Discover kernel package and headers URL
   discover_kernel_pkg "$NEWROOT"
-  construct_hdr_url "$NEWROOT"
+  resolve_hdr_url "$NEWROOT"
   log "Headers: $(basename "$HDR_URL")"
-  curl -sfIL "$HDR_URL" -o /dev/null \
-    || {
-      die "matching headers not in Valve's pool: $HDR_URL"
-      return 1
-    }
 
   return 0
 }
@@ -356,12 +351,17 @@ _phase_rebuild_sysupgrade() {
     die "System upgrade failed after retries"
   fi
 
-  system_upgrade_cleanup
+  local _cleanup_rc=0
+  system_upgrade_cleanup || _cleanup_rc=$?
+  if ((_cleanup_rc != 0)); then
+    warn "Package state cleanup failed in rebuild pipeline"
+    return 1
+  fi
 
   # Re-discover kernel version — -Syu may have upgraded it
   discover_neptune_kver "$NEWROOT"
   discover_kernel_pkg "$NEWROOT"
-  construct_hdr_url "$NEWROOT"
+  resolve_hdr_url "$NEWROOT"
   log "Post-upgrade kernel: $KVER ($(basename "$HDR_URL"))"
 
   progress_emit sysupgrade

@@ -179,12 +179,29 @@ _phase_live_sysupgrade() {
   if [[ "$root" == "/" ]]; then
     # Running on the live system itself
     log "Running system upgrade on live system"
-    if [[ "${PREFLIGHT:-1}" -eq 1 ]]; then
-      if pacman_upgrade_preflight "System upgrade" --host; then
-        pacman_upgrade_all || warn "System upgrade failed (non-fatal)"
-      fi
+    # Auto-enable preflight for upgrade mode; explicit PREFLIGHT overrides
+    local _preflight
+    if [[ -n "${PREFLIGHT+x}" ]]; then
+      _preflight="$PREFLIGHT"
+    elif [[ "${BASE_OS_MODE:-additive}" == "upgrade" ]]; then
+      _preflight=1
     else
-      warn "Pre-flight: skipped (PREFLIGHT=0) — proceeding without conflict checks"
+      _preflight=0
+    fi
+    if [[ "$_preflight" -eq 1 ]]; then
+      if ! pacman_upgrade_preflight "System upgrade" --host; then
+        warn "System upgrade preflight failed"
+        return 1
+      fi
+      pacman_upgrade_all || warn "System upgrade failed (non-fatal)"
+    else
+      local _reason
+      if [[ -n "${PREFLIGHT+x}" ]]; then
+        _reason="PREFLIGHT=$PREFLIGHT override"
+      else
+        _reason="BASE_OS_MODE=${BASE_OS_MODE:-additive}"
+      fi
+      warn "Pre-flight: skipped ($_reason) — proceeding without conflict checks"
       pacman_upgrade_all || warn "System upgrade failed (non-fatal)"
     fi
   else
@@ -208,7 +225,12 @@ _phase_live_sysupgrade() {
       die "System upgrade failed after retries"
     fi
 
-    system_upgrade_cleanup
+    local _cleanup_rc=0
+    system_upgrade_cleanup || _cleanup_rc=$?
+    if ((_cleanup_rc != 0)); then
+      warn "Package state cleanup failed in live pipeline"
+      return 1
+    fi
   fi
 
   progress_emit sysupgrade
@@ -262,7 +284,10 @@ _phase_live_verify() {
   cleanup_disk_space "${config_root:-/}" "live"
 
   # Tear down mounts before verifying cleanup
-  cleanup_environment 2>/dev/null || true
+  if ! cleanup_environment; then
+    warn "Live verification: cleanup failed — cannot proceed"
+    return 1
+  fi
 
   # Verify cleanup completeness
   if declare -F cleanup_verify >/dev/null 2>&1; then

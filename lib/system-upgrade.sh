@@ -58,43 +58,43 @@ system_upgrade_prepare() {
   # Verify DNS works in chroot
   if ! chroot "$MNT" getent hosts steamdeck-packages.steamos.cloud &>/dev/null; then
     warn "DNS resolution not working in chroot"
+    warn "  resolv.conf type: $(file -b "$MNT/etc/resolv.conf" 2>/dev/null || echo 'unknown')"
+    warn "  resolv.conf contents:"
+    if [[ -f "$MNT/etc/resolv.conf" ]]; then
+      while IFS= read -r _line; do
+        warn "    $_line"
+      done <"$MNT/etc/resolv.conf"
+    else
+      warn "    (file missing)"
+    fi
   fi
 
   # Initialize pacman keyring (required for database sync)
   log "Initializing pacman keyring"
   safe_rmdir "$MNT/etc/pacman.d/gnupg" 2>/dev/null || true
-  local _old_e
-  _old_e=$(set +o | grep 'errexit')
-  set +e
-  chroot "$MNT" pacman-key --init >/dev/null # lint-ignore: silenced-stdout
-  local _rc=$?
-  eval "$_old_e"
-  if ((_rc != 0)); then
-    warn "pacman-key --init failed (rc=$_rc)"
+  local _pk_stderr="$WORKDIR/pacman-key-init-stderr.txt"
+  if ! chroot "$MNT" pacman-key --init >/dev/null 2>"$_pk_stderr"; then # lint-ignore: silenced-stdout
+    warn "pacman-key --init failed"
+    if [[ -s "$_pk_stderr" ]]; then
+      warn "pacman-key --init stderr:"
+      while IFS= read -r _line; do
+        warn "  $_line"
+      done <"$_pk_stderr"
+    fi
     die "pacman-key --init failed"
   fi
 
   # Populate keyrings based on FIX_KEYRING setting
   if [[ "${FIX_KEYRING:-0}" -eq 1 ]]; then
     log "Populating Arch + Holo keyrings"
-    _old_e=$(set +o | grep 'errexit')
-    set +e
-    chroot "$MNT" pacman-key --populate archlinux holo >/dev/null # lint-ignore: silenced-stdout
-    local _rc=$?
-    eval "$_old_e"
-    if ((_rc != 0)); then
-      warn "pacman-key --populate failed (rc=$_rc)"
+    if ! chroot "$MNT" pacman-key --populate archlinux holo >/dev/null; then # lint-ignore: silenced-stdout
+      warn "pacman-key --populate failed"
       die "pacman-key --populate failed"
     fi
   else
     log "Populating default keyrings"
-    _old_e=$(set +o | grep 'errexit')
-    set +e
-    chroot "$MNT" pacman-key --populate >/dev/null # lint-ignore: silenced-stdout
-    local _rc=$?
-    eval "$_old_e"
-    if ((_rc != 0)); then
-      warn "pacman-key --populate failed (rc=$_rc)"
+    if ! chroot "$MNT" pacman-key --populate >/dev/null; then # lint-ignore: silenced-stdout
+      warn "pacman-key --populate failed"
       die "pacman-key --populate failed"
     fi
   fi
@@ -143,12 +143,27 @@ system_upgrade() {
   fi
 
   # Pre-flight: dry-run to detect and resolve known conflicts
-  if [[ "${PREFLIGHT:-1}" -eq 1 ]]; then
+  # Auto-enable preflight for upgrade mode; explicit PREFLIGHT overrides
+  local _preflight
+  if [[ -n "${PREFLIGHT+x}" ]]; then
+    _preflight="$PREFLIGHT"
+  elif [[ "${BASE_OS_MODE:-additive}" == "upgrade" ]]; then
+    _preflight=1
+  else
+    _preflight=0
+  fi
+  if [[ "$_preflight" -eq 1 ]]; then
     if ! pacman_upgrade_preflight "System upgrade" --root "$MNT"; then
       return 1
     fi
   else
-    warn "Pre-flight: skipped (PREFLIGHT=0) — proceeding without conflict checks"
+    local _reason
+    if [[ -n "${PREFLIGHT+x}" ]]; then
+      _reason="PREFLIGHT=$PREFLIGHT override"
+    else
+      _reason="BASE_OS_MODE=${BASE_OS_MODE:-additive}"
+    fi
+    warn "Pre-flight: skipped ($_reason) — proceeding without conflict checks"
   fi
 
   # Run pacman -Syu directly on $MNT using the image's own config
@@ -167,16 +182,12 @@ system_upgrade() {
   local _raw_log="${PACMAN_RAW_LOG}"
   local _pacman_rc=0
 
-  local _old_e
-  _old_e=$(set +o | grep 'errexit')
-  set -o pipefail
-  set +e # Disable errexit to prevent ERR trap from firing in process substitutions
   local _upgrade_stdout _upgrade_stderr
   _upgrade_stdout="$(mktemp /tmp/steamos-upgrade-stdout.XXXXXX)"
   _upgrade_stderr="$(mktemp /tmp/steamos-upgrade-stderr.XXXXXX)"
+  _pacman_rc=0
   chroot "$MNT" /bin/bash -c "pacman -Syu --noconfirm --ask=4" \
-    >"$_upgrade_stdout" 2>"$_upgrade_stderr" \
-    || _pacman_rc=$?
+    >"$_upgrade_stdout" 2>"$_upgrade_stderr" || _pacman_rc=$?
   # Write raw output for failure diagnostics
   if [[ -n "$_raw_log" ]]; then
     cat "$_upgrade_stdout" >>"$_raw_log" 2>/dev/null || true
@@ -197,8 +208,6 @@ system_upgrade() {
     pacman_filter_stderr <"$_upgrade_stderr" | log_capture_stream upgrade warn pacman-stderr
   fi
   rm -f "$_upgrade_stdout" "$_upgrade_stderr"
-  set +o pipefail
-  eval "$_old_e" # restore caller's errexit state
 
   if ((_pacman_rc != 0)); then
     warn "System upgrade failed (pacman rc=$_pacman_rc) — see log: $upgrade_log"
@@ -297,12 +306,31 @@ system_upgrade_cleanup() {
   fi
 
   # Kill gpg-agent before touching mount topology
-  if [[ -d "$MNT/etc/pacman.d/gnupg" ]]; then
-    gpgconf --homedir "$MNT/etc/pacman.d/gnupg" --kill gpg-agent >/dev/null 2>&1 || true
+  if ! cleanup_kill_gpg_agent "$MNT/etc/pacman.d/gnupg" "$MNT"; then
+    warn "system_upgrade_cleanup: gpg-agent shutdown failed — refusing to continue cleanup"
+    return 1
+  fi
+
+  # Discover and unmount any recursive /dev descendants (e.g., partition devices
+  # mounted by pacman hooks) deepest-first before the main unmount pass
+  local _dev_rc=0
+  if declare -f unmount_children_deepest_first >/dev/null 2>&1; then
+    unmount_children_deepest_first "$MNT/dev" || _dev_rc=$?
+  else
+    warn "system_upgrade_cleanup: unmount_children_deepest_first not available — cannot verify /dev cleanup"
+    _dev_rc=1
   fi
 
   # Unmount all tracked mounts in reverse order (children before parents)
-  cleanup_unmount_registered || true
+  if ! cleanup_unmount_registered; then
+    warn "system_upgrade_cleanup: mount cleanup failed"
+    return 1
+  fi
+
+  if ((_dev_rc != 0)); then
+    warn "system_upgrade_cleanup: /dev descendant unmount had failures (rc=$_dev_rc)"
+    return 1
+  fi
 
   log "System upgrade chroot cleaned up"
 }

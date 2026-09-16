@@ -818,20 +818,21 @@ _install_pacman_hw_batch() {
 }
 
 # Build packages from pre-collected arrays.
-# Args: $1-$3 = nameref arrays (names, recipes, versions)
+# Args: $1-$3 = nameref arrays (names, recipes, versions), $4 = pacconf
 # VERSION format for build-recipe items: "latest" or "pkgver-sha256"
 #   e.g. "152.0.7977.9-fc6e10808f589a0475ce20a0038c902701e9e59cfb0ac810a45116f8c057f9e7"
 # When pinned, the PKGBUILD's pkgver and first sha256sum are patched before building.
 _install_build_recipes() {
-  local -n _br_names="$1"
-  local -n _br_recipes="$2"
-  local -n _br_versions="$3"
+  local -n _brn="$1"
+  local -n _brr="$2"
+  local -n _brv="$3"
+  local pacconf="${4:?_install_build_recipes: missing pacman config}"
   local _bfr="${_build_framework_ready:-0}"
 
   local i
-  for i in "${!_br_names[@]}"; do
-    local name="${_br_names[$i]}"
-    local recipe="${_br_recipes[$i]}"
+  for i in "${!_brn[@]}"; do
+    local name="${_brn[$i]}"
+    local recipe="${_brr[$i]}"
     local recipe_dir="$SCRIPT_DIR/lib/configs/build_recipes/$recipe"
 
     if [[ -z "$recipe" || ! -d "$recipe_dir" ]]; then
@@ -863,7 +864,7 @@ _install_build_recipes() {
       if [[ -n "$_deps" ]]; then
         log "    Installing recipe dependencies: $_deps"
         # shellcheck disable=SC2086 # _deps is intentionally word-split
-        if ! pacman_install --chroot --no-needed --noconfirm -- $_deps; then
+        if ! pacman_install --config "$pacconf" --chroot --no-needed --noconfirm -- $_deps; then
           warn "    Dependency installation failed for $name — skipping direct install"
           HW_FAILED_PKGS+=("$name")
           continue
@@ -916,7 +917,7 @@ _install_build_recipes() {
 
       # Apply version pinning if specified (format: pkgver-sha256)
       local _build_recipe_dir="$recipe_dir"
-      local _version="${_br_versions[$i]:-latest}"
+      local _version="${_brv[$i]:-latest}"
       if [[ "$_version" != "latest" && -n "$_version" ]]; then
         local _pinned_ver="${_version%-*}"
         local _pinned_sha="${_version##*-}"
@@ -958,13 +959,13 @@ _install_build_recipes() {
 # Install flatpak items from pre-collected arrays.
 # Args: $1-$2 = nameref arrays (names, recipes)
 _install_flatpak_items() {
-  local -n _fp_names="$1"
-  local -n _fp_recipes="$2"
+  local -n _fpn="$1"
+  local -n _fpr="$2"
 
   local i
-  for i in "${!_fp_names[@]}"; do
-    local name="${_fp_names[$i]}"
-    local recipe="${_fp_recipes[$i]}"
+  for i in "${!_fpn[@]}"; do
+    local name="${_fpn[$i]}"
+    local recipe="${_fpr[$i]}"
     local recipe_dir="$SCRIPT_DIR/lib/configs/build_recipes/$recipe"
 
     if [[ -z "$recipe" || ! -d "$recipe_dir" ]]; then
@@ -1137,7 +1138,7 @@ install_hw_libs() {
 
   # Build kernel modules
   if ((${#_br_names[@]} > 0)); then
-    _install_build_recipes _br_names _br_recipes _br_versions
+    _install_build_recipes _br_names _br_recipes _br_versions "$valve_pacconf"
   fi
 
   # Install flatpaks

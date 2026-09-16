@@ -424,8 +424,6 @@ setup_discover() {
   discover_kernel_pkg "$MNT"
   log "Kernel package: $KPKG_NAME $KPKG_VERREL"
 
-  construct_hdr_url "$MNT"
-  curl_retry 3 -sfIL "$HDR_URL" -o /dev/null \
-    || die "Exact-match headers not found in Valve's pool: $HDR_URL"
+  resolve_hdr_url "$MNT"
   log "Headers package: $(basename "$HDR_URL")"
 }

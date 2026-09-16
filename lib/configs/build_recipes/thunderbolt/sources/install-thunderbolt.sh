@@ -1,28 +1,14 @@
 #!/bin/bash
 #
 # install-thunderbolt.sh — Install Thunderbolt dock support inside the chroot.
+# The bolt package is installed by BUILD_DEPS in recipe.conf.
 # Runs as INSTALL_CMD via the build-recipe framework.
 #
 set -euo pipefail
 
 echo "=== Thunderbolt dock support install ==="
 
-# ── 1. Install bolt package ─────────────────────────────────────────────
-echo "  Installing bolt package"
-if pacman -Q bolt &>/dev/null; then
-  version="$(pacman -Q bolt 2>/dev/null | awk '{print $2}')"
-  echo "    Already installed: bolt $version"
-else
-  # DB sync is handled by the pipeline before this script runs.
-  if ! pacman -S --noconfirm bolt; then
-    echo "ERROR: Failed to install bolt package" >&2
-    exit 1
-  fi
-  version="$(pacman -Q bolt 2>/dev/null | awk '{print $2}')"
-  echo "    Installed: bolt $version"
-fi
-
-# ── 2. Install PCI rescan script ───────────────────────────────────────
+# ── 1. Install PCI rescan script ───────────────────────────────────────
 echo "  Installing thunderbolt-rescan.sh"
 for src in /tmp/build/sources/thunderbolt-rescan.sh /tmp/build/sources/98-thunderbolt-rescan.rules; do
   if [[ ! -f "$src" ]]; then
@@ -36,7 +22,7 @@ if ! install -Dm755 /tmp/build/sources/thunderbolt-rescan.sh /usr/local/bin/thun
 fi
 echo "    OK /usr/local/bin/thunderbolt-rescan.sh"
 
-# ── 3. Install udev rules ──────────────────────────────────────────────
+# ── 2. Install udev rules ──────────────────────────────────────────────
 echo "  Installing 98-thunderbolt-rescan.rules"
 if ! install -Dm644 /tmp/build/sources/98-thunderbolt-rescan.rules /etc/udev/rules.d/98-thunderbolt-rescan.rules; then
   echo "ERROR: Failed to install 98-thunderbolt-rescan.rules" >&2
@@ -44,7 +30,7 @@ if ! install -Dm644 /tmp/build/sources/98-thunderbolt-rescan.rules /etc/udev/rul
 fi
 echo "    OK /etc/udev/rules.d/98-thunderbolt-rescan.rules"
 
-# ── 4. Enable bolt.service ─────────────────────────────────────────────
+# ── 3. Enable bolt.service ─────────────────────────────────────────────
 echo "  Enabling bolt.service"
 mkdir -p /etc/systemd/system/multi-user.target.wants
 bolt_service="/usr/lib/systemd/system/bolt.service"
@@ -55,7 +41,7 @@ fi
 ln -sf "$bolt_service" /etc/systemd/system/multi-user.target.wants/bolt.service
 echo "    OK /etc/systemd/system/multi-user.target.wants/bolt.service"
 
-# ── 5. Verify all installed files ──────────────────────────────────────
+# ── 4. Verify all installed files ──────────────────────────────────────
 echo "  Verifying installation"
 ALL_OK=1
 for f in \

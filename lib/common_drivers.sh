@@ -91,6 +91,147 @@ construct_hdr_url() {
   HDR_URL="${HDR_URL/\$arch/x86_64}/${KPKG_NAME}-headers-${KPKG_VERREL}-x86_64.pkg.tar.zst"
 }
 
+# _compare_versions A B
+# Returns -1 if A < B, 0 if equal, 1 if A > B
+_compare_versions() {
+  local a="$1" b="$2"
+
+  # Try vercmp first (pacman utility)
+  if command -v vercmp &>/dev/null; then
+    local r
+    r="$(vercmp "$a" "$b" 2>/dev/null)" || {
+      warn "vercmp failed for '$a' vs '$b', falling back to sort -V"
+      r=0
+    }
+    if [[ "$r" -lt 0 ]]; then printf '%s\n' -1
+    elif [[ "$r" -gt 0 ]]; then printf '%s\n' 1
+    else printf '%s\n' 0
+    fi
+    return
+  fi
+
+  # Fallback to sort -V (GNU coreutils)
+  if ! command -v sort &>/dev/null; then
+    die "Neither vercmp nor sort available for version comparison"
+  fi
+
+  local first
+  first="$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)" || {
+    warn "sort -V failed for '$a' vs '$b'"
+    printf '%s\n' 0
+    return
+  }
+
+  [[ "$first" == "$a" ]] && [[ "$a" != "$b" ]] && { printf '%s\n' -1; return; }
+  [[ "$first" == "$b" ]] && [[ "$a" != "$b" ]] && { printf '%s\n' 1; return; }
+  printf '%s\n' 0
+}
+
+# _find_best_header_version REQUESTED_VER CANDIDATES...
+# Picks the best matching header version <= REQUESTED_VER from the list.
+# Prefers same upstream version (before .valve). Returns the filename via stdout.
+_find_best_header_version() {
+  local requested="$1"; shift
+  local candidates=("$@")
+
+  # Extract upstream version (before .valve)
+  local req_upstream
+  req_upstream="${requested%%.valve*}"
+
+  local best=""
+  local best_ver=""
+  local best_score=0
+
+  for cand in "${candidates[@]}"; do
+    local cand_ver="${cand}"
+    # Extract version from filename: strip prefix and suffix
+    # Filename format: linux-neptune-616-headers-6.16.12.valve24.3-1-x86_64.pkg.tar.zst
+    cand_ver="${cand_ver#${KPKG_NAME}-headers-}"
+    cand_ver="${cand_ver%-x86_64.pkg.tar.zst}"
+
+    # Skip if candidate version is newer than requested
+    local cmp
+    cmp="$(_compare_versions "$cand_ver" "$requested")"
+    [[ "$cmp" -gt 0 ]] && continue
+
+    # Extract candidate upstream version
+    local cand_upstream
+    cand_upstream="${cand_ver%%.valve*}"
+
+    # Score: prefer same upstream version
+    local score=0
+    if [[ "$cand_upstream" == "$req_upstream" ]]; then
+      score=1000
+    fi
+
+    # Among same-score candidates, prefer highest version
+    if [[ "$score" -gt "$best_score" ]] || \
+       { [[ "$score" -eq "$best_score" ]] && [[ -z "$best_ver" ]]; } || \
+       { [[ "$score" -eq "$best_score" ]] && [[ "$(_compare_versions "$cand_ver" "$best_ver")" -gt 0 ]]; }; then
+      best="$cand"
+      best_ver="$cand_ver"
+      best_score="$score"
+    fi
+  done
+
+  [[ -n "$best" ]] && { printf '%s\n' "$best"; return 0; }
+  return 1
+}
+
+# resolve_hdr_url ROOT
+# Like construct_hdr_url, but falls back to fuzzy version matching if exact
+# headers aren't available. Sets HDR_URL global.
+resolve_hdr_url() {
+  local root="$1"
+
+  # Validate required globals
+  [[ -z "${KPKG_NAME:-}" ]] && die "resolve_hdr_url: KPKG_NAME is not set"
+  [[ -z "${KPKG_VERREL:-}" ]] && die "resolve_hdr_url: KPKG_VERREL is not set"
+
+  # First try exact match
+  construct_hdr_url "$root"
+
+  if curl_retry 2 -sfIL "$HDR_URL" -o /dev/null 2>/dev/null; then
+    log "Exact-match headers found: $(basename "$HDR_URL")"
+    return 0
+  fi
+
+  warn "Exact-match headers not available: $(basename "$HDR_URL")"
+  warn "Attempting fuzzy version fallback..."
+
+  # Fetch directory listing from mirror
+  local mirror_dir
+  mirror_dir="$(dirname "$HDR_URL")/"
+  local listing
+  listing="$(curl_retry 3 -sfL "$mirror_dir")" \
+    || die "Could not query mirror for header packages: $mirror_dir"
+
+  # Parse available header packages for this kernel
+  local -a candidates=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && candidates+=("$line")
+  done < <(printf '%s\n' "$listing" | grep -oP "${KPKG_NAME}-headers-[0-9][^\"]*-x86_64\\.pkg\\.tar\\.zst" | sort -u)
+
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    die "No ${KPKG_NAME}-headers packages found in mirror: $mirror_dir"
+  fi
+
+  log "Available header packages: ${#candidates[@]}"
+
+  # Find best match
+  local best
+  best="$(_find_best_header_version "$KPKG_VERREL" "${candidates[@]}")" \
+    || die "No compatible ${KPKG_NAME}-headers version found (requested: $KPKG_VERREL). Available: ${candidates[*]}"
+
+  local best_ver="$best"
+  best_ver="${best_ver#${KPKG_NAME}-headers-}"
+  best_ver="${best_ver%-x86_64.pkg.tar.zst}"
+
+  HDR_URL="${mirror_dir}${best}"
+  warn "Using fuzzy-matched headers: $best_ver (requested: $KPKG_VERREL)"
+  return 0
+}
+
 # Compute new/changed and removed runtime packages from before/after pacman
 # snapshots.  Sets NEW_PKGS and REMOVED_PKGS arrays.
 #

@@ -716,9 +716,10 @@ _run_backend_gui() {
   # Record its actual exit status in rcfile so the progress UI can poll it.
   echo "[gui] starting backend runner..." >&2
   (
-    set +e
-    "${launcher[@]}" >"$logfile" 2>&1
-    _rc=$?
+    local _rc=0
+    if ! "${launcher[@]}" >"$logfile" 2>&1; then
+        _rc=$?
+    fi
     echo "$_rc" >"$rcfile"
     sync "$rcfile" 2>/dev/null
     echo "[gui] runner finished with exit $_rc" >&2
@@ -1102,7 +1103,7 @@ Example: Firmware|linux-firmware|latest|TRUE|Full firmware suite"
   fi
 
   local selected yad_rc=0
-  selected="$(yad --list --checklist \
+  if ! selected="$(yad --list --checklist \
     --title="Hardware Support Components" \
     --text="<b>Select hardware support components to install.</b>
 
@@ -1123,7 +1124,9 @@ Packages are sourced from Valve's repository or official Arch repositories.</spa
     --button="Auto-detect":2 \
     --button="OK":0 \
     "${rows[@]}" \
-    2>/dev/null)" || yad_rc=$?
+    2>/dev/null)"; then
+    yad_rc=$?
+  fi
 
   # Handle Auto-detect button — re-run detection and refresh dialog.
   if [[ "$yad_rc" -eq 2 ]]; then
@@ -1704,7 +1707,7 @@ _ui_flash_pick_image() {
       --file-filter="Images (*.img *.img.bz2 *.img.gz *.img.xz *.img.zst) | *.img *.img.bz2 *.img.gz *.img.xz *.img.zst" \
       --center \
       --width=700 \
-      --height=500
+      --height=500 2>/dev/null || true
     return
   fi
 
@@ -1715,7 +1718,7 @@ _ui_flash_pick_image() {
     table+=("$path" "$where" "$size" "$modified")
   done <<<"$rows"
 
-  local selected
+  local selected list_rc
   selected="$(yad --list \
     --title="Select Completed Image" \
     --text="Select the installer image to flash:" \
@@ -1731,9 +1734,7 @@ _ui_flash_pick_image() {
     --button="Browse...":12 \
     --button="Cancel":1 \
     --button="OK":0 \
-    "${table[@]}")"
-
-  local list_rc=$?
+    "${table[@]}")" && list_rc=0 || list_rc=$?
 
   # Button 12 = "Browse..." — fall back to file chooser.
   if [[ $list_rc -eq 12 ]]; then
@@ -1743,7 +1744,7 @@ _ui_flash_pick_image() {
       --file-filter="Images (*.img *.img.bz2 *.img.gz *.img.xz *.img.zst) | *.img *.img.bz2 *.img.gz *.img.xz *.img.zst" \
       --center \
       --width=700 \
-      --height=500
+      --height=500 2>/dev/null || true
     return
   fi
 
@@ -1780,7 +1781,7 @@ _ui_flash_pick_device() {
     --height=420 \
     --button="Cancel":1 \
     --button="OK":0 \
-    "${table[@]}" 2>/dev/null
+    "${table[@]}" 2>/dev/null || true
 }
 
 _ui_flash() {
@@ -1813,10 +1814,9 @@ _ui_flash() {
   local allow_system=0
   echo "[_ui_flash] checking system disk (device=$device)..." >&2
   local is_sys=0
-  set +e
-  bash "$BACKEND" --action is-system-disk --device "$device" >/dev/null 2>&1
-  is_sys=$?
-  set -e
+  if ! bash "$BACKEND" --action is-system-disk --device "$device" >/dev/null 2>&1; then
+    is_sys=$?
+  fi
   echo "[_ui_flash] is-system-disk exit=$is_sys (0=system disk)" >&2
   if [[ $is_sys -eq 0 ]]; then
     yad --warning \
@@ -1852,18 +1852,16 @@ Do not continue unless you have explicitly verified that overwriting it is inten
 
   echo "[_ui_flash] running preflight..." >&2
   local preflight_output preflight_rc=0
-  set +e
+  preflight_rc=0
   if [[ $EUID -eq 0 ]]; then
-    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device")"
+    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device")" || preflight_rc=$?
   elif command -v sudo >/dev/null 2>&1; then
-    preflight_output="$(sudo bash "$BACKEND" --action preflight --image "$image" --device "$device")"
+    preflight_output="$(sudo bash "$BACKEND" --action preflight --image "$image" --device "$device")" || preflight_rc=$?
   elif command -v pkexec >/dev/null 2>&1; then
-    preflight_output="$(pkexec bash "$BACKEND" --action preflight --image "$image" --device "$device")"
+    preflight_output="$(pkexec bash "$BACKEND" --action preflight --image "$image" --device "$device")" || preflight_rc=$?
   else
-    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device")"
+    preflight_output="$(bash "$BACKEND" --action preflight --image "$image" --device "$device")" || preflight_rc=$?
   fi
-  preflight_rc=$?
-  set -e
   echo "[_ui_flash] preflight exit=$preflight_rc" >&2
   echo "$preflight_output" >&2
 
@@ -2260,8 +2258,7 @@ Leave blank to validate against the live running system." \
 
 _ui_diagnostics() {
   while true; do
-    local choice rc
-    set +e
+    local choice rc=0
     choice="$(yad --list \
       --title="Diagnostics" \
       --text="Select a diagnostic to run:" \
@@ -2280,9 +2277,7 @@ _ui_diagnostics() {
       "Package Manifest" "All installed packages (pacman -Q)" \
       "Verify Customizations" "Run verify-customizations.py against the running system" \
       "A/B Slot Status" "RAUC A/B slot health, booted slot, and update state" \
-      2>/dev/null)"
-    rc=$?
-    set -e
+      2>/dev/null)" || rc=$?
 
     [[ $rc -eq 0 ]] || return 0
 
@@ -2625,11 +2620,8 @@ _ui_main() {
   _check_persisted_sync
 
   while true; do
-    local choice rc
-    set +e
-    choice="$(_ui_select_action)"
-    rc=$?
-    set -e
+    local choice rc=0
+    choice="$(_ui_select_action)" || rc=$?
 
     # yad exit codes: 0=OK, 1=Cancel, 70=window close, etc.
     [[ $rc -eq 0 ]] || exit 0

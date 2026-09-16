@@ -505,14 +505,19 @@ _backend_build() {
   else
     OUT_FINAL="$(dirname "$IMG_BASE")/$out_basename"
   fi
+  OUT_FINAL="$(realpath -m -- "$OUT_FINAL")"
   OUT="${OUT_FINAL}.building"
 
   [[ -n "$WORKDIR" ]] || WORKDIR="$(dirname "$OUT")/.nvidia-usb-work"
+  WORKDIR="$(realpath -m -- "$WORKDIR")"
+
+  cleanup_permit_path "$OUT"
 
   # shellcheck disable=SC2034
   LOOPDEV=""
   local _trap_rc
   local _cleanup_done=0
+  local _building_path="${OUT:-}"
   mkdir -p /home/.steamos-build/logs
   # shellcheck disable=SC2154  # _remaining is declared inside trap string
   trap '_trap_rc=$?; trap - EXIT; set +e; log_close 2>/dev/null || true; if [[ "${_cleanup_done:-0}" -eq 0 ]]; then
@@ -527,12 +532,24 @@ _backend_build() {
     _trap_cleanup_rc=0
     overlay_cleanup 2>/dev/null || _trap_cleanup_rc=1
     cleanup_environment 2>/dev/null || _trap_cleanup_rc=1
+    # Remove partially-built working image on failure so the next build
+    # starts fresh rather than resuming from a potentially corrupted state.
+    # Only if we hold the workspace lock and teardown succeeded.
+    if [[ -n "${WORKSPACE_LOCK_FD:-}" && -n "${_building_path:-}" && "${_trap_cleanup_rc:-1}" -eq 0 ]]; then
+      rm -f "${_building_path}" "${_building_path}.src-fingerprint" 2>/dev/null || true
+    fi
     if ((_trap_cleanup_rc != 0)); then
       warn "EXIT trap: cleanup failed — workspace may need manual cleanup"
       _trap_rc=1
     fi
     _remaining=""
-    _remaining="$(findmnt -rno TARGET,SOURCE,FSTYPE 2>/dev/null | grep -v "^/dev\|^proc\|^sys\|^run\|^tmp\|^home\|^root\|^opt\|^nix\|^srv\|^efi\|^esp" | grep -v "^-")"
+    if [[ -n "${WORKDIR:-}" ]]; then
+      _remaining="$(findmnt -rno TARGET 2>/dev/null | while IFS= read -r _t; do
+        case "$_t" in
+          "$WORKDIR"|"$WORKDIR"/*) printf '%s\n' "$_t" ;;
+        esac
+      done)"
+    fi
     if [[ -n "$_remaining" ]]; then
       warn "Remaining mounts after cleanup:"
       warn "$_remaining"
@@ -593,6 +610,13 @@ _validate_mount_image() {
   cleanup_track_loop "$VALIDATE_LOOP" "$img" "validate image"
   log "  Loop: $VALIDATE_LOOP"
   run_dangerous_cmd udevadm settle --timeout=10
+
+  # Re-sync kernel partition table with on-disk GPT to ensure
+  # blockdev --getsize64 reflects the actual partition sizes.
+  if command -v partx &>/dev/null; then
+    log "Re-syncing partition table on $VALIDATE_LOOP"
+    partx -u "$VALIDATE_LOOP" 2>/dev/null || true
+  fi
 
   log "Scanning partitions on $VALIDATE_LOOP"
   local part label

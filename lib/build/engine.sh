@@ -280,7 +280,7 @@ build_recipe() {
 
   # Create build root
   local build_root=""
-  build_root="$(_build_create_root "$name" "$profile")" || die "Failed to create build root"
+  _build_create_root "$name" "$profile" build_root || die "Failed to create build root"
 
   # Ensure cleanup on exit — save and restore any parent EXIT trap
   _build_cleanup_build_root=""
@@ -306,6 +306,11 @@ build_recipe() {
   # Build
   _build_run "$build_root" "$recipe_dir" "$output_dir" || {
     warn "Build failed for $name"
+    _build_destroy_root "$build_root" 2>/dev/null || true
+    trap - EXIT
+    if [[ -n "$_build_parent_exit_trap" ]]; then
+      eval "$_build_parent_exit_trap"
+    fi
     return 1
   }
 
@@ -317,17 +322,50 @@ build_recipe() {
     log " "
     log "IMPORTANT: Direct install mode installs into the build root overlay."
     log "The driver is now available in the build root."
+
+    # Collect built kernel modules from the build root before destruction
+    if [[ -d "$build_root/merged/usr/lib/modules" ]]; then
+      if [[ -z "${MERGED:-}" || ! -d "${MERGED:-}" ]]; then
+        warn "Cannot collect kernel modules: MERGED is not set or not a directory"
+        _build_destroy_root "$build_root" 2>/dev/null || true
+        trap - EXIT
+        if [[ -n "$_build_parent_exit_trap" ]]; then
+          eval "$_build_parent_exit_trap"
+        fi
+        return 1
+      fi
+      log "  Collecting kernel modules from build root"
+      if ! rsync -a "$build_root/merged/usr/lib/modules/" "$MERGED/usr/lib/modules/"; then
+        warn "Failed to collect kernel modules from build root for $name"
+        _build_destroy_root "$build_root" 2>/dev/null || true
+        trap - EXIT
+        if [[ -n "$_build_parent_exit_trap" ]]; then
+          eval "$_build_parent_exit_trap"
+        fi
+        return 1
+      fi
+    fi
   else
     # Collect artifact (package build mode only)
     local artifact=""
     artifact="$(_build_collect_artifact "$output_dir" "$name")" || {
       warn "Failed to collect artifact for $name"
+      _build_destroy_root "$build_root" 2>/dev/null || true
+      trap - EXIT
+      if [[ -n "$_build_parent_exit_trap" ]]; then
+        eval "$_build_parent_exit_trap"
+      fi
       return 1
     }
 
     # Verify artifact
     _build_verify_artifact "$artifact" "$profile" || {
       warn "Artifact verification failed for $name"
+      _build_destroy_root "$build_root" 2>/dev/null || true
+      trap - EXIT
+      if [[ -n "$_build_parent_exit_trap" ]]; then
+        eval "$_build_parent_exit_trap"
+      fi
       return 1
     }
 
@@ -345,8 +383,12 @@ build_recipe() {
     eval "$_build_parent_exit_trap"
     _build_parent_exit_trap=""
   fi
-  _build_destroy_root "$build_root"
-
+  if ! _build_destroy_root "$build_root"; then
+    warn "build_recipe: build root cleanup failed for $name"
+    trap - EXIT
+    return 1
+  fi
+  trap - EXIT
   return 0
 }
 
@@ -623,15 +665,24 @@ _build_load_profile() {
 
 # Create a clean build root using the configured backend.
 _build_create_root() {
-  local name="${1:?}" profile="${2:?}"
+  local name="${1:?}" profile="${2:?}" output_var="${3:?}"
   local backend="${BUILD_BACKEND:-overlay-chroot}"
+
+  # Validate output variable name
+  if [[ ! "$output_var" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    warn "_build_create_root: invalid output variable name: $output_var"
+    return 2
+  fi
+
+  local -n _build_root_ref="$output_var"
+  _build_root_ref=""
 
   case "$backend" in
     arch-devtools)
-      _build_devtools_create_root "$name" "$profile"
+      _build_devtools_create_root "$name" "$profile" _build_root_ref
       ;;
     overlay-chroot)
-      _build_overlay_create_root "$name" "$profile"
+      _build_overlay_create_root "$name" "$profile" _build_root_ref
       ;;
     *)
       die "Unknown build backend: $backend"
