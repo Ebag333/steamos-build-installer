@@ -66,7 +66,8 @@ overlay_mount() {
   overlay_opts+=",lowerdir=$lowerdir,upperdir=$UPPER,workdir=$OVLWORK"
 
   cleanup_mount "$MERGED" "overlay merge" -- -t overlay overlay -o "$overlay_opts"
-  mount --make-rprivate "$MERGED"
+  mount --make-rprivate "$MERGED" \
+    || die "Failed to make overlay mount rprivate: $MERGED"
 
   # Create mount points INSIDE the overlay so they exist in the merged view.
   mkdir -p "$MERGED/proc" "$MERGED/sys" "$MERGED/dev" "$MERGED/tmp"
@@ -95,7 +96,8 @@ overlay_mount() {
   # match inside the chroot (host sees /path/to/merged, chroot sees /), so
   # pacman can't resolve mount points for its cachedir space check.
   cleanup_mount "$MERGED/tmp" "chroot tmp" -- --bind /tmp
-  mount --make-private "$MERGED/tmp"
+  mount --make-private "$MERGED/tmp" \
+    || die "Failed to make /tmp mount private: $MERGED/tmp"
 
   # Set up chroot essentials.
   rm -f "$MERGED/etc/resolv.conf"
@@ -264,7 +266,8 @@ _overlay_mount_with_image() {
     || die "Could not allocate loop device for overlay workspace"
   cleanup_track_loop "$OVL_LOOPDEV" "$OVL_IMG" "overlay workspace"
   cleanup_mount "$OVL_MNT" "overlay workspace" -- "$OVL_LOOPDEV"
-  mount --make-private "$OVL_MNT"
+  mount --make-private "$OVL_MNT" \
+    || die "Failed to make overlay workspace mount private: $OVL_MNT"
 
   # Set these before validation so _overlay_check_cache can inspect/clear them.
   UPPER="$OVL_MNT/upper"
@@ -392,8 +395,10 @@ mount_effective_etc() {
   if mountpoint -q "$root/etc" 2>/dev/null; then
     die "Refusing to mount effective /etc: $root/etc is already a mountpoint"
   fi
-  strict_unmount "$lower" "stale effective /etc lower bind"
-  strict_unmount "$varmnt" "stale effective /etc var mount"
+  strict_unmount "$lower" "stale effective /etc lower bind" \
+    || die "Failed to unmount stale effective /etc lower bind: $lower"
+  strict_unmount "$varmnt" "stale effective /etc var mount" \
+    || die "Failed to unmount stale effective /etc var mount: $varmnt"
 
   # The upper/work paths do not exist in the host-side mountpoint until VARPART
   # is mounted here.  Mount var first, then inspect the real SteamOS overlay.
@@ -490,7 +495,11 @@ setup_clear_stale_state() {
   log "Checking for stale build state"
 
   # Clean up any mounts tracked by a previous (possibly killed) run.
-  cleanup_unmount_registered || warn "Some tracked mounts could not be cleaned"
+  local _stale_rc=0
+  if ! cleanup_unmount_registered; then
+    warn "setup_clear_stale_state: tracked mount cleanup failed"
+    _stale_rc=1
+  fi
 
   # Give overlay_cleanup the canonical paths even though this is running
   # before _overlay_mount_with_image().
@@ -500,7 +509,217 @@ setup_clear_stale_state() {
   OVL_LOOPDEV=""
 
   # ============================================================
-  # 1. Overlay/chroot FIRST.
+  # 0. Kill workspace-owned processes in old namespaces
+  # ============================================================
+  # Previous builds may have left gpg-agent processes alive in old mount
+  # namespaces. These hold mounts and loops open that are invisible in our
+  # namespace. We must identify, verify, and terminate them.
+  # _stale_rc is used by namespace cleanup and effective /etc overlay
+  # teardown below. It is initialized above and propagated through all
+  # cleanup phases.
+
+  if [[ -n "${WORKDIR:-}" && -d "${WORKDIR:-}" ]]; then
+    log "Checking for workspace-owned processes in old namespaces"
+    local _our_mnt_ns
+    _our_mnt_ns="$(readlink /proc/self/ns/mnt 2>/dev/null)" || _our_mnt_ns=""
+
+    # Find all processes whose root is inside our workspace
+    local _stale_pids
+    _stale_pids="$(pgrep -x gpg-agent 2>/dev/null || true)"
+    # Also check for other known workspace processes
+    _stale_pids+=" $(pgrep -x 'pacman' 2>/dev/null || true)"
+    _stale_pids="$(echo "$_stale_pids" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+
+    # Store start times per PID so the force-kill loop can compare against
+    # the original value (not a freshly-read one that would always match).
+    local -A _pid_start_times=()
+
+    local _pid
+    for _pid in $_stale_pids; do
+      [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+
+      # Verify workspace ownership via /proc/$pid/root
+      local _pid_root
+      _pid_root="$(readlink "/proc/$_pid/root" 2>/dev/null)" || _pid_root=""
+      [[ -n "$_pid_root" ]] || continue
+
+      case "$_pid_root" in
+        "$WORKDIR"|"$WORKDIR"/*) ;;
+        *) continue ;; # Not a workspace process
+      esac
+
+      # Verify process start time to avoid killing a recycled PID
+      local _pid_start
+      _pid_start="$(awk '{print $22}' "/proc/$_pid/stat" 2>/dev/null)" || _pid_start=""
+      if [[ -z "$_pid_start" ]]; then
+        debug "setup_clear_stale_state: could not read start time for PID $_pid — skipping"
+        continue
+      fi
+      local _uptime
+      _uptime="$(awk '{print int($1)}' /proc/uptime 2>/dev/null)" || _uptime=0
+      local _clk_tck
+      _clk_tck="$(getconf CLK_TCK 2>/dev/null)" || _clk_tck=100
+      local _pid_start_sec=0
+      if [[ -n "$_pid_start" && $_clk_tck -gt 0 ]]; then
+        _pid_start_sec=$(( _pid_start / _clk_tck ))
+      fi
+      local _pid_age=$(( _uptime - _pid_start_sec ))
+      if [[ $_pid_age -lt 60 ]]; then
+        debug "setup_clear_stale_state: PID $_pid started ${_pid_age}s ago — too recent, skipping"
+        continue
+      fi
+
+      # Preserve this PID's start time for the force-kill identity check.
+      _pid_start_times[$_pid]="$_pid_start"
+
+      # Get the process's mount namespace
+      local _pid_mnt_ns
+      _pid_mnt_ns="$(readlink "/proc/$_pid/ns/mnt" 2>/dev/null)" || _pid_mnt_ns=""
+
+      # Get process info for logging
+      local _pid_cmd
+      _pid_cmd="$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)" || _pid_cmd=""
+
+      log "setup_clear_stale_state: found workspace process PID $_pid ($_pid_cmd)"
+      log "  root=$_pid_root ns=$_pid_mnt_ns"
+
+      # Check if this process is in a different mount namespace
+      if [[ -n "$_our_mnt_ns" && -n "$_pid_mnt_ns" && "$_pid_mnt_ns" != "$_our_mnt_ns" ]]; then
+        log "  Process is in a different mount namespace — entering for cleanup"
+
+        # Revalidate PID identity before entering its namespace
+        local _pre_ns_start
+        _pre_ns_start="$(awk '{print $22}' "/proc/$_pid/stat" 2>/dev/null)" || _pre_ns_start=""
+        if [[ -z "$_pre_ns_start" ]]; then
+          warn "setup_clear_stale_state: PID $_pid disappeared before namespace entry"
+          continue
+        fi
+        if [[ "$_pre_ns_start" != "${_pid_start_times[$_pid]:-}" ]]; then
+          warn "setup_clear_stale_state: PID $_pid recycled before namespace entry (start time mismatch)"
+          continue
+        fi
+
+        # Enter the old namespace and clean up mounts there
+        # Use nsenter --mount to enter the old namespace
+        local _ns_cleanup_rc=0
+        nsenter --mount="/proc/$_pid/ns/mnt" -- \
+          /bin/sh -c '
+            workspace="$1"
+            _ns_mnt_file=$(mktemp) || { echo "WARN: mktemp failed" >&2; exit 1; }
+            if findmnt -rno TARGET --submounts > "$_ns_mnt_file" 2>/dev/null; then
+              sort -r < "$_ns_mnt_file" > "$_ns_mnt_file.sorted"
+              mv "$_ns_mnt_file.sorted" "$_ns_mnt_file"
+            else
+              echo "WARN: findmnt failed in namespace" >&2
+              rm -f "$_ns_mnt_file"
+              exit 1
+            fi
+            _ns_fail=0
+            while IFS= read -r m; do
+              [ -n "$m" ] || continue
+              case "$m" in
+                "$workspace"|"$workspace"/*)
+                  if ! umount -l "$m" 2>/dev/null; then
+                    echo "WARN: namespace unmount failed for $m" >&2
+                    _ns_fail=1
+                  fi
+                  ;;
+              esac
+            done < "$_ns_mnt_file"
+            rm -f "$_ns_mnt_file"
+            exit "$_ns_fail"
+          ' _ "$WORKDIR" 2>/dev/null || _ns_cleanup_rc=1
+
+        if [[ $_ns_cleanup_rc -ne 0 ]]; then
+          warn "setup_clear_stale_state: namespace cleanup for PID $_pid had errors — some mounts may be stuck"
+          _stale_rc=1
+        fi
+      fi
+
+      # Revalidate PID identity before signaling — compare current
+      # start time against the value captured during initial discovery.
+      if [[ -z "${_pid_start_times[$_pid]:-}" ]]; then
+        debug "setup_clear_stale_state: PID $_pid has no preserved start time — skipping SIGTERM"
+        continue
+      fi
+      local _recheck_start
+      _recheck_start="$(awk '{print $22}' "/proc/$_pid/stat" 2>/dev/null)" || _recheck_start=""
+      if [[ -z "$_recheck_start" ]]; then
+        debug "setup_clear_stale_state: PID $_pid disappeared before SIGTERM"
+        continue
+      fi
+      if [[ "$_recheck_start" != "${_pid_start_times[$_pid]}" ]]; then
+        debug "setup_clear_stale_state: PID $_pid recycled — skipping"
+        continue
+      fi
+
+      # Gracefully terminate the process
+      log "  Sending SIGTERM to PID $_pid"
+      kill "$_pid" 2>/dev/null || true
+    done
+
+    # Wait for processes to exit
+    local _wait_count=0
+    while ((_wait_count < 30)); do
+      local _any_alive=0
+      for _pid in $_stale_pids; do
+        [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+        if kill -0 "$_pid" 2>/dev/null; then
+          local _pid_root
+          _pid_root="$(readlink "/proc/$_pid/root" 2>/dev/null)" || _pid_root=""
+          case "$_pid_root" in
+            "$WORKDIR"|"$WORKDIR"/*)
+              _any_alive=1
+              break
+              ;;
+          esac
+        fi
+      done
+      if ((_any_alive == 0)); then
+        break
+      fi
+      sleep 0.2
+      ((_wait_count++)) || true
+    done
+
+    # Force kill any remaining workspace processes
+    for _pid in $_stale_pids; do
+      [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+      # Skip PIDs that were not eligible for termination (e.g., too young)
+      if [[ -z "${_pid_start_times[$_pid]:-}" ]]; then
+        debug "setup_clear_stale_state: skipping PID $_pid (no preserved start time — was too young)"
+        continue
+      fi
+      if kill -0 "$_pid" 2>/dev/null; then
+        local _pid_root
+        _pid_root="$(readlink "/proc/$_pid/root" 2>/dev/null)" || _pid_root=""
+        case "$_pid_root" in
+          "$WORKDIR"|"$WORKDIR"/*)
+            # Revalidate PID identity before force kill — compare current
+            # start time against the value captured during initial discovery.
+            local _recheck_start
+            _recheck_start="$(awk '{print $22}' "/proc/$_pid/stat" 2>/dev/null)" || _recheck_start=""
+            if [[ -z "$_recheck_start" ]]; then
+              debug "setup_clear_stale_state: PID $_pid disappeared before SIGKILL"
+              continue
+            fi
+            if [[ "$_recheck_start" != "${_pid_start_times[$_pid]}" ]]; then
+              debug "setup_clear_stale_state: PID $_pid recycled — skipping force kill"
+              continue
+            fi
+            warn "setup_clear_stale_state: SIGKILL to workspace process PID $_pid"
+            kill -9 "$_pid" 2>/dev/null || true
+            ;;
+        esac
+      fi
+    done
+
+    # Brief wait for kernel to release resources after SIGKILL
+    sleep 1
+  fi
+
+  # ============================================================
+  # 1. Overlay/chroot SECOND.
   #
   # MERGED references:
   #   - MNT as lowerdir
@@ -508,7 +727,9 @@ setup_clear_stale_state() {
   #
   # Therefore neither of those may be torn down first.
   # ============================================================
-  if ! overlay_cleanup; then
+  local _cleanup_rc=0
+  overlay_cleanup || _cleanup_rc=$?
+  if ((_cleanup_rc != 0)); then
     die "Could not safely clean stale overlay state. Refusing to touch its backing filesystems."
   fi
 
@@ -520,8 +741,13 @@ setup_clear_stale_state() {
     die "Stale overlay workspace remains mounted at $OVL_MNT"
   fi
 
-  local remaining_overlay_loops
-  remaining_overlay_loops="$(loops_for_file "$OVL_IMG")"
+  local remaining_overlay_loops _remaining_rc=0
+  remaining_overlay_loops="$(loops_for_file "$OVL_IMG")" || _remaining_rc=$?
+
+  if [[ $_remaining_rc -ne 0 ]]; then
+    warn "Could not determine loop state for $OVL_IMG (rc=$_remaining_rc) — treating as still present"
+    die "Could not safely recover the previous overlay workspace; reboot may be required"
+  fi
 
   if [[ -n "$remaining_overlay_loops" ]]; then
     local all_autoclear=1
@@ -540,6 +766,35 @@ setup_clear_stale_state() {
     if ((all_autoclear == 0)); then
       die "Could not safely recover the previous overlay workspace; reboot may be required"
     fi
+
+    if ((all_autoclear == 1)); then
+      # Wait for AUTOCLEAR loops to actually detach (up to 5 seconds)
+      local _waited=0
+      local _still_present=1
+      while ((_waited < 50)); do
+        local _check_loops _check_rc=0
+        _check_loops="$(loops_for_file "$OVL_IMG")" || _check_rc=$?
+        if [[ $_check_rc -ne 0 ]]; then
+          warn "Could not query loop state for $OVL_IMG (rc=$_check_rc) — continuing to wait"
+        elif [[ -z "$_check_loops" ]]; then
+          _still_present=0
+          break
+        fi
+        sleep 0.1
+        ((_waited++)) || true
+      done
+      if ((_still_present)); then
+        warn "setup_clear_stale_state: AUTOCLEAR=1 loops still present after 5s — forcing detach"
+        while IFS="" read -r dev; do
+          [[ -n "$dev" ]] || continue
+          local _detach_rc=0
+          strict_detach_loop "$dev" 2>/dev/null || _detach_rc=$?
+          if ((_detach_rc != 0)); then
+            warn "setup_clear_stale_state: loop detach failed for $dev (rc=$_detach_rc)"
+          fi
+        done <<<"$_check_loops"
+      fi
+    fi
   fi
 
   # ============================================================
@@ -555,12 +810,21 @@ setup_clear_stale_state() {
     local _etc_merged="$MNT/etc"
     if mountpoint -q "$_etc_merged" 2>/dev/null; then
       warn "Cleaning stale effective /etc overlay at $_etc_merged"
-      strict_unmount "$_etc_merged" "stale effective /etc overlay"
+      if ! strict_unmount "$_etc_merged" "stale effective /etc overlay"; then
+        warn "Failed to unmount stale mount: $_etc_merged"
+        _stale_rc=1
+      fi
     fi
   fi
 
-  strict_unmount "$_etc_lower" "stale effective /etc lower bind"
-  strict_unmount "$_etc_var" "stale effective /etc var mount"
+  if ! strict_unmount "$_etc_lower" "stale effective /etc lower bind"; then
+    warn "Failed to unmount stale mount: $_etc_lower"
+    _stale_rc=1
+  fi
+  if ! strict_unmount "$_etc_var" "stale effective /etc var mount"; then
+    warn "Failed to unmount stale mount: $_etc_var"
+    _stale_rc=1
+  fi
 
   rmdir "$_etc_lower" "$_etc_var" 2>/dev/null || true
   _EFFECTIVE_ETC_MOUNTED=0
@@ -577,7 +841,10 @@ setup_clear_stale_state() {
 
   if mountpoint -q "$_tmp_etc_merged" 2>/dev/null; then
     warn "Cleaning stale rootfs /etc reconstruction overlay at $_tmp_etc_merged"
-    strict_unmount "$_tmp_etc_merged" "stale rootfs /etc reconstruction overlay"
+    if ! strict_unmount "$_tmp_etc_merged" "stale rootfs /etc reconstruction overlay"; then
+      warn "Failed to unmount stale mount: $_tmp_etc_merged"
+      _stale_rc=1
+    fi
   fi
 
   for _tmp_mount in \
@@ -591,15 +858,27 @@ setup_clear_stale_state() {
     "$WORKDIR/ovl-clean-mnt"; do
     if mountpoint -q "$_tmp_mount" 2>/dev/null; then
       warn "Cleaning stale rootfs helper mount: $_tmp_mount"
-      strict_unmount "$_tmp_mount" "stale rootfs helper mount"
+      if ! strict_unmount "$_tmp_mount" "stale rootfs helper mount"; then
+        warn "Failed to unmount stale mount: $_tmp_mount"
+        _stale_rc=1
+      fi
     fi
   done
+
+  if ((_stale_rc)); then
+    warn "Stale cleanup: mount failures detected — preserving workspace"
+    return 1
+  fi
 
   # mount -o loop may have left an explicit loop attachment for the temporary
   # reconstructed filesystem if a prior run died before unmount.
   local _root_tmp="$WORKDIR/rootfs-writable.img"
-  local _root_tmp_loops
-  _root_tmp_loops="$(loops_for_file "$_root_tmp")"
+  local _root_tmp_loops _root_tmp_rc=0
+  _root_tmp_loops="$(loops_for_file "$_root_tmp")" || _root_tmp_rc=$?
+  if [[ $_root_tmp_rc -ne 0 ]]; then
+    warn "setup_clear_stale_state: could not determine loop state for $_root_tmp (rc=$_root_tmp_rc)"
+    return 1
+  fi
   if [[ -n "$_root_tmp_loops" ]]; then
     warn "Cleaning stale temporary rootfs loop attachments"
     while IFS="" read -r dev; do
@@ -614,46 +893,51 @@ setup_clear_stale_state() {
   # 2. Main image partitions SECOND.
   # ============================================================
   local dev m
-  local image_loops
+  local image_loops _image_loops_init_rc=0
 
-  image_loops="$(loops_for_file "$OUT")"
+  image_loops="$(loops_for_file "$OUT")" || _image_loops_init_rc=$?
+  if [[ $_image_loops_init_rc -ne 0 ]]; then
+    warn "setup_clear_stale_state: could not determine loop state for $OUT (rc=$_image_loops_init_rc)"
+    return 1
+  fi
 
   while IFS="" read -r dev; do
     [[ -n "$dev" ]] || continue
 
     warn "Cleaning stale image loop: $dev"
 
+    local _loop_mounts _inv_rc=0
+    _loop_mounts="$(mounts_for_loop "$dev")" || _inv_rc=$?
+    if ((_inv_rc != 0)); then
+      die "Could not inventory mounts for $dev"
+    fi
     while IFS="" read -r m; do
       [[ -n "$m" ]] || continue
 
       if ! strict_unmount "$m" "stale image filesystem"; then
         die "Could not safely unmount $m from $dev"
       fi
-    done < <(mounts_for_loop "$dev")
+    done <<<"$_loop_mounts"
 
     if ! strict_detach_loop "$dev"; then
       die "Could not safely detach stale image loop $dev"
     fi
 
-    # Kill jbd2 thread if the loop is still visible after detach (AUTOCLEAR=1).
-    # Same issue as overlay loops — jbd2 holds the ext4 superblock alive.
-    local _dev_name="${dev##/dev/}" _jbd2_pid
-    _jbd2_pid="$(pgrep -f "jbd2/${_dev_name}-" 2>/dev/null || true)"
-    if [[ -n "$_jbd2_pid" ]]; then
-      log "Killing jbd2 thread for stale image loop $dev (pid $_jbd2_pid)"
-      kill "$_jbd2_pid" 2>/dev/null || true
-      local _wait_i
-      for _wait_i in $(seq 1 30); do
-        losetup "$dev" >/dev/null 2>&1 || break # lint-ignore: strict-mount
-        if [[ "$_wait_i" -eq 10 ]]; then
-          kill -9 "$_jbd2_pid" 2>/dev/null || true
-        fi
-        sleep 0.2
-      done
-    fi
+    # Wait for the loop to be released (jbd2 may be flushing metadata).
+    # Do NOT signal jbd2 — it is a kernel thread, not a build-owned process.
+    local _wait_i
+    for _wait_i in $(seq 1 50); do
+      losetup "$dev" >/dev/null 2>&1 || break # lint-ignore: strict-mount
+      sleep 0.2
+    done
   done <<<"$image_loops"
 
-  image_loops="$(loops_for_file "$OUT")"
+  local _image_loops_rc=0
+  image_loops="$(loops_for_file "$OUT")" || _image_loops_rc=$?
+  if [[ $_image_loops_rc -ne 0 ]]; then
+    warn "Could not determine loop state for $OUT (rc=$_image_loops_rc) — refusing to delete"
+    return 1
+  fi
   if [[ -n "$image_loops" ]]; then
     # Check if all remaining loops are AUTOCLEAR=1 (kernel will clean up)
     local _all_ac=1
@@ -665,6 +949,21 @@ setup_clear_stale_state() {
     done <<<"$image_loops"
     if ((_all_ac == 1)); then
       log "Stale image loops still visible but all AUTOCLEAR=1 — kernel will auto-detach"
+      # Re-check after forced detach attempt to ensure kernel has cleaned up
+      local _remaining_loops _remaining_rc=0
+      _remaining_loops="$(loops_for_file "$OUT")" || _remaining_rc=$?
+      if [[ $_remaining_rc -ne 0 ]]; then
+        warn "Could not re-check loop state for $OUT (rc=$_remaining_rc) — refusing to delete"
+        return 1
+      fi
+      if [[ -n "$_remaining_loops" ]]; then
+        warn "setup_clear_stale_state: loops still reference $OUT after detach attempt"
+        warn "setup_clear_stale_state: refusing to delete image while loops are active"
+        while IFS= read -r _loop; do
+          warn "  $_loop"
+        done <<<"$_remaining_loops"
+        return 1
+      fi
     else
       die "Stale loop device still references $OUT; refusing to delete the backing image"
     fi
@@ -673,21 +972,30 @@ setup_clear_stale_state() {
   # ============================================================
   # 3. Explicit project mountpoints.
   # ============================================================
+  local _stale_rc=0
   for m in "$HOMEMNT" "$EFIMNT" "$MNT"; do
     [[ -n "$m" ]] || continue
 
     if mountpoint -q "$m" 2>/dev/null; then
       warn "Unexpected stale project mount: $m"
-      strict_unmount "$m" "project filesystem"
+      if ! strict_unmount "$m" "project filesystem"; then
+        warn "Failed to unmount project filesystem: $m"
+        _stale_rc=1
+      fi
     fi
   done
 
   # ============================================================
   # 4. NOW it is safe to delete an incomplete working image.
   # ============================================================
-  if [[ -f "$OUT" && ! -f "${OUT}.src-fingerprint" ]]; then
+  if ((_stale_rc != 0)); then
+    warn "setup_clear_stale_state: project unmount failures — refusing to delete $OUT"
+    return 1
+  fi
+
+  if [[ -f "$OUT" ]]; then
     warn "Removing incomplete output from previous failed run"
-    rm -f "$OUT"
+    rm -f "$OUT" "${OUT}.src-fingerprint"
   fi
 
   if [[ ! -f "$OUT" && -f "${OUT}.src-fingerprint" ]]; then
@@ -707,9 +1015,47 @@ setup_clear_stale_state() {
   # ============================================================
   # 6. Clean up stale build root overlays from previous runs.
   # ============================================================
-  _cleanup_stale_build_roots
+  if ! _cleanup_stale_build_roots; then
+    warn "setup_clear_stale_state: stale build root cleanup had failures"
+    _stale_rc=1
+  fi
 
-  _cleanup_stale_build_loops
+  if ! _cleanup_stale_build_loops; then
+    warn "setup_clear_stale_state: stale build loop cleanup failed"
+    _stale_rc=1
+  fi
+
+  if ((_stale_rc)); then
+    warn "setup_clear_stale_state: stale state recovery had errors"
+    return 1
+  fi
+
+  # Final verification: check if any stale loops remain
+  local _final_loops=0
+  if [[ -n "${OVL_IMG:-}" ]]; then
+    local _final_check _final_rc=0
+    _final_check="$(loops_for_file "$OVL_IMG")" || _final_rc=$?
+    if [[ $_final_rc -ne 0 ]]; then
+      warn "Could not verify loop state for $OVL_IMG (rc=$_final_rc)"
+      _final_loops=1
+    else
+      [[ -z "$_final_check" ]] || _final_loops=1
+    fi
+  fi
+  if [[ -n "${OUT:-}" ]]; then
+    local _final_check _final_rc=0
+    _final_check="$(loops_for_file "$OUT")" || _final_rc=$?
+    if [[ $_final_rc -ne 0 ]]; then
+      warn "Could not verify loop state for $OUT (rc=$_final_rc)"
+      _final_loops=1
+    else
+      [[ -z "$_final_check" ]] || _final_loops=1
+    fi
+  fi
+
+  if ((_final_loops)); then
+    die "Stale workspace loops remain after recovery — refusing to start new build"
+  fi
 
   log "Stale build state is clean"
 }
@@ -721,13 +1067,20 @@ _cleanup_stale_build_roots() {
   local build_roots_dir="$WORKDIR/build-roots"
   [[ -d "$build_roots_dir" ]] || return 0
 
+  local _func_rc=0
+
   local stale_img
   for stale_img in "$build_roots_dir"/*/overlay-work.img; do
     [[ -f "$stale_img" ]] || continue
 
     local stale_dir="${stale_img%/overlay-work.img}"
-    local stale_loops
-    stale_loops="$(loops_for_file "$stale_img")"
+    local stale_loops _stale_rc=0
+    stale_loops="$(loops_for_file "$stale_img")" || _stale_rc=$?
+
+    if [[ $_stale_rc -ne 0 ]]; then
+      warn "Could not determine loop state for $stale_img (rc=$_stale_rc) — refusing to remove $stale_dir"
+      continue
+    fi
 
     if [[ -z "$stale_loops" ]]; then
       # No loop attached — just remove the directory
@@ -740,53 +1093,70 @@ _cleanup_stale_build_roots() {
 
     warn "Cleaning stale build root: $stale_dir"
 
-    # Kill processes still using the stale build root
     local merged="$stale_dir/merged"
-    if [[ -d "$merged" ]]; then
-      fuser -k "$merged" 2>/dev/null || true
-      sleep 1
-    fi
 
     # Unmount anything backed by these loops
     while IFS="" read -r loop; do
       [[ -n "$loop" ]] || continue
 
-      local m
+      local m _loop_mounts _inv_rc=0
+      _loop_mounts="$(mounts_for_loop "$loop")" || _inv_rc=$?
+      if ((_inv_rc != 0)); then
+        die "Could not inventory mounts for $loop"
+      fi
       while IFS="" read -r m; do
         [[ -n "$m" ]] || continue
         if mountpoint -q "$m" 2>/dev/null; then
           warn "  Unmounting stale build root mount: $m"
-          strict_unmount "$m" "stale build root mount"
+          if ! strict_unmount "$m" "stale build root mount"; then
+            warn "  Failed to unmount stale build root mount: $m"
+            _func_rc=1
+          fi
         fi
-      done < <(mounts_for_loop "$loop")
+      done <<<"$_loop_mounts"
 
       # Also try unmounting known paths inside the build root
       for m in "$merged/dev/shm" "$merged/dev" "$merged/sys" "$merged/proc" "$merged/tmp" "$merged"; do
         [[ -e "$m" ]] || continue
         if mountpoint -q "$m" 2>/dev/null; then
           warn "  Unmounting stale build root path: $m"
-          strict_unmount "$m" "stale build root mount"
+          if ! strict_unmount "$m" "stale build root mount"; then
+            warn "  Failed to unmount stale build root path: $m"
+            _func_rc=1
+          fi
         fi
       done
 
       local ovl_mnt="$stale_dir/overlay-mnt"
       if [[ -e "$ovl_mnt" ]] && mountpoint -q "$ovl_mnt" 2>/dev/null; then
         warn "  Unmounting stale build root workspace: $ovl_mnt"
-        strict_unmount "$ovl_mnt" "stale build root workspace"
+        if ! strict_unmount "$ovl_mnt" "stale build root workspace"; then
+          warn "  Failed to unmount stale build root workspace: $ovl_mnt"
+          _func_rc=1
+        fi
       fi
 
       # Wait for ext4 release and detach
       if wait_ext4_gone "$loop"; then
-        strict_detach_loop "$loop" || warn "  Could not detach $loop"
+        if ! strict_detach_loop "$loop"; then
+          warn "  Could not detach $loop"
+          _func_rc=1
+        fi
       else
         warn "  $loop ext4 superblock still alive; attempting detach anyway"
-        strict_detach_loop "$loop" || warn "  Could not detach $loop despite live superblock"
+        if ! strict_detach_loop "$loop"; then
+          warn "  Could not detach $loop despite live superblock"
+          _func_rc=1
+        fi
       fi
     done <<<"$stale_loops"
 
     # Remove directory if no loops remain
-    stale_loops="$(loops_for_file "$stale_img")"
-    if [[ -z "$stale_loops" ]]; then
+    local _post_detach_rc=0
+    stale_loops="$(loops_for_file "$stale_img")" || _post_detach_rc=$?
+    if [[ $_post_detach_rc -ne 0 ]]; then
+      warn "Could not re-check loop state for $stale_img (rc=$_post_detach_rc) — refusing to remove $stale_dir"
+    elif [[ -z "$stale_loops" ]]; then
       if ! safe_rmdir "$stale_dir"; then
         die "Refusing to remove stale build root with active mounts: $stale_dir"
       fi
@@ -797,6 +1167,8 @@ _cleanup_stale_build_roots() {
 
   # Remove empty build-roots directory
   rmdir "$build_roots_dir" 2>/dev/null || true
+
+  return "$_func_rc"
 }
 
 # Find and detach loop devices from ANY previous run whose back-file matches
@@ -806,20 +1178,22 @@ _cleanup_stale_build_roots() {
 # Called from setup_clear_stale_state().
 _cleanup_stale_build_loops() {
   local json
-  json="$(losetup -J 2>/dev/null)" || return 0
+  json="$(losetup -J 2>/dev/null)" || {
+    warn "_cleanup_stale_build_loops: losetup -J failed"
+    return 1
+  }
   [[ -n "$json" ]] || return 0
 
   # python3 prints lines of "loop_name\tback_file" for matching loops.
   local matches
-  matches="$(python3 -c '
-import json, sys, fnmatch
+  matches="$(WORKDIR="$WORKDIR" python3 -c '
+import json, sys, os
 
-PATTERNS = [
-    "*/overlay-work.img",
-    "*/*.building",
-    "*/*.building (deleted)",
-    "*/build-roots/*/overlay-work.img",
-]
+WORKDIR = os.environ.get("WORKDIR", "")
+patterns = []
+if WORKDIR:
+    patterns.append(WORKDIR + "/")
+    patterns.append(WORKDIR + "/build-roots/")
 
 data = json.loads(sys.stdin.read())
 for dev in data.get("loopdevices", []):
@@ -828,11 +1202,18 @@ for dev in data.get("loopdevices", []):
     if not name or not backing:
         continue
     clean = backing.removesuffix(" (deleted)")
-    for pat in PATTERNS:
-        if fnmatch.fnmatch(clean, pat):
-            print(name + "\t" + backing)
+    matched = False
+    for pat in patterns:
+        if clean.startswith(pat):
+            matched = True
             break
-' <<<"$json")" || return 0
+    if not matched:
+        continue
+    print(name + "\t" + backing)
+' <<<"$json")" || {
+    warn "_cleanup_stale_build_loops: JSON parse failed"
+    return 1
+  }
 
   [[ -n "$matches" ]] || return 0
 
@@ -895,11 +1276,8 @@ overlay_init_keyring() {
 # Never lazy-unmount MERGED or OVL_MNT. A lazy unmount can hide the mount from
 # userspace while leaving the ext4 filesystem referenced in the kernel.
 overlay_cleanup() {
-  local _had_e=0
-  [[ -o errexit ]] && _had_e=1
-  set +e
-
   local rc=0
+  local _stop=0
   local m
   local loops=""
 
@@ -916,12 +1294,12 @@ overlay_cleanup() {
   # 1. Kill known chroot daemons before touching mount topology.
   # ------------------------------------------------------------
   cleanup_log "overlay_cleanup: kill gpg-agent"
-  if [[ -n "${MERGED:-}" &&
-    -d "$MERGED/etc/pacman.d/gnupg" ]]; then
-    gpgconf \
-      --homedir "$MERGED/etc/pacman.d/gnupg" \
-      --kill gpg-agent \
-      >/dev/null 2>&1 || true
+  if [[ -n "${MERGED:-}" ]]; then
+    if ! cleanup_kill_gpg_agent "$MERGED/etc/pacman.d/gnupg" "$MERGED"; then
+      warn "overlay_cleanup: gpg-agent shutdown failed — refusing to continue teardown"
+      rc=1
+      _stop=1
+    fi
   fi
 
   # ------------------------------------------------------------
@@ -953,15 +1331,15 @@ overlay_cleanup() {
   if ((rc != 0)); then
     warn "overlay_cleanup: chroot child mounts remain; refusing to tear down OverlayFS"
     cleanup_log "overlay_cleanup: FAIL — chroot children remain (rc=$rc)"
-    [[ "$_had_e" -eq 1 ]] && set -e
-    return 1
+    _stop=1
   fi
 
   # ------------------------------------------------------------
   # 3. Remove MERGED itself.
   # ------------------------------------------------------------
   cleanup_log "overlay_cleanup: unmount MERGED"
-  if [[ -n "${MERGED:-}" ]] \
+  if ((!_stop)) \
+    && [[ -n "${MERGED:-}" ]] \
     && mountpoint -q "$MERGED" 2>/dev/null; then
     if [[ "${DEBUG:-0}" == 1 ]]; then
       log_debug overlay pre-merged-unmount "=== PRE-MERGED-UNMOUNT ==="
@@ -1000,8 +1378,7 @@ overlay_cleanup() {
 
     if ((umount_merged_rc != 0)); then
       warn "overlay_cleanup: refusing to unmount overlay workspace while MERGED exists"
-      [[ "$_had_e" -eq 1 ]] && set -e
-      return 1
+      _stop=1
     fi
   fi
 
@@ -1009,15 +1386,16 @@ overlay_cleanup() {
   if [[ -n "${MERGED:-}" ]] \
     && mountpoint -q "$MERGED" 2>/dev/null; then
     warn "overlay_cleanup: MERGED is unexpectedly still mounted"
-    [[ "$_had_e" -eq 1 ]] && set -e
-    return 1
+    rc=1
+    _stop=1
   fi
 
   # ------------------------------------------------------------
   # 4. Now — and only now — unmount the ext4 overlay workspace.
   # ------------------------------------------------------------
   cleanup_log "overlay_cleanup: unmount OVL_MNT"
-  if [[ -n "${OVL_MNT:-}" ]] \
+  if ((!_stop)) \
+    && [[ -n "${OVL_MNT:-}" ]] \
     && mountpoint -q "$OVL_MNT" 2>/dev/null; then
     if [[ "${DEBUG:-0}" == 1 ]]; then
       log_debug overlay pre-ovl-mnt-unmount "=== PRE-OVL_MNT-UNMOUNT ==="
@@ -1062,8 +1440,8 @@ overlay_cleanup() {
 
     if ((umount_ovl_rc != 0)); then
       warn "overlay_cleanup: overlay workspace could not be cleanly unmounted"
-      [[ "$_had_e" -eq 1 ]] && set -e
-      return 1
+      rc=1
+      _stop=1
     fi
   fi
 
@@ -1071,8 +1449,15 @@ overlay_cleanup() {
   # 5. Find every loop associated with overlay-work.img.
   # ------------------------------------------------------------
   cleanup_log "overlay_cleanup: find loops for overlay-work.img"
-  if [[ -n "${OVL_IMG:-}" ]]; then
-    loops="$(loops_for_file "$OVL_IMG")"
+  if ((!_stop)) && [[ -n "${OVL_IMG:-}" ]]; then
+    local _loops_rc=0
+    loops="$(loops_for_file "$OVL_IMG")" || _loops_rc=$?
+    if [[ $_loops_rc -ne 0 ]]; then
+      warn "overlay_cleanup: could not determine loop state for $OVL_IMG (rc=$_loops_rc)"
+      rc=1
+      cleanup_log "overlay_cleanup: FAIL — loop inventory unavailable (rc=$_loops_rc); skipping destructive cleanup"
+      _stop=1
+    fi
   fi
 
   # Include the loop we explicitly allocated even if losetup's backing-file
@@ -1087,8 +1472,67 @@ overlay_cleanup() {
   # 6. Wait for ext4 superblock release, but don't block on it.
   # ------------------------------------------------------------
   cleanup_log "overlay_cleanup: wait ext4 superblock release"
+  if ((!_stop)); then
   while IFS="" read -r m; do
     [[ -n "$m" ]] || continue
+
+    # Unmount external/automount references (e.g., udisks2 desktop mounts)
+    # that prevent the ext4 superblock from releasing.
+    local _ext_mounts _ext_rc=0
+    _ext_mounts="$(findmnt -rno TARGET --source "$m" 2>/dev/null)" || _ext_rc=$?
+    if ((_ext_rc > 1)); then
+      warn "overlay_cleanup: findmnt query failed for $m (rc=$_ext_rc) — refusing to detach loop"
+      rc=1
+      continue
+    fi
+    local _ext_umount_failed=0
+    local _mp
+    while IFS= read -r _mp; do
+      [[ -n "$_mp" ]] || continue
+      # Only unmount mounts inside our workspace
+      case "$_mp" in
+        "$OVL_MNT"|"$OVL_MNT"/*|"$MERGED"|"$MERGED"/*)
+          ;; # OK — inside workspace
+        *)
+          debug "overlay_cleanup: skipping external reference $_mp (outside workspace)"
+          continue
+          ;;
+      esac
+      warn "overlay_cleanup: unmounting external reference on $m: $_mp"
+      if ! strict_unmount "$_mp" "external reference"; then
+        warn "overlay_cleanup: failed to unmount external reference: $_mp"
+        _ext_umount_failed=1
+      fi
+    done <<<"$_ext_mounts"
+
+    # Check for external mounts outside the workspace — refuse to detach
+    # the loop if any remain, as this could leave the loop in an
+    # inconsistent state.
+    local _ext_outside=""
+    while IFS= read -r _mp; do
+      [[ -n "$_mp" ]] || continue
+      case "$_mp" in
+        "$OVL_MNT"|"$OVL_MNT"/*|"$MERGED"|"$MERGED"/*)
+          ;; # Inside workspace — already handled above
+        *)
+          _ext_outside="${_ext_outside:+${_ext_outside}$'\n'}$_mp"
+          ;;
+      esac
+    done <<<"$_ext_mounts"
+    if [[ -n "$_ext_outside" ]]; then
+      warn "overlay_cleanup: external mounts found for $m — refusing to detach"
+      while IFS= read -r _ext_mp; do
+        warn "  $_ext_mp"
+      done <<<"$_ext_outside"
+      rc=1
+      continue
+    fi
+
+    if ((_ext_umount_failed)); then
+      warn "overlay_cleanup: external-reference unmount failures — refusing to detach loop $m"
+      rc=1
+      continue
+    fi
 
     if ! wait_ext4_gone "$m"; then
       warn "overlay_cleanup: $m ext4 superblock still alive after timeout (jbd2 journal thread)"
@@ -1100,27 +1544,15 @@ overlay_cleanup() {
       # The filesystem is no longer accessible to userspace after unmount.
       # The jbd2 thread is just flushing metadata in the background.
       # losetup -d may succeed even if the superblock appears alive.
+      # Do NOT signal jbd2 — it is a kernel thread, not a build-owned process.
       if strict_detach_loop "$m"; then
         log "overlay_cleanup: $m detached successfully despite live superblock"
-        # Kill the jbd2 journal thread so the ext4 superblock releases.
-        # Without this, loops_for_file still sees the loop as attached.
-        local _loop_name="${m##/dev/}" _jbd2_pid
-        _jbd2_pid="$(pgrep -f "jbd2/${_loop_name}-" 2>/dev/null || true)"
-        if [[ -n "$_jbd2_pid" ]]; then
-          log "overlay_cleanup: killing jbd2 thread for $m (pid $_jbd2_pid)"
-          kill "$_jbd2_pid" 2>/dev/null || true
-          # Wait for the loop to fully disappear from losetup
-          local _wait_i
-          for _wait_i in $(seq 1 30); do
-            losetup "$m" >/dev/null 2>&1 || break # lint-ignore: strict-mount
-            # Escalate to SIGKILL if SIGTERM didn't work
-            if [[ "$_wait_i" -eq 10 ]]; then
-              log "overlay_cleanup: jbd2 still alive, sending SIGKILL to $m"
-              kill -9 "$_jbd2_pid" 2>/dev/null || true
-            fi
-            sleep 0.2
-          done
-        fi
+        # Wait for the loop to fully disappear from losetup
+        local _wait_i
+        for _wait_i in $(seq 1 50); do
+          losetup "$m" >/dev/null 2>&1 || break # lint-ignore: strict-mount
+          sleep 0.2
+        done
       else
         warn "overlay_cleanup: losetup -d failed for $m, attempting targeted cleanup"
         # Do NOT use losetup -D — it force-detaches ALL loop devices on the
@@ -1132,24 +1564,8 @@ overlay_cleanup() {
         local _build_loops
         _build_loops="$(losetup -J 2>/dev/null)" || true
         if [[ -n "$_build_loops" ]]; then
-          while IFS=$'\t' read -r _dev _backing; do
-            [[ -n "$_dev" ]] || continue
-            # Only detach loops backed by files in WORKDIR or overlay-work.img
-            _clean="${_backing%\ (deleted)}"
-            if [[ -n "${WORKDIR:-}" && "$_clean" == "$WORKDIR"* ]]; then
-              log "overlay_cleanup: detaching WORKDIR-owned loop $_dev (backing: $_clean)"
-              if ! strict_detach_loop "$_dev"; then
-                warn "overlay_cleanup: could not detach $_dev"
-                _targeted_rc=1
-              fi
-            elif [[ "$_clean" == */overlay-work.img ]]; then
-              log "overlay_cleanup: detaching overlay-work.img loop $_dev (backing: $_clean)"
-              if ! strict_detach_loop "$_dev"; then
-                warn "overlay_cleanup: could not detach $_dev"
-                _targeted_rc=1
-              fi
-            fi
-          done < <(python3 -c '
+          local _parsed_loops _py_rc=0
+          _parsed_loops="$(python3 -c '
 import json, sys
 try:
     data = json.loads(sys.stdin.read())
@@ -1160,7 +1576,35 @@ for dev in data.get("loopdevices", []):
     name = dev.get("name") or ""
     if name and backing:
         print(name + "\t" + backing)
-' <<<"$_build_loops")
+' <<<"$_build_loops")" || _py_rc=$?
+          if ((_py_rc != 0)); then
+            warn "overlay_cleanup: python3 loop inventory failed (rc=$_py_rc)"
+            rc=1
+          fi
+          while IFS=$'\t' read -r _dev _backing; do
+            [[ -n "$_dev" ]] || continue
+            # Only detach loops backed by files in WORKDIR or overlay-work.img
+            _clean="${_backing%\ (deleted)}"
+            if [[ -n "${WORKDIR:-}" ]] &&
+               { [[ "$_clean" == "$WORKDIR" ]] ||
+                 [[ "$_clean" == "$WORKDIR/"* ]]; }; then
+              log "overlay_cleanup: detaching WORKDIR-owned loop $_dev (backing: $_clean)"
+              if ! strict_detach_loop "$_dev"; then
+                warn "overlay_cleanup: could not detach $_dev"
+                _targeted_rc=1
+              fi
+            elif [[ -n "${WORKDIR:-}" ]]; then
+              local _resolved_backing
+              _resolved_backing="$(realpath -m "$_clean" 2>/dev/null)" || _resolved_backing="$_clean"
+              if [[ "$_resolved_backing" == "$WORKDIR"/* ]]; then
+                log "overlay_cleanup: detaching WORKDIR-owned overlay loop $_dev (backing: $_clean)"
+                if ! strict_detach_loop "$_dev"; then
+                  warn "overlay_cleanup: could not detach $_dev"
+                  _targeted_rc=1
+                fi
+              fi
+            fi
+          done <<<"$_parsed_loops"
         fi
         if [[ "$_targeted_rc" -ne 0 ]]; then
           warn "overlay_cleanup: some targeted detach attempts failed for $m"
@@ -1170,10 +1614,12 @@ for dev in data.get("loopdevices", []):
       fi
     fi
   done <<<"$loops"
+  fi
 
   # ------------------------------------------------------------
   # 7. Detach loops and verify.
   # ------------------------------------------------------------
+  if ((!_stop)); then
   cleanup_log "overlay_cleanup: detach loops"
   while IFS="" read -r m; do
     [[ -n "$m" ]] || continue
@@ -1185,7 +1631,12 @@ for dev in data.get("loopdevices", []):
 
   if [[ -n "${OVL_IMG:-}" ]]; then
     local remaining
-    remaining="$(loops_for_file "$OVL_IMG")"
+    local _remaining_rc=0
+    remaining="$(loops_for_file "$OVL_IMG")" || _remaining_rc=$?
+    if [[ $_remaining_rc -ne 0 ]]; then
+      warn "overlay_cleanup: could not verify loop state for $OVL_IMG (rc=$_remaining_rc)"
+      rc=1
+    fi
 
     if [[ -n "$remaining" ]]; then
       local all_autoclear=1
@@ -1207,6 +1658,7 @@ for dev in data.get("loopdevices", []):
       fi
     fi
   fi
+  fi
 
   cleanup_log "overlay_cleanup: verify remaining loops"
   if ((rc == 0)); then
@@ -1214,6 +1666,5 @@ for dev in data.get("loopdevices", []):
   fi
 
   cleanup_log "=== overlay_cleanup: done (rc=$rc) ==="
-  [[ "$_had_e" -eq 1 ]] && set -e
   return "$rc"
 }
