@@ -508,6 +508,18 @@ setup_clear_stale_state() {
   # shellcheck disable=SC2034
   OVL_LOOPDEV=""
 
+  _cleanup_stale_workspace_processes || return
+  _cleanup_primary_overlay || return
+  _cleanup_effective_etc_mounts || return
+  _cleanup_rootfs_helper_mounts || return
+  _cleanup_output_image_loops || return
+  _cleanup_project_mounts || return
+  _remove_incomplete_output || return
+  _cleanup_overlay_directories || return
+  _cleanup_stale_build_roots_doubled || return
+}
+
+_cleanup_stale_workspace_processes() {
   # ============================================================
   # 0. Kill workspace-owned processes in old namespaces
   # ============================================================
@@ -717,7 +729,9 @@ setup_clear_stale_state() {
     # Brief wait for kernel to release resources after SIGKILL
     sleep 1
   fi
+}
 
+_cleanup_primary_overlay() {
   # ============================================================
   # 1. Overlay/chroot SECOND.
   #
@@ -796,7 +810,9 @@ setup_clear_stale_state() {
       fi
     fi
   fi
+}
 
+_cleanup_effective_etc_mounts() {
   # ============================================================
   # 1b. Effective /etc overlay used by the build chroot.
   #
@@ -828,7 +844,9 @@ setup_clear_stale_state() {
 
   rmdir "$_etc_lower" "$_etc_var" 2>/dev/null || true
   _EFFECTIVE_ETC_MOUNTED=0
+}
 
+_cleanup_rootfs_helper_mounts() {
   # ============================================================
   # 1c. Rootfs reconstruction / snapshot temporary mounts.
   #
@@ -888,7 +906,9 @@ setup_clear_stale_state() {
         || die "Could not safely detach temporary rootfs loop $dev"
     done <<<"$_root_tmp_loops"
   fi
+}
 
+_cleanup_output_image_loops() {
   # ============================================================
   # 2. Main image partitions SECOND.
   # ============================================================
@@ -968,7 +988,9 @@ setup_clear_stale_state() {
       die "Stale loop device still references $OUT; refusing to delete the backing image"
     fi
   fi
+}
 
+_cleanup_project_mounts() {
   # ============================================================
   # 3. Explicit project mountpoints.
   # ============================================================
@@ -984,7 +1006,9 @@ setup_clear_stale_state() {
       fi
     fi
   done
+}
 
+_remove_incomplete_output() {
   # ============================================================
   # 4. NOW it is safe to delete an incomplete working image.
   # ============================================================
@@ -1001,7 +1025,9 @@ setup_clear_stale_state() {
   if [[ ! -f "$OUT" && -f "${OUT}.src-fingerprint" ]]; then
     rm -f "${OUT}.src-fingerprint"
   fi
+}
 
+_cleanup_overlay_directories() {
   # ============================================================
   # 5. Remove host-side scratch residue only after proving it is unmounted.
   # ============================================================
@@ -1011,7 +1037,9 @@ setup_clear_stale_state() {
       die "Refusing to remove stale directory with active mounts: $m"
     fi
   done
+}
 
+_cleanup_stale_build_roots_doubled() {
   # ============================================================
   # 6. Clean up stale build root overlays from previous runs.
   # ============================================================
