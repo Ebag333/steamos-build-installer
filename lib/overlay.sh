@@ -516,7 +516,8 @@ setup_clear_stale_state() {
   _cleanup_project_mounts || return
   _remove_incomplete_output || return
   _cleanup_overlay_directories || return
-  _cleanup_stale_build_roots_doubled || return
+  _verify_no_stale_loops || return
+  _cleanup_stale_build_roots || return
 }
 
 _cleanup_stale_workspace_processes() {
@@ -994,7 +995,7 @@ _cleanup_project_mounts() {
   # ============================================================
   # 3. Explicit project mountpoints.
   # ============================================================
-  local _stale_rc=0
+  _stale_rc=0
   for m in "$HOMEMNT" "$EFIMNT" "$MNT"; do
     [[ -n "$m" ]] || continue
 
@@ -1039,25 +1040,10 @@ _cleanup_overlay_directories() {
   done
 }
 
-_cleanup_stale_build_roots_doubled() {
+_verify_no_stale_loops() {
   # ============================================================
   # 6. Clean up stale build root overlays from previous runs.
   # ============================================================
-  if ! _cleanup_stale_build_roots; then
-    warn "setup_clear_stale_state: stale build root cleanup had failures"
-    _stale_rc=1
-  fi
-
-  if ! _cleanup_stale_build_loops; then
-    warn "setup_clear_stale_state: stale build loop cleanup failed"
-    _stale_rc=1
-  fi
-
-  if ((_stale_rc)); then
-    warn "setup_clear_stale_state: stale state recovery had errors"
-    return 1
-  fi
-
   # Final verification: check if any stale loops remain
   local _final_loops=0
   if [[ -n "${OVL_IMG:-}" ]]; then
@@ -1092,6 +1078,21 @@ _cleanup_stale_build_roots_doubled() {
 # Build roots live at $WORKDIR/build-roots/*/overlay-work.img.
 # Called from setup_clear_stale_state().
 _cleanup_stale_build_roots() {
+  if ! _cleanup_stale_build_roots; then
+    warn "setup_clear_stale_state: stale build root cleanup had failures"
+    _stale_rc=1
+  fi
+
+  if ! _cleanup_stale_build_loops; then
+    warn "setup_clear_stale_state: stale build loop cleanup failed"
+    _stale_rc=1
+  fi
+
+  if ((_stale_rc)); then
+    warn "setup_clear_stale_state: stale state recovery had errors"
+    return 1
+  fi
+
   local build_roots_dir="$WORKDIR/build-roots"
   [[ -d "$build_roots_dir" ]] || return 0
 
